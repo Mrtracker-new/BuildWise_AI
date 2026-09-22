@@ -273,21 +273,36 @@ OLLAMA_BASE_URL=http://localhost:11434
 
 ## Testing & Quality Assurance
 
-The system includes automated tests for all deterministic calculation services and API contracts.
+The system includes automated test suites for deterministic calculation algorithms, backend API schemas, ReportLab vector PDF compilation, and headless browser UI integrity across all responsive viewports.
 
-Run backend tests:
+### 1. Deterministic Calculation & Backend Test Suite
 ```bash
 cd backend
 python -m pytest tests/ -v
 ```
-
 Test coverage includes:
-- Slope grading thresholds and score boundaries (flat, gentle, moderate, steep).
-- Hydrological flood risk penalty deductions and elevation metrics.
+- Topographic slope grading thresholds and score boundaries.
+- Hydrological flood risk deductions and altitude metrics.
 - Multi-criteria weights summation (strictly equals 1.0).
-- Building orientation angles across Northern and Southern hemispheres.
+- Bioclimatic passive building orientation angles across Northern and Southern hemispheres.
 - CPWD plinth area base rates, terrain multipliers, and sub-allocation sums.
 - API health check, analysis endpoint schema validation, and PDF binary stream header checks.
+
+### 2. Frontend Responsive UI Integrity Audit Suite
+```bash
+cd frontend
+npm run audit:ui
+```
+Automated Chromium DOM integrity audit across 10 viewport-state configurations (2560x1440, 1920x1080, 1536x900, 1535x900 drawer open/closed, 1366x768 drawer open/closed, 1024x768 drawer open/closed, 900x1000, 768x1024, 390x844). Enforces:
+- Zero horizontal overflow (`scrollWidth <= clientWidth`) on all non-scrolling surfaces.
+- Zero page-level horizontal overflow (`document.documentElement.scrollWidth <= window.innerWidth`).
+- Zero vertical clipping on text containers.
+- Zero off-canvas projections.
+- Score gauge SVG dimensions strictly maintained at 120x120px.
+- StatusBanner single-line truncation with full tooltip on desktop and natural word-wrapping below 1024px.
+- Telemetry notice popover reachability via keyboard (`Enter`, `Escape`) and mouse.
+- Formula wrapping with `<wbr>` operator breaks and `overflow-x-auto`.
+- Rail scrolling semantics (`overflow-y-auto overflow-x-clip`) and center map clipping (`overflow-hidden`).
 
 ---
 
