@@ -5,6 +5,7 @@
 @layer base {
   body {
     @apply bg-slate-50 text-slate-800 antialiased font-sans text-sm leading-relaxed selection:bg-slate-200 selection:text-slate-900;
+    overflow-wrap: break-word;
   }
 }
 
@@ -14,6 +15,24 @@
   height: 100%;
   font-family: inherit;
   z-index: 10;
+  overflow: hidden;
+}
+
+/* Thin scrollbar utility */
+.scrollbar-thin::-webkit-scrollbar {
+  height: 4px;
+  width: 4px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 2px;
+}
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 #f1f5f9;
 }
 
 .leaflet-popup-content-wrapper {
