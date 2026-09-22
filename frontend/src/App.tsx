@@ -40,6 +40,13 @@ export const App: React.FC = () => {
 
   // Telemetry Warnings State
   const [isWarningDismissed, setIsWarningDismissed] = useState<boolean>(false);
+  const [testWarnings, setTestWarnings] = useState<string[] | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).__setTestWarnings = (w: string[] | null) => setTestWarnings(w);
+    }
+  }, []);
 
   // Responsive Drawer State (for viewports between 1024px and 1535px)
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
@@ -50,7 +57,7 @@ export const App: React.FC = () => {
   const drawerCloseBtnRef = useRef<HTMLButtonElement>(null);
   const prevDrawerOpenRef = useRef<boolean>(false);
 
-  const warnings = analysisData?.warnings || [];
+  const warnings = testWarnings !== null ? testWarnings : (analysisData?.warnings || []);
 
   // Invalidate Leaflet helper
   const triggerMapResize = useCallback(() => {
@@ -188,7 +195,7 @@ export const App: React.FC = () => {
 
     if (analysisData) {
       return (
-        <div className="space-y-4 animate-fade-in">
+        <div className="@container w-full min-w-0 space-y-4 animate-fade-in">
           {/* Scorecard - Always first element visible */}
           <ScoreSummaryCard data={analysisData} />
 
@@ -217,11 +224,15 @@ export const App: React.FC = () => {
       );
     }
 
-    return <EmptyState />;
+    return (
+      <div className="@container w-full min-w-0">
+        <EmptyState />
+      </div>
+    );
   };
 
   return (
-    <div className="min-h-screen lg:h-screen flex flex-col bg-slate-50 text-slate-800 antialiased overflow-x-hidden overflow-y-auto lg:overflow-hidden select-text">
+    <div className="min-h-screen lg:h-screen flex flex-col bg-slate-50 text-slate-800 antialiased overflow-x-clip overflow-y-auto lg:overflow-hidden select-text w-full max-w-full min-w-0">
       {/* 64px Header */}
       <AppHeader
         backendConnected={backendConnected}
@@ -245,7 +256,7 @@ export const App: React.FC = () => {
       {/* ========================================================================= */}
       <div className="hidden lg:grid grid-cols-[380px_minmax(0,1fr)] 2xl:grid-cols-[380px_minmax(0,1fr)_460px] flex-1 min-h-0 w-full overflow-hidden relative">
         {/* Left Rail: Coordinates & Project Parameters ONLY (No Results) */}
-        <aside className="w-[380px] h-full min-h-0 overflow-y-auto overscroll-contain p-4 space-y-4 border-r border-slate-200 bg-slate-50/70 shrink-0">
+        <aside className="w-[380px] h-full min-h-0 overflow-y-auto overflow-x-clip overscroll-contain p-4 space-y-4 border-r border-slate-200 bg-slate-50/70 shrink-0 @container">
           {/* System Error Banner */}
           <ErrorBanner
             errorMessage={errorMessage}
@@ -272,11 +283,12 @@ export const App: React.FC = () => {
         </aside>
 
         {/* Center Fluid: Full-bleed Leaflet Map */}
-        <section className="min-w-0 h-full relative z-0 overflow-hidden flex flex-col">
+        <section id="center-map-section" className="min-w-0 h-full relative z-0 overflow-hidden flex flex-col flex-1">
           <MapCanvas
             latitude={hasLocation ? request.latitude : null}
             longitude={hasLocation ? request.longitude : null}
             orientationDegrees={analysisData?.orientation.optimal_axis_degrees}
+            plinthAreaSqFt={request.built_up_area_sqft}
             onLocationSelect={handleLocationSelect}
             invalidateTrigger={leafletResizeTrigger}
             className="w-full h-full"
@@ -334,14 +346,14 @@ export const App: React.FC = () => {
             </div>
 
             {/* Drawer Body (Independently Scrollable) */}
-            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 space-y-4">
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain p-4 space-y-4 @container">
               {renderResultsContent()}
             </div>
           </div>
         </section>
 
         {/* Right Rail: Results Display on 2xl (1536px and wider) */}
-        <aside className="hidden 2xl:block w-[460px] h-full min-h-0 overflow-y-auto overscroll-contain p-4 space-y-4 border-l border-slate-200 bg-slate-50/70 shrink-0">
+        <aside className="hidden 2xl:block w-[460px] h-full min-h-0 overflow-y-auto overflow-x-clip overscroll-contain p-4 space-y-4 border-l border-slate-200 bg-slate-50/70 shrink-0 @container">
           {renderResultsContent()}
         </aside>
       </div>
@@ -349,7 +361,7 @@ export const App: React.FC = () => {
       {/* ========================================================================= */}
       {/* MOBILE / TABLET STACKED VIEW (< 1024px) - Document Scrolls Vertically    */}
       {/* ========================================================================= */}
-      <div className="lg:hidden flex flex-col p-3 sm:p-4 gap-4 w-full">
+      <div className="lg:hidden flex flex-col p-3 sm:p-4 gap-4 w-full min-w-0 @container">
         {/* Error Banner */}
         <ErrorBanner
           errorMessage={errorMessage}
@@ -379,6 +391,7 @@ export const App: React.FC = () => {
             latitude={hasLocation ? request.latitude : null}
             longitude={hasLocation ? request.longitude : null}
             orientationDegrees={analysisData?.orientation.optimal_axis_degrees}
+            plinthAreaSqFt={request.built_up_area_sqft}
             onLocationSelect={handleLocationSelect}
             invalidateTrigger={leafletResizeTrigger}
             className="w-full h-full"
@@ -386,7 +399,7 @@ export const App: React.FC = () => {
         </section>
 
         {/* 3. Results Section */}
-        <section className="space-y-4">
+        <section className="space-y-4 w-full min-w-0 @container">
           {renderResultsContent()}
         </section>
       </div>

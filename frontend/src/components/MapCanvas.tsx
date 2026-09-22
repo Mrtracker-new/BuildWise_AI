@@ -7,6 +7,7 @@ interface MapCanvasProps {
   latitude: number | null;
   longitude: number | null;
   orientationDegrees?: number;
+  plinthAreaSqFt?: number;
   onLocationSelect: (lat: number, lon: number) => void;
   invalidateTrigger?: any;
   className?: string;
@@ -16,6 +17,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   latitude,
   longitude,
   orientationDegrees,
+  plinthAreaSqFt,
   onLocationSelect,
   invalidateTrigger,
   className = 'h-full w-full',
@@ -73,6 +75,14 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     return () => {
       window.removeEventListener('resize', handleWindowResize);
       resizeObserver.disconnect();
+      if (markerRef.current) {
+        try { map.removeLayer(markerRef.current); } catch {}
+        markerRef.current = null;
+      }
+      if (footprintPolygonRef.current) {
+        try { map.removeLayer(footprintPolygonRef.current); } catch {}
+        footprintPolygonRef.current = null;
+      }
       map.remove();
       mapInstanceRef.current = null;
     };
@@ -100,16 +110,20 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     if (latitude !== null && longitude !== null) {
       const latlng: L.LatLngExpression = [latitude, longitude];
 
-      if (!markerRef.current) {
+      // Ensure marker exists and is attached to current map
+      if (!markerRef.current || !map.hasLayer(markerRef.current)) {
+        if (markerRef.current) {
+          try { map.removeLayer(markerRef.current); } catch {}
+          markerRef.current = null;
+        }
+
         const customIcon = L.divIcon({
           className: 'custom-map-pin',
           html: `
-            <div style="transform: translate(-50%, -100%);">
-              <svg width="32" height="38" viewBox="0 0 24 28" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M12 0C5.37 0 0 5.37 0 12C0 19.5 10.5 27.5 11.5 28C11.8 28.2 12.2 28.2 12.5 28C13.5 27.5 24 19.5 24 12C24 5.37 18.63 0 12 0Z" fill="#0F172A" stroke="#FFFFFF" stroke-width="1.5"/>
-                <circle cx="12" cy="11" r="4.5" fill="#FFFFFF"/>
-              </svg>
-            </div>
+            <svg width="32" height="38" viewBox="0 0 24 28" fill="none" xmlns="http://www.w3.org/2000/svg" style="display: block;">
+              <path d="M12 0C5.37 0 0 5.37 0 12C0 19.5 10.5 27.5 11.5 28C11.8 28.2 12.2 28.2 12.5 28C13.5 27.5 24 19.5 24 12C24 5.37 18.63 0 12 0Z" fill="#0F172A" stroke="#FFFFFF" stroke-width="1.5"/>
+              <circle cx="12" cy="11" r="4.5" fill="#FFFFFF"/>
+            </svg>
           `,
           iconSize: [32, 38],
           iconAnchor: [16, 38],
@@ -129,52 +143,102 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       }
 
       // Draw oriented building footprint polygon if orientation angle is provided
-      if (footprintPolygonRef.current) {
-        map.removeLayer(footprintPolygonRef.current);
+      if (orientationDegrees !== undefined) {
+        // 1. Plinth area converted once from sq ft to sq meters with fixed aspect ratio (1.75:1)
+        const plinthSqFt = plinthAreaSqFt ?? 2000;
+        const areaM2 = plinthSqFt * 0.092903;
+        const aspectRatio = 1.75;
+        const widthM = Math.sqrt(areaM2 / aspectRatio);
+        const lengthM = widthM * aspectRatio;
+        const halfLength = lengthM / 2.0;
+        const halfWidth = widthM / 2.0;
+
+        // 2. Orientation value is the bearing of the LONG axis, clockwise from North
+        const aRad = (orientationDegrees * Math.PI) / 180.0;
+        // Long-axis unit vector: (east, north) = (sin a, cos a)
+        const longUnitE = Math.sin(aRad);
+        const longUnitN = Math.cos(aRad);
+
+        // Short-axis unit vector: (sin(a+90), cos(a+90))
+        const shortAngleRad = aRad + Math.PI / 2.0;
+        const shortUnitE = Math.sin(shortAngleRad);
+        const shortUnitN = Math.cos(shortAngleRad);
+
+        // 3. Four corners in meters around center (0, 0)
+        // x along long axis (+/- halfLength), y along short axis (+/- halfWidth)
+        const corners = [
+          { x: -halfLength, y: -halfWidth },
+          { x: halfLength, y: -halfWidth },
+          { x: halfLength, y: halfWidth },
+          { x: -halfLength, y: halfWidth },
+        ];
+
+        // 4. Pure geographic math degree conversion:
+        // dLat = metersNorth / 110540
+        // dLng = metersEast / (111320 * cos(latitude in radians))
+        const latRad = (latitude * Math.PI) / 180.0;
+        const polygonPoints: [number, number][] = corners.map((c) => {
+          const metersEast = c.x * longUnitE + c.y * shortUnitE;
+          const metersNorth = c.x * longUnitN + c.y * shortUnitN;
+          const dLat = metersNorth / 110540.0;
+          const dLng = metersEast / (111320.0 * Math.cos(latRad));
+          return [latitude + dLat, longitude + dLng];
+        });
+
+        if (footprintPolygonRef.current && map.hasLayer(footprintPolygonRef.current)) {
+          footprintPolygonRef.current.setLatLngs(polygonPoints);
+          footprintPolygonRef.current.setTooltipContent(
+            `Proposed Layout Footprint (${orientationDegrees.toFixed(0)}° Long Axis)`
+          );
+        } else {
+          if (footprintPolygonRef.current) {
+            try { map.removeLayer(footprintPolygonRef.current); } catch {}
+            footprintPolygonRef.current = null;
+          }
+          footprintPolygonRef.current = L.polygon(polygonPoints, {
+            color: '#0F172A',
+            weight: 1.5,
+            fillColor: '#0284C7',
+            fillOpacity: 0.35,
+            dashArray: '4, 4',
+          })
+            .addTo(map)
+            .bindTooltip(`Proposed Layout Footprint (${orientationDegrees.toFixed(0)}° Long Axis)`, {
+              permanent: false,
+              direction: 'top',
+            });
+        }
+      } else if (footprintPolygonRef.current) {
+        try { map.removeLayer(footprintPolygonRef.current); } catch {}
         footprintPolygonRef.current = null;
       }
 
-      if (orientationDegrees !== undefined) {
-        const angleRad = (orientationDegrees * Math.PI) / 180.0;
-        const lengthDeg = 30.0 / 111139.0;
-        const widthDeg = 15.0 / (111139.0 * Math.cos((latitude * Math.PI) / 180.0));
-
-        const dxL = (Math.cos(angleRad) * lengthDeg) / 2.0;
-        const dyL = (Math.sin(angleRad) * lengthDeg) / 2.0;
-        const dxW = (-Math.sin(angleRad) * widthDeg) / 2.0;
-        const dyW = (Math.cos(angleRad) * widthDeg) / 2.0;
-
-        const p1: [number, number] = [latitude + dyL + dyW, longitude + dxL + dxW];
-        const p2: [number, number] = [latitude + dyL - dyW, longitude + dxL - dxW];
-        const p3: [number, number] = [latitude - dyL - dyW, longitude - dxL - dxW];
-        const p4: [number, number] = [latitude - dyL + dyW, longitude - dxL + dxW];
-
-        footprintPolygonRef.current = L.polygon([p1, p2, p3, p4], {
-          color: '#0F172A',
-          weight: 1.5,
-          fillColor: '#0284C7',
-          fillOpacity: 0.35,
-          dashArray: '4, 4',
-        })
-          .addTo(map)
-          .bindTooltip(`Proposed Layout Footprint (${orientationDegrees.toFixed(0)} deg Axis)`, {
-            permanent: false,
-            direction: 'top',
-          });
+      // Expose map, marker, and footprint for audit testing (prefer visible map instance)
+      if (typeof window !== 'undefined') {
+        const isVisible = mapContainerRef.current && mapContainerRef.current.offsetParent !== null;
+        if (isVisible || !(window as any).__leafletMap) {
+          (window as any).__leafletMap = map;
+          (window as any).__leafletMarker = markerRef.current;
+          (window as any).__leafletFootprint = footprintPolygonRef.current;
+        }
       }
 
       map.panTo(latlng);
     } else {
       if (markerRef.current) {
-        map.removeLayer(markerRef.current);
+        try { map.removeLayer(markerRef.current); } catch {}
         markerRef.current = null;
       }
       if (footprintPolygonRef.current) {
-        map.removeLayer(footprintPolygonRef.current);
+        try { map.removeLayer(footprintPolygonRef.current); } catch {}
         footprintPolygonRef.current = null;
       }
+      if (typeof window !== 'undefined') {
+        (window as any).__leafletMarker = null;
+        (window as any).__leafletFootprint = null;
+      }
     }
-  }, [latitude, longitude, orientationDegrees]);
+  }, [latitude, longitude, orientationDegrees, plinthAreaSqFt]);
 
   const handleResetView = () => {
     if (mapInstanceRef.current) {
@@ -192,23 +256,25 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
       {/* Floating Instructions Banner */}
       {!latitude && !longitude && (
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-slate-900/90 text-white backdrop-blur-sm px-3.5 py-1.5 rounded-full text-xs font-medium shadow-md flex items-center gap-2 pointer-events-none">
-          <Icon name="crosshair" size={14} className="text-sky-400" />
-          <span>Click anywhere on the map to place site marker</span>
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 max-w-[90%] bg-slate-900/90 text-white backdrop-blur-sm px-3.5 py-1.5 rounded-full text-xs font-medium shadow-md flex items-center gap-2 pointer-events-none text-center">
+          <Icon name="crosshair" size={14} className="text-sky-400 shrink-0" />
+          <span className="whitespace-normal break-words">Click map to place site marker</span>
         </div>
       )}
 
       {/* Map Floating Status Pill (bottom-left, does not cover bottom-right OSM attribution) */}
       {latitude !== null && longitude !== null && (
-        <div className="absolute bottom-3 left-3 z-20 max-w-[calc(100%-160px)] bg-white/95 backdrop-blur-sm border border-slate-200 px-3 py-1.5 rounded shadow-sm flex items-center gap-2.5 text-xs">
-          <div className="flex items-center gap-1.5 text-slate-700 font-mono">
-            <span className="font-semibold text-slate-900">LAT:</span> {latitude.toFixed(5)}
+        <div className="absolute bottom-3 left-3 z-20 max-w-[calc(100%-150px)] bg-white/95 backdrop-blur-sm border border-slate-200 px-2.5 py-1.5 rounded shadow-sm flex flex-col sm:flex-row items-start sm:items-center gap-1 sm:gap-2.5 text-xs min-w-0">
+          <div className="flex items-center gap-1.5 text-slate-700 font-mono text-[11px] sm:text-xs min-w-0 flex-wrap">
+            <span className="font-semibold text-slate-900">LAT:</span>
+            <span className="tabular-nums">{latitude.toFixed(5)}</span>
             <span className="text-slate-300">|</span>
-            <span className="font-semibold text-slate-900">LON:</span> {longitude.toFixed(5)}
+            <span className="font-semibold text-slate-900">LON:</span>
+            <span className="tabular-nums">{longitude.toFixed(5)}</span>
           </div>
           {orientationDegrees !== undefined && (
-            <div className="flex items-center gap-1 font-mono text-[11px] text-sky-800 bg-sky-50 px-2 py-0.5 rounded border border-sky-200 shrink-0">
-              <Icon name="compass" size={12} />
+            <div className="flex items-center gap-1 font-mono text-[10px] sm:text-[11px] text-sky-800 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-200 shrink-0">
+              <Icon name="compass" size={12} className="shrink-0" />
               <span>Footprint: {orientationDegrees.toFixed(0)}°</span>
             </div>
           )}
