@@ -1,7 +1,11 @@
 import os
+from pathlib import Path
 from typing import List
 from dotenv import load_dotenv
 
+# Explicitly load .env from the backend directory, then fallback to current working directory
+_backend_env_path = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(dotenv_path=_backend_env_path)
 load_dotenv()
 
 class Settings:
@@ -14,7 +18,9 @@ class Settings:
     ]
     DEFAULT_AI_PROVIDER: str = os.getenv("DEFAULT_AI_PROVIDER", "mock").lower()
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 settings = Settings()
+

@@ -3,8 +3,9 @@ from typing import Dict, Any, Tuple, List, Optional
 from app.utils.geo_utils import get_cardinal_offsets, calculate_synthetic_elevation
 from app.utils.cache_utils import cache
 
-USER_AGENT = "BuildWiseAI/1.0 (CivilEngineeringPlanningSystem; Contact: buildwise@example.org)"
+USER_AGENT = "BuildWise-Civil-Engineering-Engine/1.0"
 DEFAULT_TIMEOUT_SECONDS = 3.5
+
 
 async def fetch_reverse_geocode(lat: float, lon: float) -> Tuple[str, bool]:
     """
