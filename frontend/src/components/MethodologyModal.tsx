@@ -53,8 +53,8 @@ export const MethodologyModal: React.FC<MethodologyModalProps> = ({ isOpen, onCl
             <p>
               Land suitability is evaluated using a weighted multi-factor formula normalized between 0 and 100:
             </p>
-            <div className="p-2.5 bg-slate-50 rounded border border-slate-200 font-mono text-[11px] text-slate-800">
-              Suitability = 0.25*(Slope) + 0.20*(FloodRisk) + 0.20*(RoadAccess) + 0.15*(EnvComfort) + 0.20*(Facilities)
+            <div id="mcda-formula" className="p-2.5 bg-slate-50 rounded border border-slate-200 font-mono text-[11px] text-slate-800 overflow-x-auto scrollbar-thin">
+              Suitability =<wbr /> 0.25*<wbr />(<wbr />Slope)<wbr /> +<wbr /> 0.20*<wbr />(<wbr />FloodRisk)<wbr /> +<wbr /> 0.20*<wbr />(<wbr />RoadAccess)<wbr /> +<wbr /> 0.15*<wbr />(<wbr />EnvComfort)<wbr /> +<wbr /> 0.20*<wbr />(<wbr />Facilities)
             </div>
             <ul className="list-disc list-inside space-y-0.5 text-[11px] text-slate-600">
               <li><b>Slope (25%)</b>: Graded using digital elevation sampling across 33m offsets. Flat (&le;3%) = 100, Steep (&gt;15%) = 20-45.</li>
@@ -85,18 +85,18 @@ export const MethodologyModal: React.FC<MethodologyModalProps> = ({ isOpen, onCl
             <p>
               Cost calculations are derived from Indian Central Public Works Department (CPWD) Plinth Area Rates (PAR):
             </p>
-            <div className="grid grid-cols-3 gap-2 font-mono text-[11px] text-center my-1.5">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono text-[11px] text-center my-1.5">
               <div className="p-2 bg-slate-50 border border-slate-200 rounded">
                 <div className="text-slate-500 text-[10px]">Basic</div>
-                <div className="font-bold text-slate-900">INR 1,500 /sq ft</div>
+                <div className="font-bold text-slate-900 break-words">INR 1,500 /sq ft</div>
               </div>
               <div className="p-2 bg-slate-50 border border-slate-200 rounded">
                 <div className="text-slate-500 text-[10px]">Standard</div>
-                <div className="font-bold text-slate-900">INR 2,200 /sq ft</div>
+                <div className="font-bold text-slate-900 break-words">INR 2,200 /sq ft</div>
               </div>
               <div className="p-2 bg-slate-50 border border-slate-200 rounded">
                 <div className="text-slate-500 text-[10px]">Premium</div>
-                <div className="font-bold text-slate-900">INR 3,500 /sq ft</div>
+                <div className="font-bold text-slate-900 break-words">INR 3,500 /sq ft</div>
               </div>
             </div>
             <p className="text-[11px] text-slate-600">

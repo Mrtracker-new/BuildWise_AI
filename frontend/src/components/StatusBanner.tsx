@@ -29,7 +29,10 @@ export const TelemetryStrip: React.FC<TelemetryStripProps> = ({
         <span className="font-semibold text-amber-900 shrink-0 uppercase tracking-wider text-[11px]">
           Telemetry Notice:
         </span>
-        <span className="text-amber-800 truncate text-xs" title={combinedText}>
+        <span
+          className="text-amber-800 text-xs min-w-0 flex-1 whitespace-normal break-words lg:truncate"
+          title={combinedText}
+        >
           {combinedText}
         </span>
       </div>

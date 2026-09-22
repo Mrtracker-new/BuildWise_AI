@@ -47,15 +47,15 @@ export const CoordinatesInput: React.FC<CoordinatesInputProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-lg border border-slate-200 p-5 shadow-sm space-y-3.5">
-      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-        <div className="flex items-center gap-2">
-          <Icon name="map-pin" size={16} className="text-slate-700" />
-          <h2 className="text-[15px] font-semibold text-slate-900 tracking-tight">
+    <div className="@container bg-white rounded-lg border border-slate-200 p-4 @sm:p-5 shadow-sm space-y-3.5 min-w-0 w-full">
+      <div className="flex flex-wrap items-center justify-between border-b border-slate-100 pb-3 gap-2 min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <Icon name="map-pin" size={16} className="text-slate-700 shrink-0" />
+          <h2 className="text-[15px] font-semibold text-slate-900 tracking-tight whitespace-normal break-words">
             Site Coordinates
           </h2>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 font-mono">
             WGS84
           </span>
@@ -72,10 +72,10 @@ export const CoordinatesInput: React.FC<CoordinatesInputProps> = ({
         </div>
       </div>
 
-      <form onSubmit={handleApply} className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label htmlFor="lat-input" className="block text-xs uppercase tracking-wider font-semibold text-slate-500 mb-1">
+      <form onSubmit={handleApply} className="space-y-3 min-w-0">
+        <div className="grid grid-cols-1 @xs:grid-cols-2 gap-3 min-w-0">
+          <div className="min-w-0">
+            <label htmlFor="lat-input" className="block text-xs uppercase tracking-wider font-semibold text-slate-500 mb-1 whitespace-normal break-words">
               Latitude
             </label>
             <input
@@ -87,8 +87,8 @@ export const CoordinatesInput: React.FC<CoordinatesInputProps> = ({
               className="w-full h-10 text-sm font-mono px-3 bg-slate-50 border border-slate-200 rounded focus:bg-white focus:outline-none focus:border-slate-800 transition-colors"
             />
           </div>
-          <div>
-            <label htmlFor="lon-input" className="block text-xs uppercase tracking-wider font-semibold text-slate-500 mb-1">
+          <div className="min-w-0">
+            <label htmlFor="lon-input" className="block text-xs uppercase tracking-wider font-semibold text-slate-500 mb-1 whitespace-normal break-words">
               Longitude
             </label>
             <input
@@ -103,16 +103,16 @@ export const CoordinatesInput: React.FC<CoordinatesInputProps> = ({
         </div>
 
         {inputError && (
-          <p className="text-xs text-rose-600 font-medium">{inputError}</p>
+          <p className="text-xs text-rose-600 font-medium whitespace-normal break-words">{inputError}</p>
         )}
 
-        <div className="flex items-center justify-between pt-1">
-          <span className="text-xs text-slate-400">
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 min-w-0">
+          <span className="text-xs text-slate-400 whitespace-normal break-words">
             Click map or enter manually
           </span>
           <button
             type="submit"
-            className="h-10 px-4 text-sm font-medium bg-slate-100 hover:bg-slate-200 text-slate-800 rounded transition-colors"
+            className="h-10 px-4 text-sm font-medium bg-slate-100 hover:bg-slate-200 text-slate-800 rounded transition-colors shrink-0"
           >
             Update Pin
           </button>
@@ -120,9 +120,9 @@ export const CoordinatesInput: React.FC<CoordinatesInputProps> = ({
       </form>
 
       {formattedAddress && (
-        <div className="pt-2.5 border-t border-slate-100 flex items-start gap-2">
+        <div className="pt-2.5 border-t border-slate-100 flex items-start gap-2 min-w-0">
           <Icon name="crosshair" size={14} className="text-slate-400 mt-0.5 shrink-0" />
-          <p className="text-xs text-slate-600 leading-snug line-clamp-2">
+          <p className="text-xs text-slate-600 leading-snug whitespace-normal break-words min-w-0 flex-1">
             {formattedAddress}
           </p>
         </div>

@@ -41,26 +41,26 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
   ];
 
   return (
-    <div className="bg-white rounded-lg border border-slate-200 p-5 shadow-sm space-y-4">
-      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-        <div className="flex items-center gap-2">
-          <Icon name="settings" size={16} className="text-slate-700" />
-          <h2 className="text-[15px] font-semibold text-slate-900 tracking-tight">
+    <div className="@container bg-white rounded-lg border border-slate-200 p-4 @sm:p-5 shadow-sm space-y-4 min-w-0 w-full">
+      <div className="flex flex-wrap items-center justify-between border-b border-slate-100 pb-3 gap-2 min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <Icon name="settings" size={16} className="text-slate-700 shrink-0" />
+          <h2 className="text-[15px] font-semibold text-slate-900 tracking-tight whitespace-normal break-words">
             Project Parameters
           </h2>
         </div>
-        <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 font-mono">
+        <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 font-mono shrink-0">
           CPWD Standard
         </span>
       </div>
 
       {/* Built-up Area Input */}
-      <div className="space-y-1.5">
-        <div className="flex justify-between items-center">
-          <label htmlFor="area-input" className="text-xs uppercase tracking-wider font-semibold text-slate-500">
+      <div className="space-y-1.5 min-w-0">
+        <div className="flex justify-between items-center gap-2 min-w-0">
+          <label htmlFor="area-input" className="text-xs uppercase tracking-wider font-semibold text-slate-500 whitespace-normal break-words">
             Built-up Plinth Area
           </label>
-          <span className="text-sm font-mono font-semibold text-slate-900 bg-slate-100 px-2.5 py-1 rounded">
+          <span className="text-sm font-mono font-semibold text-slate-900 bg-slate-100 px-2.5 py-1 rounded shrink-0 tabular-nums">
             {request.built_up_area_sqft.toLocaleString()} sq ft
           </span>
         </div>
@@ -74,38 +74,38 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
           onChange={(e) => onChange({ built_up_area_sqft: parseFloat(e.target.value) || 500 })}
           className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-slate-900"
         />
-        <div className="flex justify-between text-xs font-mono text-slate-400">
+        <div className="flex justify-between text-xs font-mono text-slate-400 min-w-0">
           <span>500 sq ft</span>
           <span>25,000 sq ft</span>
           <span>50,000 sq ft</span>
         </div>
         {!isAreaValid && (
-          <p className="text-xs text-rose-600 font-medium mt-1">
+          <p className="text-xs text-rose-600 font-medium mt-1 whitespace-normal break-words">
             Area must be between 500 and 50,000 sq ft.
           </p>
         )}
       </div>
 
       {/* Construction Quality Grade */}
-      <div className="space-y-1.5">
-        <label className="block text-xs uppercase tracking-wider font-semibold text-slate-500">
+      <div className="space-y-1.5 min-w-0">
+        <label className="block text-xs uppercase tracking-wider font-semibold text-slate-500 whitespace-normal break-words">
           Specification Grade
         </label>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-3 gap-2 min-w-0">
           {qualityGrades.map((grade) => (
             <button
               key={grade.id}
               type="button"
               onClick={() => onChange({ quality_grade: grade.id })}
-              className={`p-2.5 rounded text-left border transition-all ${
+              className={`p-2.5 rounded text-left border transition-all min-w-0 ${
                 request.quality_grade === grade.id
                   ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
                   : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700'
               }`}
             >
-              <div className="text-sm font-semibold">{grade.label}</div>
+              <div className="text-xs @sm:text-sm font-semibold whitespace-normal break-words">{grade.label}</div>
               <div
-                className={`text-xs font-mono mt-0.5 ${
+                className={`text-[11px] @sm:text-xs font-mono mt-0.5 whitespace-normal break-words ${
                   request.quality_grade === grade.id ? 'text-slate-300' : 'text-slate-500'
                 }`}
               >
@@ -117,9 +117,9 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
       </div>
 
       {/* Building Typology & Floors */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div>
-          <label htmlFor="typology-select" className="block text-xs uppercase tracking-wider font-semibold text-slate-500 mb-1">
+      <div className="grid grid-cols-1 @sm:grid-cols-2 gap-3 min-w-0">
+        <div className="min-w-0">
+          <label htmlFor="typology-select" className="block text-xs uppercase tracking-wider font-semibold text-slate-500 mb-1 whitespace-normal break-words">
             Building Typology
           </label>
           <select
@@ -136,8 +136,8 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
           </select>
         </div>
 
-        <div>
-          <label htmlFor="floors-select" className="block text-xs uppercase tracking-wider font-semibold text-slate-500 mb-1">
+        <div className="min-w-0">
+          <label htmlFor="floors-select" className="block text-xs uppercase tracking-wider font-semibold text-slate-500 mb-1 whitespace-normal break-words">
             Storeys (Levels)
           </label>
           <select
@@ -155,8 +155,8 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
       </div>
 
       {/* AI Explanation Provider */}
-      <div>
-        <label htmlFor="ai-provider-select" className="block text-xs uppercase tracking-wider font-semibold text-slate-500 mb-1">
+      <div className="min-w-0">
+        <label htmlFor="ai-provider-select" className="block text-xs uppercase tracking-wider font-semibold text-slate-500 mb-1 whitespace-normal break-words">
           Technical Explanation Generator
         </label>
         <select
@@ -174,12 +174,12 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
       </div>
 
       {/* Submit Action (44px height, 14-15px text) */}
-      <div className="pt-2">
+      <div className="pt-2 min-w-0">
         <button
           type="button"
           onClick={onSubmit}
           disabled={!canSubmit}
-          className={`w-full h-11 px-4 rounded-md font-medium text-sm flex items-center justify-center gap-2 transition-all ${
+          className={`w-full min-h-[2.75rem] py-2 px-4 rounded-md font-medium text-sm flex items-center justify-center gap-2 transition-all min-w-0 ${
             canSubmit
               ? 'bg-slate-900 hover:bg-slate-800 text-white shadow'
               : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
@@ -187,13 +187,13 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
         >
           {isLoading ? (
             <>
-              <Icon name="loader" size={16} />
-              <span>Synthesizing Site Engineering Data...</span>
+              <Icon name="loader" size={16} className="shrink-0" />
+              <span className="whitespace-normal break-words leading-snug">Synthesizing Site Engineering Data...</span>
             </>
           ) : (
             <>
-              <Icon name="crosshair" size={16} />
-              <span>
+              <Icon name="crosshair" size={16} className="shrink-0" />
+              <span className="whitespace-normal break-words leading-snug text-center">
                 {hasCoordinates ? 'Run Site Feasibility Analysis' : 'Select Location on Map to Begin'}
               </span>
             </>

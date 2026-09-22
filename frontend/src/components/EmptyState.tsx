@@ -30,34 +30,34 @@ export const EmptyState: React.FC = () => {
   ];
 
   return (
-    <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm space-y-6">
+    <div className="@container bg-white rounded-lg border border-slate-200 p-4 @sm:p-6 shadow-sm space-y-5 min-w-0 w-full">
       <div className="text-center max-w-md mx-auto space-y-2.5">
-        <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center mx-auto border border-slate-200">
+        <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center mx-auto border border-slate-200 shrink-0">
           <Icon name="crosshair" size={22} />
         </div>
         <h3 className="text-base font-semibold text-slate-900">
           Preliminary Construction Planning System
         </h3>
-        <p className="text-sm text-slate-500 leading-relaxed">
+        <p className="text-sm text-slate-500 leading-relaxed whitespace-normal break-words">
           Select any geographic coordinates to evaluate terrain slope, microclimate solar paths,
           hydrological drainage, and preliminary construction budgets.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-2 border-t border-slate-100">
+      <div className="grid grid-cols-1 @sm:grid-cols-2 gap-3.5 pt-2 border-t border-slate-100 min-w-0">
         {steps.map((step) => (
           <div
             key={step.number}
-            className="p-3.5 rounded-lg bg-slate-50 border border-slate-100 flex items-start gap-3"
+            className="p-3.5 rounded-lg bg-slate-50 border border-slate-100 flex items-start gap-3 min-w-0"
           >
-            <div className="text-xs font-mono font-bold text-slate-400 mt-0.5">
+            <div className="text-xs font-mono font-bold text-slate-400 mt-0.5 shrink-0">
               {step.number}
             </div>
-            <div className="space-y-1">
-              <span className="text-sm font-semibold text-slate-800 block">
+            <div className="space-y-1 min-w-0">
+              <span className="text-sm font-semibold text-slate-800 block whitespace-normal break-words">
                 {step.title}
               </span>
-              <p className="text-xs text-slate-500 leading-normal">
+              <p className="text-xs text-slate-500 leading-normal whitespace-normal break-words">
                 {step.desc}
               </p>
             </div>
@@ -65,11 +65,11 @@ export const EmptyState: React.FC = () => {
         ))}
       </div>
 
-      <div className="bg-slate-50/80 p-3.5 rounded-lg text-xs text-slate-600 border border-slate-200/60 flex items-center justify-between">
-        <span className="font-mono text-slate-500">
+      <div className="bg-slate-50/80 p-3.5 rounded-lg text-xs text-slate-600 border border-slate-200/60 flex flex-col @sm:flex-row items-start @sm:items-center justify-between gap-2 min-w-0">
+        <span className="font-mono text-slate-500 whitespace-normal break-words">
           Indian Standard (IS) & CPWD Benchmarks
         </span>
-        <span className="font-semibold text-slate-700">Zero Paid APIs Required</span>
+        <span className="font-semibold text-slate-700 shrink-0 whitespace-nowrap">Zero Paid APIs Required</span>
       </div>
     </div>
   );

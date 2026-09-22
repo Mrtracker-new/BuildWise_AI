@@ -33,23 +33,23 @@ export const OrientationCompass: React.FC<OrientationCompassProps> = ({ orientat
   const windHeadY = cy - (radius - 20) * Math.cos(windRad);
 
   return (
-    <div className="bg-white rounded-lg border border-slate-200 p-5 shadow-sm space-y-3.5">
-      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-        <div className="flex items-center gap-2">
-          <Icon name="compass" size={16} className="text-slate-700" />
-          <h3 className="text-[15px] font-semibold text-slate-900 tracking-tight">
+    <div className="@container bg-white rounded-lg border border-slate-200 p-4 @sm:p-5 shadow-sm space-y-3.5 min-w-0 w-full">
+      <div className="flex flex-wrap items-center justify-between border-b border-slate-100 pb-3 gap-2 min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <Icon name="compass" size={16} className="text-slate-700 shrink-0" />
+          <h3 className="text-[15px] font-semibold text-slate-900 tracking-tight whitespace-normal break-words">
             Passive Solar & Wind Orientation
           </h3>
         </div>
-        <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 font-mono">
+        <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 font-mono shrink-0">
           Bioclimatic Layout
         </span>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+      <div className="grid grid-cols-1 @lg:grid-cols-2 gap-4 items-center min-w-0">
         {/* SVG Engineering Compass */}
-        <div className="flex flex-col items-center justify-center p-2 bg-slate-50 rounded-lg border border-slate-100">
-          <svg width="200" height="200" viewBox="0 0 200 200" className="select-none">
+        <div className="flex flex-col items-center justify-center p-3 bg-slate-50 rounded-lg border border-slate-100 min-w-0">
+          <svg viewBox="0 0 200 200" className="w-[180px] @sm:w-[200px] max-w-full h-auto select-none block" width="200" height="200">
             {/* Compass Outer Rings */}
             <circle cx={cx} cy={cy} r={radius} fill="#FFFFFF" stroke="#CBD5E1" strokeWidth="1.5" />
             <circle cx={cx} cy={cy} r={radius - 8} fill="none" stroke="#F1F5F9" strokeWidth="1" strokeDasharray="3 3" />
@@ -110,12 +110,12 @@ export const OrientationCompass: React.FC<OrientationCompassProps> = ({ orientat
           </svg>
 
           {/* Legend */}
-          <div className="flex items-center gap-3 text-xs font-mono text-slate-500 mt-2">
-            <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap justify-center items-center gap-3 text-xs font-mono text-slate-500 mt-2.5 min-w-0">
+            <div className="flex items-center gap-1.5 shrink-0">
               <span className="w-3 h-1 bg-sky-600 rounded"></span>
               <span>Building Axis ({optimal_axis_degrees.toFixed(0)}°)</span>
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 shrink-0">
               <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
               <span>Wind ({prevailing_wind_direction_degrees.toFixed(0)}°)</span>
             </div>
@@ -123,36 +123,36 @@ export const OrientationCompass: React.FC<OrientationCompassProps> = ({ orientat
         </div>
 
         {/* Textual Rationale & Specifications */}
-        <div className="space-y-3">
-          <div className="bg-slate-50 p-3 rounded border border-slate-100">
-            <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 block mb-0.5">
+        <div className="space-y-3 min-w-0">
+          <div className="bg-slate-50 p-3 rounded border border-slate-100 min-w-0">
+            <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 block mb-0.5 whitespace-normal break-words">
               Principal Longitudinal Axis
             </span>
-            <span className="text-sm font-semibold text-slate-900">
+            <span className="text-sm font-semibold text-slate-900 whitespace-normal break-words">
               {axis_label} (<span className="font-mono">{optimal_axis_degrees.toFixed(1)}°</span>)
             </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-2.5">
-            <div className="bg-slate-50 p-2.5 rounded border border-slate-100">
-              <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 block mb-0.5">
+          <div className="grid grid-cols-1 @sm:grid-cols-2 gap-2.5 min-w-0">
+            <div className="bg-slate-50 p-2.5 rounded border border-slate-100 min-w-0">
+              <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 block mb-0.5 whitespace-normal break-words">
                 Prevailing Wind
               </span>
-              <span className="text-xs font-semibold text-slate-800">
+              <span className="text-xs font-semibold text-slate-800 whitespace-normal break-words">
                 <span className="font-mono">{prevailing_wind_direction_degrees.toFixed(0)}°</span> Azimuth
               </span>
             </div>
-            <div className="bg-slate-50 p-2.5 rounded border border-slate-100">
-              <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 block mb-0.5">
+            <div className="bg-slate-50 p-2.5 rounded border border-slate-100 min-w-0">
+              <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 block mb-0.5 whitespace-normal break-words">
                 Ventilation Rating
               </span>
-              <span className="text-xs font-semibold text-emerald-700">
+              <span className="text-xs font-semibold text-emerald-700 whitespace-normal break-words">
                 {cross_ventilation_rating}
               </span>
             </div>
           </div>
 
-          <p className="text-xs text-slate-600 leading-relaxed">
+          <p className="text-xs text-slate-600 leading-relaxed whitespace-normal break-words">
             {passive_design_rationale}
           </p>
         </div>
