@@ -48,7 +48,7 @@ Emits categorized, severity-ranked civil engineering action items:
 - Payloads passed to the AI narrative adapter are capped at the top 8 severity-ranked items to safeguard low-hardware Ollama context windows, while full structured items remain in UI and PDF.
 
 ### 6. Interactive Spatial Workspace & Entrance Geometry
-- Built on Leaflet.js with OpenStreetMap cartography and zero paid API keys.
+- Built on MapLibre GL vector maps with OpenFreeMap vector cartography (Standard, Satellite hybrid with ESRI World Imagery, and Terrain with OpenTopoMap), 3D building extrusions, and zero paid API keys.
 - **Oriented Building Footprint**: Simulates the building footprint oriented along the optimal passive solar axis.
 - **Midpoint Entrance Arrow**: Computes outward unit vectors using geographic bearing mathematics clockwise from North and anchors an SVG entrance indicator at the exact midpoint of the corresponding footprint edge.
 
@@ -64,7 +64,7 @@ Emits categorized, severity-ranked civil engineering action items:
 ### Frontend
 - **Framework**: React 19, TypeScript
 - **Tooling**: Vite 8, Tailwind CSS with `@tailwindcss/container-queries`
-- **Mapping**: Leaflet.js with OpenStreetMap Cartography
+- **Mapping**: MapLibre GL vector maps with OpenFreeMap vector styles, 3D buildings, and ESRI/OpenTopoMap hybrid layers
 - **Testing & Audit**: Puppeteer Core (9-viewport responsive DOM integrity audit)
 - **Linter**: Oxlint
 

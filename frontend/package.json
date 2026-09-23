@@ -11,8 +11,7 @@
     "audit:ui": "node scripts/audit.cjs"
   },
   "dependencies": {
-    "@types/leaflet": "^1.9.22",
-    "leaflet": "^1.9.4",
+    "maplibre-gl": "^6.11.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

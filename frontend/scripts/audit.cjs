@@ -64,13 +64,17 @@ function checkDOMViolations(isDrawerOpenIntended) {
     const isClosedDrawerOrChild = el.closest('#results-drawer.translate-x-full');
     if (isClosedDrawerOrChild && !isDrawerOpenIntended) return;
 
-    // Leaflet internal panes/tiles and interactive GIS canvas (clipped by .leaflet-container)
+    // Leaflet & MapLibre internal panes/tiles and interactive GIS canvas (clipped by map container)
     if (
       el.closest('.leaflet-pane') ||
       el.closest('.leaflet-tile-container') ||
       el.classList.contains('leaflet-tile') ||
       el.closest('.leaflet-container') ||
-      el.classList.contains('leaflet-container')
+      el.classList.contains('leaflet-container') ||
+      el.closest('.maplibregl-map') ||
+      el.classList.contains('maplibregl-map') ||
+      el.closest('.maplibregl-canvas-container') ||
+      el.classList.contains('maplibregl-canvas')
     ) return;
 
     // Center map section: explicitly mandated by Rule 3 to use overflow-hidden (clips the translated results drawer)

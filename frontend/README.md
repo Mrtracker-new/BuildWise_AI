@@ -1,6 +1,6 @@
 # BuildWise AI - Frontend UI System & Architecture
 
-BuildWise AI's frontend is an engineered, responsive spatial workspace built with React 19, TypeScript, Vite, Tailwind CSS v3 with `@tailwindcss/container-queries`, and Leaflet.js.
+BuildWise AI's frontend is an engineered, responsive spatial workspace built with React 19, TypeScript, Vite, Tailwind CSS v3 with `@tailwindcss/container-queries`, and MapLibre GL vector maps.
 
 ---
 
@@ -21,7 +21,7 @@ Components rendered inside fixed-width or constrained surfaces (the 380px left r
 
 ### Surface Overflow Semantics
 - **Scrolling Rails**: Must use `overflow-y-auto` paired with `overflow-x-clip` (and `overscroll-contain`). Do NOT apply `overflow-hidden` to rails, as vertical scrolling must be preserved while eliminating horizontal scroll leakage.
-- **Center GIS Section**: Only `#center-map-section` applies `overflow-hidden` to clip Leaflet spatial tile arrays and contain the translated slide-over results drawer.
+- **Center GIS Section**: Only `#center-map-section` applies `overflow-hidden` to clip MapLibre spatial vector/raster tile canvases and contain the translated slide-over results drawer.
 - **Text Wrapping**: Set `overflow-wrap: break-word` on `body` globally. Reserve `overflow-wrap: anywhere` and `break-all` strictly for monospace data strings (WGS84 coordinate pairs, reference IDs, formulas, and INR currency ranges).
 
 ### Mathematical & Engineering Formula Wrapping

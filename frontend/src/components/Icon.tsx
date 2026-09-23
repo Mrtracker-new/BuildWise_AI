@@ -43,7 +43,8 @@ export type IconName =
   | 'plus'
   | 'minus'
   | 'badge-check'
-  | 'check';
+  | 'check'
+  | 'map';
 
 interface IconProps {
   name: IconName;
@@ -405,6 +406,14 @@ export const Icon: React.FC<IconProps> = ({
       return (
         <svg {...commonProps}>
           <polyline points="20 6 9 17 4 12" />
+        </svg>
+      );
+    case 'map':
+      return (
+        <svg {...commonProps}>
+          <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6" />
+          <line x1="8" y1="2" x2="8" y2="18" />
+          <line x1="16" y1="6" x2="16" y2="22" />
         </svg>
       );
     default:
