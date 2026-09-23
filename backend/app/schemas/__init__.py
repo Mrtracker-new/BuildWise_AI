@@ -8,6 +8,12 @@ from app.schemas.response import (
     AnalysisResponse,
     HealthResponse
 )
+from app.schemas.site_vision import (
+    SiteVisionRequest,
+    SiteVisionResponse,
+    SceneMetadata,
+    PreservationItem
+)
 
 __all__ = [
     "AnalysisRequest",
@@ -18,5 +24,10 @@ __all__ = [
     "CostEstimate",
     "RiskItem",
     "AnalysisResponse",
-    "HealthResponse"
+    "HealthResponse",
+    "SiteVisionRequest",
+    "SiteVisionResponse",
+    "SceneMetadata",
+    "PreservationItem"
 ]
+

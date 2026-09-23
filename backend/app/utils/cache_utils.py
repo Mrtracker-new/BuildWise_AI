@@ -12,14 +12,19 @@ class SimpleTtlCache:
         self.precision = precision
         self._store: Dict[str, Tuple[float, Any]] = {}
 
-    def _get_key(self, lat: float, lon: float, category: str, precision: Optional[int] = None) -> str:
-        p = precision if precision is not None else self.precision
-        rounded_lat = round(lat, p)
-        rounded_lon = round(lon, p)
-        return f"{category}:{rounded_lat}:{rounded_lon}"
+    def _get_key(self, lat: float, lon: float, category: str, precision: Optional[int] = None, scene_id: Optional[str] = None, grid_step: Optional[float] = None) -> str:
+        if grid_step is not None and grid_step > 0:
+            rounded_lat = round(round(lat / grid_step) * grid_step, 6)
+            rounded_lon = round(round(lon / grid_step) * grid_step, 6)
+        else:
+            p = precision if precision is not None else self.precision
+            rounded_lat = round(lat, p)
+            rounded_lon = round(lon, p)
+        extra = f":{scene_id}" if scene_id else ""
+        return f"{category}:{rounded_lat}:{rounded_lon}{extra}"
 
-    def get(self, lat: float, lon: float, category: str, precision: Optional[int] = None) -> Optional[Any]:
-        key = self._get_key(lat, lon, category, precision)
+    def get(self, lat: float, lon: float, category: str, precision: Optional[int] = None, scene_id: Optional[str] = None, grid_step: Optional[float] = None) -> Optional[Any]:
+        key = self._get_key(lat, lon, category, precision, scene_id, grid_step)
         if key in self._store:
             timestamp, data = self._store[key]
             if time.time() - timestamp < self.ttl_seconds:
@@ -28,14 +33,14 @@ class SimpleTtlCache:
                 del self._store[key]
         return None
 
-    def set(self, lat: float, lon: float, category: str, value: Any, precision: Optional[int] = None) -> None:
+    def set(self, lat: float, lon: float, category: str, value: Any, precision: Optional[int] = None, scene_id: Optional[str] = None, grid_step: Optional[float] = None) -> None:
         if len(self._store) >= self.max_entries:
             # Purge oldest 20%
             keys_to_remove = sorted(self._store.keys(), key=lambda k: self._store[k][0])[:self.max_entries // 5]
             for k in keys_to_remove:
                 self._store.pop(k, None)
 
-        key = self._get_key(lat, lon, category, precision)
+        key = self._get_key(lat, lon, category, precision, scene_id, grid_step)
         self._store[key] = (time.time(), value)
 
     def clear(self) -> None:
@@ -46,3 +51,7 @@ cache = SimpleTtlCache(ttl_seconds=3600, precision=3)
 
 # 24-hour TTL hazard & geospatial telemetry cache keyed on 0.1 degree grid (~11km)
 hazard_cache = SimpleTtlCache(ttl_seconds=86400, precision=1)
+
+# 7-day TTL satellite vision cache keyed on 0.002 degree grid (~220m) plus scene id
+vision_cache = SimpleTtlCache(ttl_seconds=604800, precision=3)
+

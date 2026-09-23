@@ -15,6 +15,7 @@ from app.services.recommendation_service import (
     generate_recommendations,
     get_top_severity_recommendations
 )
+from app.services.vision import analyze_site_vision
 
 __all__ = [
     "fetch_reverse_geocode",
@@ -29,5 +30,7 @@ __all__ = [
     "calculate_land_value",
     "evaluate_vastu_advisory",
     "generate_recommendations",
-    "get_top_severity_recommendations"
+    "get_top_severity_recommendations",
+    "analyze_site_vision"
 ]
+
