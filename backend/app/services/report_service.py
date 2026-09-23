@@ -1,6 +1,6 @@
 import io
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from app.schemas.request import ReportRequest
 
@@ -11,6 +11,8 @@ from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, HRFlowable
 )
 from reportlab.pdfgen import canvas
+from reportlab.graphics.shapes import Drawing, Rect, Line, String, Group, ArcPath
+
 
 class NumberedCanvas(canvas.Canvas):
     """
@@ -51,7 +53,409 @@ class NumberedCanvas(canvas.Canvas):
         self.restoreState()
 
 
+def _subtract_intervals_rl(
+    base: Tuple[float, float],
+    cutouts: List[Tuple[float, float]]
+) -> List[Tuple[float, float]]:
+    """
+    Subtracts cutout intervals [u, v] from a base interval [A, B] for ReportLab lines.
+    """
+    a, b = base
+    if a >= b:
+        return []
+    if not cutouts:
+        return [(a, b)]
+
+    valid_cuts: List[Tuple[float, float]] = []
+    for u, v in cutouts:
+        c_start = max(a, min(u, v))
+        c_end = min(b, max(u, v))
+        if c_end - c_start > 0.1:
+            valid_cuts.append((c_start, c_end))
+
+    if not valid_cuts:
+        return [(a, b)]
+
+    valid_cuts.sort(key=lambda x: x[0])
+    merged_cuts: List[Tuple[float, float]] = [valid_cuts[0]]
+    for cur_u, cur_v in valid_cuts[1:]:
+        prev_u, prev_v = merged_cuts[-1]
+        if cur_u <= prev_v:
+            merged_cuts[-1] = (prev_u, max(prev_v, cur_v))
+        else:
+            merged_cuts.append((cur_u, cur_v))
+
+    segments: List[Tuple[float, float]] = []
+    cursor = a
+    for u, v in merged_cuts:
+        if u > cursor + 0.1:
+            segments.append((cursor, u))
+        cursor = max(cursor, v)
+    if cursor < b - 0.1:
+        segments.append((cursor, b))
+
+    return segments
+
+
+def draw_floorplan_reportlab(
+    placements: Any,
+    grid_matrix: Any,
+    width: float = 520.0,
+    height: float = 220.0
+) -> Drawing:
+    """
+    Translates solved room placements and grid matrix into native ReportLab
+    vector drawing shapes (Line, Rect, String, ArcPath, Group).
+    Ensures crisp, publication-grade vector rendering in PDF reports.
+    """
+    drawing = Drawing(width, height)
+
+    # 1. Normalize placements into standard dictionaries
+    norm_placements: List[Dict[str, Any]] = []
+    if isinstance(placements, (list, tuple)):
+        for p in placements:
+            if isinstance(p, dict):
+                rid = p.get("room_id", "")
+                r = int(p.get("row", p.get("r", 0)))
+                c = int(p.get("col", p.get("c", 0)))
+                w = int(p.get("width", p.get("w", 1)))
+                h = int(p.get("height", p.get("h", 1)))
+                name = str(p.get("room_name", p.get("name", rid.replace("_", " ").title())))
+                area = float(p.get("area_sqm", p.get("area", 0.0)))
+            else:
+                rid = getattr(p, "room_id", "")
+                r = int(getattr(p, "row", getattr(p, "r", 0)))
+                c = int(getattr(p, "col", getattr(p, "c", 0)))
+                w = int(getattr(p, "width", getattr(p, "w", 1)))
+                h = int(getattr(p, "height", getattr(p, "h", 1)))
+                name = str(getattr(p, "room_name", getattr(p, "name", rid.replace("_", " ").title())))
+                area = float(getattr(p, "area_sqm", getattr(p, "area", 0.0)))
+
+            norm_placements.append({
+                "room_id": rid,
+                "row": r,
+                "col": c,
+                "width": w,
+                "height": h,
+                "name": name,
+                "area": area
+            })
+
+    # 2. Reconstruct matrix
+    rows = len(grid_matrix) if grid_matrix else (max((p["row"] + p["height"] for p in norm_placements), default=10))
+    cols = len(grid_matrix[0]) if grid_matrix and grid_matrix[0] else (max((p["col"] + p["width"] for p in norm_placements), default=10))
+    rows = max(rows, 1)
+    cols = max(cols, 1)
+
+    matrix: List[List[Optional[str]]] = [[None for _ in range(cols)] for _ in range(rows)]
+    if grid_matrix:
+        for r in range(min(rows, len(grid_matrix))):
+            for c in range(min(cols, len(grid_matrix[r]))):
+                val = grid_matrix[r][c]
+                matrix[r][c] = None if val in (None, "", "empty") else val
+    else:
+        for p in norm_placements:
+            for r in range(p["row"], p["row"] + p["height"]):
+                for c in range(p["col"], p["col"] + p["width"]):
+                    if 0 <= r < rows and 0 <= c < cols:
+                        matrix[r][c] = p["room_id"]
+
+    # 3. Canvas background and dimensions
+    drawing.add(Rect(0, 0, width, height, fillColor=colors.HexColor("#FFFFFF"), strokeColor=colors.HexColor("#CBD5E1"), strokeWidth=0.5))
+
+    pad_x = 35.0
+    pad_y = 25.0
+    avail_w = width - (2.0 * pad_x)
+    avail_h = height - (2.0 * pad_y)
+
+    cell_size = min(avail_w / cols, avail_h / rows)
+    draw_w = cols * cell_size
+    draw_h = rows * cell_size
+    offset_x = (width - draw_w) / 2.0
+    offset_y = (height - draw_h) / 2.0
+
+    # Plinth boundary
+    drawing.add(Rect(offset_x, offset_y, draw_w, draw_h, fillColor=None, strokeColor=colors.HexColor("#CBD5E1"), strokeWidth=0.75, strokeDashArray=[3, 3]))
+
+    # Room fills
+    color_map = {
+        "master_bed": colors.HexColor("#F1F5F9"),
+        "living": colors.HexColor("#F0FDF4"),
+        "kitchen": colors.HexColor("#FEF3C7"),
+        "puja": colors.HexColor("#FEF9C3"),
+        "bath_1": colors.HexColor("#E0F2FE"),
+        "bath_2": colors.HexColor("#E0F2FE"),
+        "bed_2": colors.HexColor("#F8FAFC"),
+        "dining": colors.HexColor("#FDF2F8"),
+        "stairs": colors.HexColor("#F5F3FF"),
+        "corridor": colors.white
+    }
+
+    for p in norm_placements:
+        rx = offset_x + (p["col"] * cell_size)
+        ry = offset_y + ((rows - (p["row"] + p["height"])) * cell_size)
+        rw = p["width"] * cell_size
+        rh = p["height"] * cell_size
+        fcolor = color_map.get(p["room_id"], colors.HexColor("#F8FAFC"))
+        drawing.add(Rect(rx, ry, rw, rh, fillColor=fcolor, strokeColor=None, strokeWidth=0))
+
+    # Door and Window Cutouts
+    h_cutouts: Dict[int, List[Tuple[float, float]]] = {}  # r -> list of (x1, x2)
+    v_cutouts: Dict[int, List[Tuple[float, float]]] = {}  # c -> list of (y1, y2) in RL coords
+    door_rad = min(cell_size * 0.85, 18.0)
+    door_rad = max(door_rad, 12.0)
+
+    for p in norm_placements:
+        if p["room_id"] in ("corridor", "living"):
+            continue
+
+        r = p["row"]
+        c = p["col"]
+        w = p["width"]
+        h = p["height"]
+        r_end = r + h
+        c_end = c + w
+
+        rx = offset_x + (c * cell_size)
+        ry = offset_y + ((rows - r_end) * cell_size)
+        rw = w * cell_size
+        rh = h * cell_size
+
+        # Find best side: N, S, W, E
+        candidates = []
+        n_sc = 100 if (r > 0 and any(matrix[r - 1][col] == "corridor" for col in range(c, c_end))) else (
+            50 if (r > 0 and any(matrix[r - 1][col] == "living" for col in range(c, c_end))) else (
+                10 if (r > 0 and any(matrix[r - 1][col] is not None for col in range(c, c_end))) else 0
+            )
+        )
+        candidates.append(("N", n_sc))
+        s_sc = 100 if (r_end < rows and any(matrix[r_end][col] == "corridor" for col in range(c, c_end))) else (
+            50 if (r_end < rows and any(matrix[r_end][col] == "living" for col in range(c, c_end))) else (
+                10 if (r_end < rows and any(matrix[r_end][col] is not None for col in range(c, c_end))) else 0
+            )
+        )
+        candidates.append(("S", s_sc))
+        w_sc = 100 if (c > 0 and any(matrix[row][c - 1] == "corridor" for row in range(r, r_end))) else (
+            50 if (c > 0 and any(matrix[row][c - 1] == "living" for row in range(r, r_end))) else (
+                10 if (c > 0 and any(matrix[row][c - 1] is not None for row in range(r, r_end))) else 0
+            )
+        )
+        candidates.append(("W", w_sc))
+        e_sc = 100 if (c_end < cols and any(matrix[row][c_end] == "corridor" for row in range(r, r_end))) else (
+            50 if (c_end < cols and any(matrix[row][c_end] == "living" for row in range(r, r_end))) else (
+                10 if (c_end < cols and any(matrix[row][c_end] is not None for row in range(r, r_end))) else 0
+            )
+        )
+        candidates.append(("E", e_sc))
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        chosen_side = candidates[0][0]
+
+        offset_hinge = 5.0
+        R = min(door_rad, (rw if chosen_side in ("N", "S") else rh) - offset_hinge - 2.0)
+        R = max(R, 10.0)
+
+        # In ReportLab:
+        # North wall of room is at RL y = offset_y + (rows - r) * cell_size = ry + rh
+        # Room interior is -Y (towards ry)
+        if chosen_side == "N":
+            hx = rx + offset_hinge
+            hy = ry + rh
+            leaf_x = hx
+            leaf_y = hy - R
+            h_cutouts.setdefault(r, []).append((hx, hx + R))
+            drawing.add(Line(hx, hy, leaf_x, leaf_y, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.2))
+            arc = ArcPath(strokeColor=colors.HexColor("#64748B"), strokeWidth=0.8, strokeDashArray=[2, 2], fillColor=None)
+            arc.addArc(hx, hy, R, 270, 360)
+            drawing.add(arc)
+        elif chosen_side == "S":
+            hx = rx + offset_hinge
+            hy = ry
+            leaf_x = hx
+            leaf_y = hy + R
+            h_cutouts.setdefault(r_end, []).append((hx, hx + R))
+            drawing.add(Line(hx, hy, leaf_x, leaf_y, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.2))
+            arc = ArcPath(strokeColor=colors.HexColor("#64748B"), strokeWidth=0.8, strokeDashArray=[2, 2], fillColor=None)
+            arc.addArc(hx, hy, R, 0, 90)
+            drawing.add(arc)
+        elif chosen_side == "W":
+            hx = rx
+            hy = ry + rh - offset_hinge
+            leaf_x = hx + R
+            leaf_y = hy
+            v_cutouts.setdefault(c, []).append((hy - R, hy))
+            drawing.add(Line(hx, hy, leaf_x, leaf_y, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.2))
+            arc = ArcPath(strokeColor=colors.HexColor("#64748B"), strokeWidth=0.8, strokeDashArray=[2, 2], fillColor=None)
+            arc.addArc(hx, hy, R, 270, 360)
+            drawing.add(arc)
+        else:  # East
+            hx = rx + rw
+            hy = ry + rh - offset_hinge
+            leaf_x = hx - R
+            leaf_y = hy
+            v_cutouts.setdefault(c_end, []).append((hy - R, hy))
+            drawing.add(Line(hx, hy, leaf_x, leaf_y, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.2))
+            arc = ArcPath(strokeColor=colors.HexColor("#64748B"), strokeWidth=0.8, strokeDashArray=[2, 2], fillColor=None)
+            arc.addArc(hx, hy, R, 180, 270)
+            drawing.add(arc)
+
+    # Windows on exterior walls
+    windows_rl = []
+    habitable = {"master_bed", "living", "kitchen", "bed_2", "dining"}
+    for p in norm_placements:
+        if p["room_id"] not in habitable:
+            continue
+        r = p["row"]
+        c = p["col"]
+        w = p["width"]
+        h = p["height"]
+        r_end = r + h
+        c_end = c + w
+        rx = offset_x + (c * cell_size)
+        ry = offset_y + ((rows - r_end) * cell_size)
+        rw = w * cell_size
+        rh = h * cell_size
+
+        if r == 0 or all(matrix[r - 1][col] is None for col in range(c, c_end)):
+            if p["room_id"] != "living":
+                win_w = min(rw * 0.45, 24.0)
+                wx = rx + (rw - win_w) / 2.0
+                wy = ry + rh
+                h_cutouts.setdefault(r, []).append((wx, wx + win_w))
+                windows_rl.append(("H", wx, wx + win_w, wy))
+        if r_end >= rows or all(matrix[r_end][col] is None for col in range(c, c_end)):
+            win_w = min(rw * 0.45, 24.0)
+            wx = rx + (rw - win_w) / 2.0
+            wy = ry
+            h_cutouts.setdefault(r_end, []).append((wx, wx + win_w))
+            windows_rl.append(("H", wx, wx + win_w, wy))
+        if c_end >= cols or all(matrix[row][c_end] is None for row in range(r, r_end)):
+            win_h = min(rh * 0.45, 24.0)
+            wy = ry + (rh - win_h) / 2.0
+            wx = rx + rw
+            v_cutouts.setdefault(c_end, []).append((wy, wy + win_h))
+            windows_rl.append(("V", wy, wy + win_h, wx))
+        if c == 0 or all(matrix[row][c - 1] is None for row in range(r, r_end)):
+            win_h = min(rh * 0.45, 24.0)
+            wy = ry + (rh - win_h) / 2.0
+            wx = rx
+            v_cutouts.setdefault(c, []).append((wy, wy + win_h))
+            windows_rl.append(("V", wy, wy + win_h, wx))
+
+    # Exterior & Interior Walls
+    t_ext = 2.4
+    t_int = 1.1
+    half_ext = t_ext / 2.0
+
+    # Horizontal Walls
+    for r in range(rows + 1):
+        c = 0
+        rl_y = offset_y + ((rows - r) * cell_size)
+        while c < cols:
+            top_room = matrix[r - 1][c] if r > 0 else None
+            bot_room = matrix[r][c] if r < rows else None
+            if top_room == bot_room:
+                c += 1
+                continue
+            is_ext = (top_room is None) != (bot_room is None)
+            start_c = c
+            while c < cols:
+                t = matrix[r - 1][c] if r > 0 else None
+                b = matrix[r][c] if r < rows else None
+                if (t is None) != (b is None) if is_ext else (t is not None and b is not None and t != b):
+                    c += 1
+                else:
+                    break
+            end_c = c
+            x1 = offset_x + (start_c * cell_size)
+            x2 = offset_x + (end_c * cell_size)
+
+            cuts = h_cutouts.get(r, [])
+            if is_ext:
+                for seg_x1, seg_x2 in _subtract_intervals_rl((x1, x2), cuts):
+                    drawing.add(Line(seg_x1, rl_y, seg_x2, rl_y, strokeColor=colors.HexColor("#0F172A"), strokeWidth=t_ext, strokeLineCap=2))
+            else:
+                for seg_x1, seg_x2 in _subtract_intervals_rl((x1 + half_ext, x2 - half_ext), cuts):
+                    drawing.add(Line(seg_x1, rl_y, seg_x2, rl_y, strokeColor=colors.HexColor("#475569"), strokeWidth=t_int, strokeLineCap=2))
+
+    # Vertical Walls
+    for c in range(cols + 1):
+        r = 0
+        rl_x = offset_x + (c * cell_size)
+        while r < rows:
+            left_room = matrix[r][c - 1] if c > 0 else None
+            right_room = matrix[r][c] if c < cols else None
+            if left_room == right_room:
+                r += 1
+                continue
+            is_ext = (left_room is None) != (right_room is None)
+            start_r = r
+            while r < rows:
+                l = matrix[r][c - 1] if c > 0 else None
+                rg = matrix[r][c] if c < cols else None
+                if (l is None) != (rg is None) if is_ext else (l is not None and rg is not None and l != rg):
+                    r += 1
+                else:
+                    break
+            end_r = r
+            y_bot = offset_y + ((rows - end_r) * cell_size)
+            y_top = offset_y + ((rows - start_r) * cell_size)
+
+            cuts = v_cutouts.get(c, [])
+            if is_ext:
+                for seg_y1, seg_y2 in _subtract_intervals_rl((y_bot, y_top), cuts):
+                    drawing.add(Line(rl_x, seg_y1, rl_x, seg_y2, strokeColor=colors.HexColor("#0F172A"), strokeWidth=t_ext, strokeLineCap=2))
+            else:
+                for seg_y1, seg_y2 in _subtract_intervals_rl((y_bot + half_ext, y_top - half_ext), cuts):
+                    drawing.add(Line(rl_x, seg_y1, rl_x, seg_y2, strokeColor=colors.HexColor("#475569"), strokeWidth=t_int, strokeLineCap=2))
+
+    # Draw windows: 3 parallel lines
+    for w_item in windows_rl:
+        if w_item[0] == "H":
+            x1, x2, wy = w_item[1], w_item[2], w_item[3]
+            drawing.add(Line(x1, wy - 1.0, x2, wy - 1.0, strokeColor=colors.HexColor("#64748B"), strokeWidth=0.6))
+            drawing.add(Line(x1, wy, x2, wy, strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8))
+            drawing.add(Line(x1, wy + 1.0, x2, wy + 1.0, strokeColor=colors.HexColor("#64748B"), strokeWidth=0.6))
+        else:
+            y1, y2, wx = w_item[1], w_item[2], w_item[3]
+            drawing.add(Line(wx - 1.0, y1, wx - 1.0, y2, strokeColor=colors.HexColor("#64748B"), strokeWidth=0.6))
+            drawing.add(Line(wx, y1, wx, y2, strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8))
+            drawing.add(Line(wx + 1.0, y1, wx + 1.0, y2, strokeColor=colors.HexColor("#64748B"), strokeWidth=0.6))
+
+    # Centered labels and metric dimensions
+    for p in norm_placements:
+        rx = offset_x + (p["col"] * cell_size)
+        ry = offset_y + ((rows - (p["row"] + p["height"])) * cell_size)
+        rw = p["width"] * cell_size
+        rh = p["height"] * cell_size
+        cx = rx + (rw / 2.0)
+        cy = ry + (rh / 2.0)
+        font_sz = max(6.5, min(8.0, cell_size * 0.38))
+        drawing.add(String(cx, cy + 2.0, p["name"].upper()[:14], fontName="Helvetica-Bold", fontSize=font_sz, textAnchor="middle", fillColor=colors.HexColor("#0F172A")))
+        if p["area"] > 0:
+            drawing.add(String(cx, cy - 7.0, f"{p['area']:.1f} m²", fontName="Helvetica", fontSize=font_sz * 0.85, textAnchor="middle", fillColor=colors.HexColor("#64748B")))
+
+    # Dimension lines & 45-degree ticks
+    dim_top_y = offset_y + draw_h + 10.0
+    drawing.add(Line(offset_x, dim_top_y, offset_x + draw_w, dim_top_y, strokeColor=colors.HexColor("#64748B"), strokeWidth=0.8))
+    drawing.add(Line(offset_x - 3, dim_top_y - 3, offset_x + 3, dim_top_y + 3, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.2))
+    drawing.add(Line(offset_x + draw_w - 3, dim_top_y - 3, offset_x + draw_w + 3, dim_top_y + 3, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.2))
+    drawing.add(String(offset_x + (draw_w / 2.0), dim_top_y + 3.0, "FRONTAGE", fontName="Helvetica-Bold", fontSize=6.5, textAnchor="middle", fillColor=colors.HexColor("#475569")))
+
+    dim_left_x = offset_x - 12.0
+    drawing.add(Line(dim_left_x, offset_y, dim_left_x, offset_y + draw_h, strokeColor=colors.HexColor("#64748B"), strokeWidth=0.8))
+    drawing.add(Line(dim_left_x - 3, offset_y - 3, dim_left_x + 3, offset_y + 3, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.2))
+    drawing.add(Line(dim_left_x - 3, offset_y + draw_h - 3, dim_left_x + 3, offset_y + draw_h + 3, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.2))
+
+    # North arrow badge
+    compass_x = width - 25.0
+    compass_y = height - 20.0
+    drawing.add(String(compass_x, compass_y, "↑ N", fontName="Helvetica-Bold", fontSize=8.0, textAnchor="middle", fillColor=colors.HexColor("#0F172A")))
+
+    return drawing
+
+
 def generate_pdf_report(
+
     data: Dict[str, Any],
     site_vision: Optional[Dict[str, Any]] = None,
     floor_plan: Optional[Dict[str, Any]] = None
@@ -627,7 +1031,12 @@ def generate_pdf_report(
         story.append(Paragraph(fp_summary, body_text))
         story.append(Spacer(1, 4))
 
-        drawing = create_floorplan_reportlab_drawing(floorplan, max_w=520.0, max_h=220.0)
+        drawing = draw_floorplan_reportlab(
+            floorplan.get("placements") or [],
+            floorplan.get("grid_matrix") or [],
+            width=520.0,
+            height=220.0
+        )
         story.append(drawing)
         story.append(Spacer(1, 6))
 

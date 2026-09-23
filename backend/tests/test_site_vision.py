@@ -338,6 +338,7 @@ async def test_site_vision_fallback_to_index_only_when_segformer_fails():
 
     with patch("app.services.vision.site_vision_service.search_latest_sentinel_scene") as mock_stac, \
          patch("app.services.vision.site_vision_service.fetch_site_imagery") as mock_fetch, \
+         patch("app.services.vision.site_vision_service.vision_cache.get", return_value=None), \
          patch("app.services.vision.site_vision_service.get_segformer_adapter") as mock_adapter:
 
         mock_stac.return_value = {

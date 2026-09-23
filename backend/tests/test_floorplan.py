@@ -133,6 +133,13 @@ def test_svg_blueprint_validity():
     assert "GRAPHIC SCALE" in svg
     assert "stroke-linecap=\"square\"" in svg
     assert "<path d=" in svg  # Door swing arcs
+    # Check that elliptical arc command 'A' is used in door swings
+    assert " A " in svg
+    # Check that 45-degree slashes are present on dimension lines (stroke-width 1.6)
+    assert 'stroke-width="1.6"' in svg
+    # Ensure no old wall cover rects exist (the old ones had height="6")
+    assert 'height="6" fill=' not in svg
+
 
 
 @pytest.mark.asyncio
@@ -214,4 +221,30 @@ def test_drawing_generation_with_pydantic_models():
     drawing = create_floorplan_reportlab_drawing(data_with_objects)
     assert drawing is not None
     assert drawing.width == 480.0
+
+
+def test_draw_floorplan_reportlab_direct():
+    from app.services.report_service import draw_floorplan_reportlab
+    req = FloorPlanRequest(
+        plot_width_m=10.0,
+        plot_depth_m=12.0,
+        required_rooms=["master_bed", "kitchen", "living", "puja", "bath_1"],
+        vastu_strictness="high"
+    )
+    fp_res = generate_floor_plan(req)
+    drawing = draw_floorplan_reportlab(
+        placements=fp_res.placements,
+        grid_matrix=fp_res.grid_matrix,
+        width=520.0,
+        height=220.0
+    )
+    assert drawing is not None
+    assert drawing.width == 520.0
+    assert drawing.height == 220.0
+    # Verify that shapes exist in drawing (Rect, Line, String, ArcPath)
+    shape_types = {type(s).__name__ for s in drawing.contents}
+    assert "Rect" in shape_types
+    assert "Line" in shape_types
+    assert "String" in shape_types
+    assert "ArcPath" in shape_types
 

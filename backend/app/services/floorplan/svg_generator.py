@@ -1,19 +1,75 @@
 import math
-from typing import List, Dict, Tuple, Optional, Any
+from typing import List, Dict, Tuple, Optional, Any, Set
 from app.services.floorplan.grid_model import RoomBox, SpatialGrid, ROOM_CATALOG
 
+# Professional architectural pastel fills (15% opacity is applied in SVG rendering)
 PASTEL_COLORS: Dict[str, str] = {
-    "master_bed": "#F1F5F9",  # slate-100
-    "living": "#F0FDF4",      # emerald-50
-    "kitchen": "#FEF3C7",     # amber-100
-    "puja": "#FEF9C3",        # yellow-100
-    "bath_1": "#E0F2FE",      # sky-100
-    "bath_2": "#E0F2FE",      # sky-100
-    "bed_2": "#F8FAFC",       # slate-50
-    "dining": "#FDF2F8",      # pink-50
-    "stairs": "#F5F3FF",      # purple-50
-    "corridor": "#FFFFFF"     # pure white
+    "master_bed": "#38BDF8",  # Sky / Blue
+    "living": "#34D399",      # Emerald
+    "kitchen": "#FBBF24",     # Amber
+    "puja": "#FACC15",        # Gold / Yellow
+    "bath_1": "#38BDF8",      # Cyan
+    "bath_2": "#38BDF8",      # Cyan
+    "bed_2": "#818CF8",       # Indigo
+    "dining": "#F472B6",      # Pink
+    "stairs": "#A78BFA",      # Purple
+    "corridor": "#94A3B8"     # Slate
 }
+
+# Wall thickness specifications (in pixels)
+# Exterior wall: 6.0px (~0.24m scaled structural wall)
+# Interior partition wall: 3.0px (~0.12m scaled partition wall)
+T_EXT = 6.0
+T_INT = 3.0
+HALF_EXT = T_EXT / 2.0  # 3.0px inner face offset
+HALF_INT = T_INT / 2.0  # 1.5px inner face offset
+
+
+def _subtract_intervals(
+    base: Tuple[float, float],
+    cutouts: List[Tuple[float, float]]
+) -> List[Tuple[float, float]]:
+    """
+    Subtracts cutout intervals [u, v] from a base interval [A, B],
+    returning the remaining disjoint line segments.
+    """
+    a, b = base
+    if a >= b:
+        return []
+    if not cutouts:
+        return [(a, b)]
+
+    # Clip cutouts to [a, b] and sort
+    valid_cuts: List[Tuple[float, float]] = []
+    for u, v in cutouts:
+        c_start = max(a, min(u, v))
+        c_end = min(b, max(u, v))
+        if c_end - c_start > 0.1:
+            valid_cuts.append((c_start, c_end))
+
+    if not valid_cuts:
+        return [(a, b)]
+
+    valid_cuts.sort(key=lambda x: x[0])
+    # Merge overlapping cutouts
+    merged_cuts: List[Tuple[float, float]] = [valid_cuts[0]]
+    for cur_u, cur_v in valid_cuts[1:]:
+        prev_u, prev_v = merged_cuts[-1]
+        if cur_u <= prev_v:
+            merged_cuts[-1] = (prev_u, max(prev_v, cur_v))
+        else:
+            merged_cuts.append((cur_u, cur_v))
+
+    segments: List[Tuple[float, float]] = []
+    cursor = a
+    for u, v in merged_cuts:
+        if u > cursor + 0.1:
+            segments.append((cursor, u))
+        cursor = max(cursor, v)
+    if cursor < b - 0.1:
+        segments.append((cursor, b))
+
+    return segments
 
 
 def generate_blueprint_svg(
@@ -24,184 +80,47 @@ def generate_blueprint_svg(
 ) -> str:
     """
     Renders an architectural 2D blueprint SVG from a solved RoomBox layout.
-    Generates clean walls, 90-degree door swing arcs, windows, labels,
-    exterior dimension ticks, and an architectural North compass.
+    Features:
+    - Clean wall joints (interior walls terminate at inner face of exterior walls, no corner poke-through)
+    - Calculated 0.9m door gaps (true gaps in wall lines, zero overlapping rect cover-ups)
+    - Mathematically verified SVG <path> door swing arcs swinging strictly INTO rooms
+    - 3-line exterior window representations
+    - Architectural dimension lines with 45-degree diagonal slashes
+    - Centered uppercase typography with metric dimensions and 15% opacity fills
+    - Dark mode CAD drafting aesthetic (AutoCAD / Revit digital drafting style)
     """
     cell_px = 52.0
-    margin_x = 75.0
-    margin_y = 75.0
+    margin_x = 80.0
+    margin_y = 80.0
 
     content_w = grid.cols * cell_px
     content_h = grid.rows * cell_px
     svg_w = content_w + (2.0 * margin_x)
     svg_h = content_h + (2.0 * margin_y)
 
+    scale_px_per_m = cell_px / max(grid.cell_w_m, 0.001)
+    door_rad = min(0.9 * scale_px_per_m, 32.0)
+    door_rad = max(door_rad, 22.0)
+
     # 2D cell occupancy matrix: (r, c) -> room_id or None
     matrix: List[List[Optional[str]]] = [[None for _ in range(grid.cols)] for _ in range(grid.rows)]
+    box_by_id: Dict[str, RoomBox] = {}
     for box in placements:
+        box_by_id[box.room_id] = box
         for r in range(box.r, box.r_end):
             for c in range(box.c, box.c_end):
                 if 0 <= r < grid.rows and 0 <= c < grid.cols:
                     matrix[r][c] = box.room_id
 
-    svg_parts: List[str] = []
-    svg_parts.append(
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_w:.1f} {svg_h:.1f}" '
-        f'width="100%" height="100%" class="buildwise-blueprint-svg" '
-        f'style="background-color: #FFFFFF; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;">'
-    )
+    # Find living room box (or primary entry room)
+    living_box = box_by_id.get("living")
 
-    # Defs: Architectural markers and grid pattern
-    svg_parts.append("""
-      <defs>
-        <pattern id="arch-grid" width="13" height="13" patternUnits="userSpaceOnUse">
-          <path d="M 13 0 L 0 0 0 13" fill="none" stroke="#F1F5F9" stroke-width="0.75" />
-        </pattern>
-        <marker id="dim-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748B" />
-        </marker>
-        <marker id="entry-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 1 L 9 5 L 0 9 z" fill="#059669" />
-        </marker>
-      </defs>
-    """)
-
-    # Background canvas and subtle technical drafting grid
-    svg_parts.append(f'<rect width="{svg_w}" height="{svg_h}" fill="#FFFFFF" />')
-    svg_parts.append(f'<rect x="{margin_x}" y="{margin_y}" width="{content_w}" height="{content_h}" fill="url(#arch-grid)" />')
-
-    # Plinth boundary baseline
-    svg_parts.append(
-        f'<rect x="{margin_x}" y="{margin_y}" width="{content_w}" height="{content_h}" '
-        f'fill="none" stroke="#E2E8F0" stroke-width="1" stroke-dasharray="4 4" />'
-    )
-
-    # 1. Room Fills
-    for box in placements:
-        bx = margin_x + (box.c * cell_px)
-        by = margin_y + (box.r * cell_px)
-        bw = box.w * cell_px
-        bh = box.h * cell_px
-        fill_color = PASTEL_COLORS.get(box.room_id, "#F8FAFC")
-
-        svg_parts.append(
-            f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bw:.1f}" height="{bh:.1f}" '
-            f'fill="{fill_color}" stroke="none" id="room-{box.room_id}" />'
-        )
-
-    # 2. Wall Generation via Edge Boundary Analysis
-    # Differentiates exterior (thick stroke) vs interior (medium stroke)
-    exterior_walls: List[Tuple[float, float, float, float]] = []
-    interior_walls: List[Tuple[float, float, float, float]] = []
-
-    # Horizontal edges: (r, c) to (r, c+1) where r in 0..grid.rows
-    for r in range(grid.rows + 1):
-        for c in range(grid.cols):
-            top_room = matrix[r - 1][c] if r > 0 else None
-            bot_room = matrix[r][c] if r < grid.rows else None
-
-            if top_room == bot_room:
-                continue  # Continuous room interior, no wall
-
-            x1 = margin_x + (c * cell_px)
-            x2 = x1 + cell_px
-            y = margin_y + (r * cell_px)
-
-            if top_room is None or bot_room is None:
-                # Boundary between room and outside -> Exterior wall
-                exterior_walls.append((x1, y, x2, y))
-            else:
-                # Boundary between two distinct rooms -> Interior wall
-                interior_walls.append((x1, y, x2, y))
-
-    # Vertical edges: (r, c) to (r+1, c) where c in 0..grid.cols
-    for c in range(grid.cols + 1):
-        for r in range(grid.rows):
-            left_room = matrix[r][c - 1] if c > 0 else None
-            right_room = matrix[r][c] if c < grid.cols else None
-
-            if left_room == right_room:
-                continue
-
-            x = margin_x + (c * cell_px)
-            y1 = margin_y + (r * cell_px)
-            y2 = y1 + cell_px
-
-            if left_room is None or right_room is None:
-                exterior_walls.append((x, y1, x, y2))
-            else:
-                interior_walls.append((x, y1, x, y2))
-
-    # Render Interior Walls first (thin/medium stroke)
-    for x1, y1, x2, y2 in interior_walls:
-        svg_parts.append(
-            f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
-            f'stroke="#475569" stroke-width="2.5" stroke-linecap="square" />'
-        )
-
-    # Render Exterior Walls (thick structural stroke)
-    for x1, y1, x2, y2 in exterior_walls:
-        svg_parts.append(
-            f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
-            f'stroke="#0F172A" stroke-width="4.5" stroke-linecap="square" />'
-        )
-
-    # 3. Windows on Exterior Walls (Double thin lines with blue tint)
-    habitable_rooms = {"master_bed", "living", "kitchen", "bed_2", "dining"}
-    for box in placements:
-        if box.room_id not in habitable_rooms:
-            continue
-
-        bx = margin_x + (box.c * cell_px)
-        by = margin_y + (box.r * cell_px)
-        bw = box.w * cell_px
-        bh = box.h * cell_px
-
-        # Check North exterior wall
-        if box.r == 0 or all(matrix[box.r - 1][col] is None for col in range(box.c, box.c_end)):
-            win_w = min(bw * 0.5, 36.0)
-            wx = bx + (bw - win_w) / 2.0
-            svg_parts.append(
-                f'<rect x="{wx:.1f}" y="{by - 2.5:.1f}" width="{win_w:.1f}" height="5" '
-                f'fill="#FFFFFF" stroke="#0284C7" stroke-width="1.2" />'
-            )
-            svg_parts.append(f'<line x1="{wx:.1f}" y1="{by:.1f}" x2="{wx + win_w:.1f}" y2="{by:.1f}" stroke="#0284C7" stroke-width="1" />')
-
-        # Check South exterior wall
-        if box.r_end >= grid.rows or all(matrix[box.r_end][col] is None for col in range(box.c, box.c_end)):
-            win_w = min(bw * 0.5, 36.0)
-            wx = bx + (bw - win_w) / 2.0
-            wy = by + bh
-            svg_parts.append(
-                f'<rect x="{wx:.1f}" y="{wy - 2.5:.1f}" width="{win_w:.1f}" height="5" '
-                f'fill="#FFFFFF" stroke="#0284C7" stroke-width="1.2" />'
-            )
-            svg_parts.append(f'<line x1="{wx:.1f}" y1="{wy:.1f}" x2="{wx + win_w:.1f}" y2="{wy:.1f}" stroke="#0284C7" stroke-width="1" />')
-
-        # Check East exterior wall
-        if box.c_end >= grid.cols or all(matrix[row][box.c_end] is None for row in range(box.r, box.r_end)):
-            win_h = min(bh * 0.5, 36.0)
-            wy = by + (bh - win_h) / 2.0
-            wx = bx + bw
-            svg_parts.append(
-                f'<rect x="{wx - 2.5:.1f}" y="{wy:.1f}" width="5" height="{win_h:.1f}" '
-                f'fill="#FFFFFF" stroke="#0284C7" stroke-width="1.2" />'
-            )
-            svg_parts.append(f'<line x1="{wx:.1f}" y1="{wy:.1f}" x2="{wx:.1f}" y2="{wy + win_h:.1f}" stroke="#0284C7" stroke-width="1" />')
-
-        # Check West exterior wall
-        if box.c == 0 or all(matrix[row][box.c - 1] is None for row in range(box.r, box.r_end)):
-            win_h = min(bh * 0.5, 36.0)
-            wy = by + (bh - win_h) / 2.0
-            svg_parts.append(
-                f'<rect x="{bx - 2.5:.1f}" y="{wy:.1f}" width="5" height="{win_h:.1f}" '
-                f'fill="#FFFFFF" stroke="#0284C7" stroke-width="1.2" />'
-            )
-            svg_parts.append(f'<line x1="{bx:.1f}" y1="{wy:.1f}" x2="{bx:.1f}" y2="{wy + win_h:.1f}" stroke="#0284C7" stroke-width="1" />')
-
-    # 4. Doors & Swings (Architectural Standard 90-degree Swing Arcs)
-    door_rad = 22.0
-    living_box = next((b for b in placements if b.room_id == "living"), None)
+    # -------------------------------------------------------------------------
+    # 1. Door Openings & Calculated Swing Arcs (All 4 Cardinal Directions)
+    # -------------------------------------------------------------------------
+    doors_data: List[Dict[str, Any]] = []
+    h_cutouts: Dict[int, List[Tuple[float, float]]] = {}  # r -> list of (x1, x2)
+    v_cutouts: Dict[int, List[Tuple[float, float]]] = {}  # c -> list of (y1, y2)
 
     for box in placements:
         if box.room_id in ("corridor", "living"):
@@ -212,54 +131,484 @@ def generate_blueprint_svg(
         bw = box.w * cell_px
         bh = box.h * cell_px
 
-        # Determine door location along interior wall connecting to circulation or center
-        # If room sits at top North boundary (r == 0) and has an interior South wall, place door on South wall
-        if box.r == 0 and box.r_end < grid.rows:
-            hx = bx + 8.0
-            hy = by + bh
-            leaf_x = hx
-            leaf_y = hy - door_rad
-            arc_end_x = hx + door_rad
-            arc_end_y = hy
+        candidates = []
 
-            svg_parts.append(f'<rect x="{hx - 2:.1f}" y="{hy - 3:.1f}" width="{door_rad + 4:.1f}" height="6" fill="{PASTEL_COLORS.get(box.room_id, "#FFF")}" stroke="none" />')
-            svg_parts.append(f'<line x1="{hx:.1f}" y1="{hy:.1f}" x2="{leaf_x:.1f}" y2="{leaf_y:.1f}" stroke="#0F172A" stroke-width="2.0" />')
-            svg_parts.append(
-                f'<path d="M {arc_end_x:.1f} {arc_end_y:.1f} A {door_rad:.1f} {door_rad:.1f} 0 0 0 {leaf_x:.1f} {leaf_y:.1f}" '
-                f'fill="none" stroke="#64748B" stroke-width="1.2" stroke-dasharray="2 2" />'
-            )
-        else:
-            hx = bx + 8.0
+        # Check North wall
+        north_score = 0
+        if box.r > 0:
+            for c in range(box.c, box.c_end):
+                adj = matrix[box.r - 1][c]
+                if adj == "corridor":
+                    north_score = max(north_score, 100)
+                elif adj == "living":
+                    north_score = max(north_score, 50)
+                elif adj is not None:
+                    north_score = max(north_score, 10)
+            if north_score == 0 and box.r_end < grid.rows:
+                north_score = 5
+        candidates.append(("N", north_score))
+
+        # Check South wall
+        south_score = 0
+        if box.r_end < grid.rows:
+            for c in range(box.c, box.c_end):
+                adj = matrix[box.r_end][c]
+                if adj == "corridor":
+                    south_score = max(south_score, 100)
+                elif adj == "living":
+                    south_score = max(south_score, 50)
+                elif adj is not None:
+                    south_score = max(south_score, 10)
+            if south_score == 0 and box.r > 0:
+                south_score = 5
+        candidates.append(("S", south_score))
+
+        # Check West wall
+        west_score = 0
+        if box.c > 0:
+            for r in range(box.r, box.r_end):
+                adj = matrix[r][box.c - 1]
+                if adj == "corridor":
+                    west_score = max(west_score, 100)
+                elif adj == "living":
+                    west_score = max(west_score, 50)
+                elif adj is not None:
+                    west_score = max(west_score, 10)
+            if west_score == 0 and box.c_end < grid.cols:
+                west_score = 5
+        candidates.append(("W", west_score))
+
+        # Check East wall
+        east_score = 0
+        if box.c_end < grid.cols:
+            for r in range(box.r, box.r_end):
+                adj = matrix[r][box.c_end]
+                if adj == "corridor":
+                    east_score = max(east_score, 100)
+                elif adj == "living":
+                    east_score = max(east_score, 50)
+                elif adj is not None:
+                    east_score = max(east_score, 10)
+            if east_score == 0 and box.c > 0:
+                east_score = 5
+        candidates.append(("E", east_score))
+
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        chosen_side = candidates[0][0]
+
+        hinge_offset = 8.0
+        R = min(door_rad, (bw if chosen_side in ("N", "S") else bh) - hinge_offset - 4.0)
+        R = max(R, 18.0)
+
+        # Calculate exact leaf line, arc path, and cutouts based on side
+        # Mathematically verified to ALWAYS swing strictly INTO the room!
+        if chosen_side == "N":
+            hx = bx + hinge_offset
             hy = by
             leaf_x = hx
-            leaf_y = hy + door_rad
-            arc_end_x = hx + door_rad
-            arc_end_y = hy
+            leaf_y = hy + R  # into room (+Y)
+            arc_start_x = hx + R
+            arc_start_y = hy
+            arc_end_x = leaf_x
+            arc_end_y = leaf_y
+            sweep_flag = 1
+            h_cutouts.setdefault(box.r, []).append((hx, hx + R))
+        elif chosen_side == "S":
+            hx = bx + hinge_offset
+            hy = by + bh
+            leaf_x = hx
+            leaf_y = hy - R  # into room (-Y)
+            arc_start_x = hx + R
+            arc_start_y = hy
+            arc_end_x = leaf_x
+            arc_end_y = leaf_y
+            sweep_flag = 0
+            h_cutouts.setdefault(box.r_end, []).append((hx, hx + R))
+        elif chosen_side == "W":
+            hx = bx
+            hy = by + hinge_offset
+            leaf_x = hx + R  # into room (+X)
+            leaf_y = hy
+            arc_start_x = hx
+            arc_start_y = hy + R
+            arc_end_x = leaf_x
+            arc_end_y = leaf_y
+            sweep_flag = 0
+            v_cutouts.setdefault(box.c, []).append((hy, hy + R))
+        else:  # 'E'
+            hx = bx + bw
+            hy = by + hinge_offset
+            leaf_x = hx - R  # into room (-X)
+            leaf_y = hy
+            arc_start_x = hx
+            arc_start_y = hy + R
+            arc_end_x = leaf_x
+            arc_end_y = leaf_y
+            sweep_flag = 1
+            v_cutouts.setdefault(box.c_end, []).append((hy, hy + R))
 
-            svg_parts.append(f'<rect x="{hx - 2:.1f}" y="{hy - 3:.1f}" width="{door_rad + 4:.1f}" height="6" fill="{PASTEL_COLORS.get(box.room_id, "#FFF")}" stroke="none" />')
-            svg_parts.append(f'<line x1="{hx:.1f}" y1="{hy:.1f}" x2="{leaf_x:.1f}" y2="{leaf_y:.1f}" stroke="#0F172A" stroke-width="2.0" />')
-            svg_parts.append(
-                f'<path d="M {arc_end_x:.1f} {arc_end_y:.1f} A {door_rad:.1f} {door_rad:.1f} 0 0 1 {leaf_x:.1f} {leaf_y:.1f}" '
-                f'fill="none" stroke="#64748B" stroke-width="1.2" stroke-dasharray="2 2" />'
-            )
+        doors_data.append({
+            "room_id": box.room_id,
+            "hinge": (hx, hy),
+            "leaf": (leaf_x, leaf_y),
+            "arc_start": (arc_start_x, arc_start_y),
+            "arc_end": (arc_end_x, arc_end_y),
+            "R": R,
+            "sweep_flag": sweep_flag
+        })
 
-    # 5. Main Entrance Marker on Living Room
+    # -------------------------------------------------------------------------
+    # 2. Main Entrance on Living Room (Cut into exterior wall line)
+    # -------------------------------------------------------------------------
+    main_entry_data: Optional[Dict[str, Any]] = None
     if living_box:
         lx = margin_x + (living_box.c * cell_px)
         ly = margin_y + (living_box.r * cell_px)
         lw = living_box.w * cell_px
+        lh = living_box.h * cell_px
 
-        entry_x = lx + (lw / 2.0)
-        entry_y = ly
+        entry_side = "N"
+        if living_box.r == 0 or all(matrix[living_box.r - 1][col] is None for col in range(living_box.c, living_box.c_end)):
+            entry_side = "N"
+        elif living_box.c_end >= grid.cols or all(matrix[row][living_box.c_end] is None for row in range(living_box.r, living_box.r_end)):
+            entry_side = "E"
+        elif living_box.c == 0 or all(matrix[row][living_box.c - 1] is None for row in range(living_box.r, living_box.r_end)):
+            entry_side = "W"
+        else:
+            entry_side = "S"
 
-        # Main double entrance door
-        svg_parts.append(f'<rect x="{entry_x - 18:.1f}" y="{entry_y - 4:.1f}" width="36" height="8" fill="#FFFFFF" stroke="#0F172A" stroke-width="1.5" />')
-        svg_parts.append(f'<line x1="{entry_x:.1f}" y1="{entry_y - 4:.1f}" x2="{entry_x:.1f}" y2="{entry_y + 4:.1f}" stroke="#0F172A" stroke-width="1" />')
-        # Entry Arrow marker pointing in
-        svg_parts.append(f'<line x1="{entry_x:.1f}" y1="{entry_y - 28:.1f}" x2="{entry_x:.1f}" y2="{entry_y - 8:.1f}" stroke="#059669" stroke-width="2" marker-end="url(#entry-arrow)" />')
-        svg_parts.append(f'<text x="{entry_x:.1f}" y="{entry_y - 32:.1f}" font-size="8.5" font-weight="700" fill="#059669" text-anchor="middle" letter-spacing="1">MAIN ENTRY</text>')
+        entry_w = min(lw * 0.45, 36.0)
+        if entry_side in ("N", "S"):
+            ex = lx + (lw - entry_w) / 2.0
+            ey = ly if entry_side == "N" else ly + lh
+            r_target = living_box.r if entry_side == "N" else living_box.r_end
+            h_cutouts.setdefault(r_target, []).append((ex, ex + entry_w))
+            main_entry_data = {
+                "side": entry_side,
+                "x": ex,
+                "y": ey,
+                "w": entry_w,
+                "center": (ex + entry_w / 2.0, ey)
+            }
+        else:
+            ey = ly + (lh - entry_w) / 2.0
+            ex = lx if entry_side == "W" else lx + lw
+            c_target = living_box.c if entry_side == "W" else living_box.c_end
+            v_cutouts.setdefault(c_target, []).append((ey, ey + entry_w))
+            main_entry_data = {
+                "side": entry_side,
+                "x": ex,
+                "y": ey,
+                "w": entry_w,
+                "center": (ex, ey + entry_w / 2.0)
+            }
 
-    # 6. Room Labels and Metric Dimensions
+    # -------------------------------------------------------------------------
+    # 3. Exterior Windows (Habitable Rooms)
+    # -------------------------------------------------------------------------
+    habitable_rooms = {"master_bed", "living", "kitchen", "bed_2", "dining"}
+    windows_data: List[Dict[str, Any]] = []
+
+    for box in placements:
+        if box.room_id not in habitable_rooms:
+            continue
+
+        bx = margin_x + (box.c * cell_px)
+        by = margin_y + (box.r * cell_px)
+        bw = box.w * cell_px
+        bh = box.h * cell_px
+
+        # North exterior
+        if box.r == 0 or all(matrix[box.r - 1][col] is None for col in range(box.c, box.c_end)):
+            if not (main_entry_data and main_entry_data["side"] == "N" and box.room_id == "living"):
+                win_w = min(bw * 0.45, 42.0)
+                wx = bx + (bw - win_w) / 2.0
+                wy = by
+                h_cutouts.setdefault(box.r, []).append((wx, wx + win_w))
+                windows_data.append({"orient": "H", "x1": wx, "x2": wx + win_w, "y": wy})
+
+        # South exterior
+        if box.r_end >= grid.rows or all(matrix[box.r_end][col] is None for col in range(box.c, box.c_end)):
+            if not (main_entry_data and main_entry_data["side"] == "S" and box.room_id == "living"):
+                win_w = min(bw * 0.45, 42.0)
+                wx = bx + (bw - win_w) / 2.0
+                wy = by + bh
+                h_cutouts.setdefault(box.r_end, []).append((wx, wx + win_w))
+                windows_data.append({"orient": "H", "x1": wx, "x2": wx + win_w, "y": wy})
+
+        # East exterior
+        if box.c_end >= grid.cols or all(matrix[row][box.c_end] is None for row in range(box.r, box.r_end)):
+            if not (main_entry_data and main_entry_data["side"] == "E" and box.room_id == "living"):
+                win_h = min(bh * 0.45, 42.0)
+                wy = by + (bh - win_h) / 2.0
+                wx = bx + bw
+                v_cutouts.setdefault(box.c_end, []).append((wy, wy + win_h))
+                windows_data.append({"orient": "V", "y1": wy, "y2": wy + win_h, "x": wx})
+
+        # West exterior
+        if box.c == 0 or all(matrix[row][box.c - 1] is None for row in range(box.r, box.r_end)):
+            if not (main_entry_data and main_entry_data["side"] == "W" and box.room_id == "living"):
+                win_h = min(bh * 0.45, 42.0)
+                wy = by + (bh - win_h) / 2.0
+                wx = bx
+                v_cutouts.setdefault(box.c, []).append((wy, wy + win_h))
+                windows_data.append({"orient": "V", "y1": wy, "y2": wy + win_h, "x": wx})
+
+    # -------------------------------------------------------------------------
+    # 4. Wall Line Generation with Clean T-Junction & L-Junction Offsets
+    # -------------------------------------------------------------------------
+    exterior_wall_lines: List[Tuple[float, float, float, float]] = []
+    interior_wall_lines: List[Tuple[float, float, float, float]] = []
+
+    def is_vert_exterior(c_idx: int, r_idx: int) -> bool:
+        left = matrix[r_idx][c_idx - 1] if c_idx > 0 else None
+        right = matrix[r_idx][c_idx] if c_idx < grid.cols else None
+        return (left is None) != (right is None)
+
+    def is_vert_interior(c_idx: int, r_idx: int) -> bool:
+        left = matrix[r_idx][c_idx - 1] if c_idx > 0 else None
+        right = matrix[r_idx][c_idx] if c_idx < grid.cols else None
+        return left is not None and right is not None and left != right
+
+    def is_horiz_exterior(r_idx: int, c_idx: int) -> bool:
+        top = matrix[r_idx - 1][c_idx] if r_idx > 0 else None
+        bot = matrix[r_idx][c_idx] if r_idx < grid.rows else None
+        return (top is None) != (bot is None)
+
+    def is_horiz_interior(r_idx: int, c_idx: int) -> bool:
+        top = matrix[r_idx - 1][c_idx] if r_idx > 0 else None
+        bot = matrix[r_idx][c_idx] if r_idx < grid.rows else None
+        return top is not None and bot is not None and top != bot
+
+    # A. Horizontal Walls
+    for r in range(grid.rows + 1):
+        c = 0
+        while c < grid.cols:
+            top_room = matrix[r - 1][c] if r > 0 else None
+            bot_room = matrix[r][c] if r < grid.rows else None
+
+            if top_room == bot_room:
+                c += 1
+                continue
+
+            is_ext = (top_room is None) != (bot_room is None)
+            start_c = c
+            while c < grid.cols:
+                t = matrix[r - 1][c] if r > 0 else None
+                b = matrix[r][c] if r < grid.rows else None
+                if (t is None) != (b is None) if is_ext else (t is not None and b is not None and t != b):
+                    c += 1
+                else:
+                    break
+            end_c = c
+
+            x1 = margin_x + (start_c * cell_px)
+            x2 = margin_x + (end_c * cell_px)
+            y = margin_y + (r * cell_px)
+
+            if is_ext:
+                cuts = h_cutouts.get(r, [])
+                for seg_x1, seg_x2 in _subtract_intervals((x1, x2), cuts):
+                    exterior_wall_lines.append((seg_x1, y, seg_x2, y))
+            else:
+                left_ext = (r > 0 and is_vert_exterior(start_c, r - 1)) or (r < grid.rows and is_vert_exterior(start_c, r))
+                left_int = (r > 0 and is_vert_interior(start_c, r - 1)) or (r < grid.rows and is_vert_interior(start_c, r))
+                if left_ext:
+                    adj_x1 = x1 + HALF_EXT
+                elif left_int:
+                    adj_x1 = x1 + HALF_INT
+                else:
+                    adj_x1 = x1
+
+                right_ext = (r > 0 and is_vert_exterior(end_c, r - 1)) or (r < grid.rows and is_vert_exterior(end_c, r))
+                right_int = (r > 0 and is_vert_interior(end_c, r - 1)) or (r < grid.rows and is_vert_interior(end_c, r))
+                if right_ext:
+                    adj_x2 = x2 - HALF_EXT
+                elif right_int:
+                    adj_x2 = x2 - HALF_INT
+                else:
+                    adj_x2 = x2
+
+                cuts = h_cutouts.get(r, [])
+                for seg_x1, seg_x2 in _subtract_intervals((adj_x1, adj_x2), cuts):
+                    interior_wall_lines.append((seg_x1, y, seg_x2, y))
+
+    # B. Vertical Walls
+    for c in range(grid.cols + 1):
+        r = 0
+        while r < grid.rows:
+            left_room = matrix[r][c - 1] if c > 0 else None
+            right_room = matrix[r][c] if c < grid.cols else None
+
+            if left_room == right_room:
+                r += 1
+                continue
+
+            is_ext = (left_room is None) != (right_room is None)
+            start_r = r
+            while r < grid.rows:
+                l = matrix[r][c - 1] if c > 0 else None
+                rg = matrix[r][c] if c < grid.cols else None
+                if (l is None) != (rg is None) if is_ext else (l is not None and rg is not None and l != rg):
+                    r += 1
+                else:
+                    break
+            end_r = r
+
+            x = margin_x + (c * cell_px)
+            y1 = margin_y + (start_r * cell_px)
+            y2 = margin_y + (end_r * cell_px)
+
+            if is_ext:
+                cuts = v_cutouts.get(c, [])
+                for seg_y1, seg_y2 in _subtract_intervals((y1, y2), cuts):
+                    exterior_wall_lines.append((x, seg_y1, x, seg_y2))
+            else:
+                top_ext = (c > 0 and is_horiz_exterior(start_r, c - 1)) or (c < grid.cols and is_horiz_exterior(start_r, c))
+                top_int = (c > 0 and is_horiz_interior(start_r, c - 1)) or (c < grid.cols and is_horiz_interior(start_r, c))
+                if top_ext:
+                    adj_y1 = y1 + HALF_EXT
+                elif top_int:
+                    adj_y1 = y1 + HALF_INT
+                else:
+                    adj_y1 = y1
+
+                bot_ext = (c > 0 and is_horiz_exterior(end_r, c - 1)) or (c < grid.cols and is_horiz_exterior(end_r, c))
+                bot_int = (c > 0 and is_horiz_interior(end_r, c - 1)) or (c < grid.cols and is_horiz_interior(end_r, c))
+                if bot_ext:
+                    adj_y2 = y2 - HALF_EXT
+                elif bot_int:
+                    adj_y2 = y2 - HALF_INT
+                else:
+                    adj_y2 = y2
+
+                cuts = v_cutouts.get(c, [])
+                for seg_y1, seg_y2 in _subtract_intervals((adj_y1, adj_y2), cuts):
+                    interior_wall_lines.append((x, seg_y1, x, seg_y2))
+
+    # -------------------------------------------------------------------------
+    # 5. Assemble SVG Document
+    # -------------------------------------------------------------------------
+    svg: List[str] = []
+    svg.append(
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_w:.1f} {svg_h:.1f}" '
+        f'width="100%" height="100%" class="buildwise-blueprint-svg" '
+        f'style="background-color: #0F172A; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;">'
+    )
+
+    # Defs: Dark CAD Grid Pattern, Markers, Styles
+    svg.append("""
+      <defs>
+        <pattern id="arch-cad-grid-1m" width="52" height="52" patternUnits="userSpaceOnUse">
+          <path d="M 52 0 L 0 0 0 52" fill="none" stroke="#1E293B" stroke-width="0.75" />
+          <path d="M 13 0 L 13 52 M 26 0 L 26 52 M 39 0 L 39 52" fill="none" stroke="#1E293B" stroke-width="0.25" stroke-dasharray="2 2" />
+          <path d="M 0 13 L 52 13 M 0 26 L 52 26 M 0 39 L 52 39" fill="none" stroke="#1E293B" stroke-width="0.25" stroke-dasharray="2 2" />
+        </pattern>
+        <marker id="entry-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 9 5 L 0 9 z" fill="#10B981" />
+        </marker>
+      </defs>
+    """)
+
+    # Dark Drafting Canvas & Background Grid
+    svg.append(f'<rect width="{svg_w:.1f}" height="{svg_h:.1f}" fill="#0F172A" />')
+    svg.append(f'<rect x="{margin_x:.1f}" y="{margin_y:.1f}" width="{content_w:.1f}" height="{content_h:.1f}" fill="url(#arch-cad-grid-1m)" />')
+
+    # Plinth Boundary Baseline
+    svg.append(
+        f'<rect x="{margin_x:.1f}" y="{margin_y:.1f}" width="{content_w:.1f}" height="{content_h:.1f}" '
+        f'fill="none" stroke="#334155" stroke-width="1.2" stroke-dasharray="4 4" />'
+    )
+
+    # 1. Subtle Room Pastel Fills (15% Opacity as requested in Rule 4)
+    for box in placements:
+        bx = margin_x + (box.c * cell_px)
+        by = margin_y + (box.r * cell_px)
+        bw = box.w * cell_px
+        bh = box.h * cell_px
+        fill_color = PASTEL_COLORS.get(box.room_id, "#38BDF8")
+
+        svg.append(
+            f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bw:.1f}" height="{bh:.1f}" '
+            f'fill="{fill_color}" fill-opacity="0.15" stroke="none" id="room-{box.room_id}" />'
+        )
+
+    # 2. Interior Walls (Thin 3px stroke, crisp slate #94A3B8, stroke-linecap="square")
+    for x1, y1, x2, y2 in interior_wall_lines:
+        svg.append(
+            f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
+            f'stroke="#94A3B8" stroke-width="{T_INT}" stroke-linecap="square" />'
+        )
+
+    # 3. Exterior Walls (Thick 6px stroke, glowing cyan #38BDF8, stroke-linecap="square")
+    for x1, y1, x2, y2 in exterior_wall_lines:
+        svg.append(
+            f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
+            f'stroke="#38BDF8" stroke-width="{T_EXT}" stroke-linecap="square" />'
+        )
+
+    # 4. Windows on Exterior Walls (3 parallel thin lines cutting through exterior wall)
+    for win in windows_data:
+        if win["orient"] == "H":
+            x1 = win["x1"]
+            x2 = win["x2"]
+            y = win["y"]
+            svg.append(f'<line x1="{x1:.1f}" y1="{y - 2.0:.1f}" x2="{x2:.1f}" y2="{y - 2.0:.1f}" stroke="#0284C7" stroke-width="1.0" />')
+            svg.append(f'<line x1="{x1:.1f}" y1="{y:.1f}" x2="{x2:.1f}" y2="{y:.1f}" stroke="#38BDF8" stroke-width="1.2" />')
+            svg.append(f'<line x1="{x1:.1f}" y1="{y + 2.0:.1f}" x2="{x2:.1f}" y2="{y + 2.0:.1f}" stroke="#0284C7" stroke-width="1.0" />')
+            svg.append(f'<line x1="{x1:.1f}" y1="{y - 2.5:.1f}" x2="{x1:.1f}" y2="{y + 2.5:.1f}" stroke="#38BDF8" stroke-width="1.0" />')
+            svg.append(f'<line x1="{x2:.1f}" y1="{y - 2.5:.1f}" x2="{x2:.1f}" y2="{y + 2.5:.1f}" stroke="#38BDF8" stroke-width="1.0" />')
+        else:
+            y1 = win["y1"]
+            y2 = win["y2"]
+            x = win["x"]
+            svg.append(f'<line x1="{x - 2.0:.1f}" y1="{y1:.1f}" x2="{x - 2.0:.1f}" y2="{y2:.1f}" stroke="#0284C7" stroke-width="1.0" />')
+            svg.append(f'<line x1="{x:.1f}" y1="{y1:.1f}" x2="{x:.1f}" y2="{y2:.1f}" stroke="#38BDF8" stroke-width="1.2" />')
+            svg.append(f'<line x1="{x + 2.0:.1f}" y1="{y1:.1f}" x2="{x + 2.0:.1f}" y2="{y2:.1f}" stroke="#0284C7" stroke-width="1.0" />')
+            svg.append(f'<line x1="{x - 2.5:.1f}" y1="{y1:.1f}" x2="{x + 2.5:.1f}" y2="{y1:.1f}" stroke="#38BDF8" stroke-width="1.0" />')
+            svg.append(f'<line x1="{x - 2.5:.1f}" y1="{y2:.1f}" x2="{x + 2.5:.1f}" y2="{y2:.1f}" stroke="#38BDF8" stroke-width="1.0" />')
+
+    # 5. Doors: Straight Leaf from Hinge + Exact Elliptical Arc Path (<path d="... A ...">)
+    for d in doors_data:
+        hx, hy = d["hinge"]
+        lx, ly = d["leaf"]
+        sx, sy = d["arc_start"]
+        ex, ey = d["arc_end"]
+        R = d["R"]
+        swp = d["sweep_flag"]
+
+        # Door Leaf line (solid cyan, 2px)
+        svg.append(f'<line x1="{hx:.1f}" y1="{hy:.1f}" x2="{lx:.1f}" y2="{ly:.1f}" stroke="#38BDF8" stroke-width="2.0" />')
+        # Door Swing Arc (exact SVG A command, dashed cyan, swinging strictly into room)
+        svg.append(
+            f'<path d="M {sx:.1f} {sy:.1f} A {R:.1f} {R:.1f} 0 0 {swp} {ex:.1f} {ey:.1f}" '
+            f'fill="none" stroke="#38BDF8" stroke-width="1.4" stroke-dasharray="3 3" />'
+        )
+
+    # 6. Main Entry Indicator on Living Room
+    if main_entry_data:
+        cx, cy = main_entry_data["center"]
+        side = main_entry_data["side"]
+        w = main_entry_data["w"]
+
+        if side == "N":
+            svg.append(f'<line x1="{cx - w/2:.1f}" y1="{cy:.1f}" x2="{cx + w/2:.1f}" y2="{cy:.1f}" stroke="#10B981" stroke-width="2.0" />')
+            svg.append(f'<line x1="{cx:.1f}" y1="{cy - 24.0:.1f}" x2="{cx:.1f}" y2="{cy - 6.0:.1f}" stroke="#10B981" stroke-width="2.2" marker-end="url(#entry-arrow)" />')
+            svg.append(f'<text x="{cx:.1f}" y="{cy - 28.0:.1f}" font-size="8.5" font-weight="700" fill="#10B981" text-anchor="middle" letter-spacing="1">MAIN ENTRY</text>')
+        elif side == "S":
+            svg.append(f'<line x1="{cx - w/2:.1f}" y1="{cy:.1f}" x2="{cx + w/2:.1f}" y2="{cy:.1f}" stroke="#10B981" stroke-width="2.0" />')
+            svg.append(f'<line x1="{cx:.1f}" y1="{cy + 24.0:.1f}" x2="{cx:.1f}" y2="{cy + 6.0:.1f}" stroke="#10B981" stroke-width="2.2" marker-end="url(#entry-arrow)" />')
+            svg.append(f'<text x="{cx:.1f}" y="{cy + 34.0:.1f}" font-size="8.5" font-weight="700" fill="#10B981" text-anchor="middle" letter-spacing="1">MAIN ENTRY</text>')
+        elif side == "W":
+            svg.append(f'<line x1="{cx:.1f}" y1="{cy - w/2:.1f}" x2="{cx:.1f}" y2="{cy + w/2:.1f}" stroke="#10B981" stroke-width="2.0" />')
+            svg.append(f'<line x1="{cx - 24.0:.1f}" y1="{cy:.1f}" x2="{cx - 6.0:.1f}" y2="{cy:.1f}" stroke="#10B981" stroke-width="2.2" marker-end="url(#entry-arrow)" />')
+            svg.append(f'<text x="{cx - 28.0:.1f}" y="{cy + 3.0:.1f}" font-size="8.5" font-weight="700" fill="#10B981" text-anchor="end" letter-spacing="1">MAIN ENTRY</text>')
+        else:  # East
+            svg.append(f'<line x1="{cx:.1f}" y1="{cy - w/2:.1f}" x2="{cx:.1f}" y2="{cy + w/2:.1f}" stroke="#10B981" stroke-width="2.0" />')
+            svg.append(f'<line x1="{cx + 24.0:.1f}" y1="{cy:.1f}" x2="{cx + 6.0:.1f}" y2="{cy:.1f}" stroke="#10B981" stroke-width="2.2" marker-end="url(#entry-arrow)" />')
+            svg.append(f'<text x="{cx + 28.0:.1f}" y="{cy + 3.0:.1f}" font-size="8.5" font-weight="700" fill="#10B981" text-anchor="start" letter-spacing="1">MAIN ENTRY</text>')
+
+    # 7. Centered Room Typography & Metric Dimensions (Rule 4)
     for box in placements:
         bx = margin_x + (box.c * cell_px)
         by = margin_y + (box.r * cell_px)
@@ -274,59 +623,72 @@ def generate_blueprint_svg(
         metric_d = box.h * grid.cell_d_m
         metric_sqm = metric_w * metric_d
 
-        svg_parts.append(
-            f'<text x="{cx:.1f}" y="{cy - 5:.1f}" font-size="10.5" font-weight="700" '
-            f'fill="#0F172A" text-anchor="middle" letter-spacing="0.5">{display_name.upper()}</text>'
+        svg.append(
+            f'<text x="{cx:.1f}" y="{cy - 4.0:.1f}" font-size="10.5" font-weight="700" '
+            f'fill="#F8FAFC" text-anchor="middle" letter-spacing="1">{display_name.upper()}</text>'
         )
-        svg_parts.append(
-            f'<text x="{cx:.1f}" y="{cy + 10:.1f}" font-size="8.5" font-weight="500" '
-            f'fill="#64748B" text-anchor="middle">{metric_w:.1f}m × {metric_d:.1f}m ({metric_sqm:.1f} m²)</text>'
+        svg.append(
+            f'<text x="{cx:.1f}" y="{cy + 10.0:.1f}" font-size="8.5" font-weight="500" '
+            f'fill="#94A3B8" text-anchor="middle">{metric_w:.1f}m × {metric_d:.1f}m | {metric_sqm:.1f} m²</text>'
         )
 
-    # 7. Dimension Strings on Margins
-    # Top width dimension line
-    dim_top_y = margin_y - 20.0
-    svg_parts.append(f'<line x1="{margin_x:.1f}" y1="{dim_top_y:.1f}" x2="{margin_x + content_w:.1f}" y2="{dim_top_y:.1f}" stroke="#64748B" stroke-width="1.2" />')
-    svg_parts.append(f'<line x1="{margin_x:.1f}" y1="{dim_top_y - 5:.1f}" x2="{margin_x:.1f}" y2="{dim_top_y + 5:.1f}" stroke="#64748B" stroke-width="1.2" />')
-    svg_parts.append(f'<line x1="{margin_x + content_w:.1f}" y1="{dim_top_y - 5:.1f}" x2="{margin_x + content_w:.1f}" y2="{dim_top_y + 5:.1f}" stroke="#64748B" stroke-width="1.2" />')
-    svg_parts.append(
-        f'<text x="{margin_x + (content_w / 2.0):.1f}" y="{dim_top_y - 6:.1f}" '
-        f'font-size="9" font-weight="600" fill="#475569" text-anchor="middle">{plot_width_m:.1f} m FRONTAGE</text>'
+    # -------------------------------------------------------------------------
+    # 8. Architectural Dimension Lines with 45-Degree Diagonal Slashes (Rule 3)
+    # -------------------------------------------------------------------------
+    dim_top_y = margin_y - 24.0
+    dim_x1 = margin_x
+    dim_x2 = margin_x + content_w
+    svg.append(f'<line x1="{dim_x1:.1f}" y1="{margin_y - 4:.1f}" x2="{dim_x1:.1f}" y2="{dim_top_y - 6:.1f}" stroke="#475569" stroke-width="0.8" stroke-dasharray="2 2" />')
+    svg.append(f'<line x1="{dim_x2:.1f}" y1="{margin_y - 4:.1f}" x2="{dim_x2:.1f}" y2="{dim_top_y - 6:.1f}" stroke="#475569" stroke-width="0.8" stroke-dasharray="2 2" />')
+    svg.append(f'<line x1="{dim_x1:.1f}" y1="{dim_top_y:.1f}" x2="{dim_x2:.1f}" y2="{dim_top_y:.1f}" stroke="#64748B" stroke-width="1.2" />')
+    svg.append(f'<line x1="{dim_x1 - 4.5:.1f}" y1="{dim_top_y + 4.5:.1f}" x2="{dim_x1 + 4.5:.1f}" y2="{dim_top_y - 4.5:.1f}" stroke="#38BDF8" stroke-width="1.6" />')
+    svg.append(f'<line x1="{dim_x2 - 4.5:.1f}" y1="{dim_top_y + 4.5:.1f}" x2="{dim_x2 + 4.5:.1f}" y2="{dim_top_y - 4.5:.1f}" stroke="#38BDF8" stroke-width="1.6" />')
+    svg.append(
+        f'<text x="{(dim_x1 + dim_x2) / 2.0:.1f}" y="{dim_top_y - 7.0:.1f}" '
+        f'font-size="9.0" font-weight="600" fill="#94A3B8" text-anchor="middle" letter-spacing="0.5">{plot_width_m:.1f} m FRONTAGE</text>'
     )
 
-    # Left depth dimension line
-    dim_left_x = margin_x - 20.0
-    svg_parts.append(f'<line x1="{dim_left_x:.1f}" y1="{margin_y:.1f}" x2="{dim_left_x:.1f}" y2="{margin_y + content_h:.1f}" stroke="#64748B" stroke-width="1.2" />')
-    svg_parts.append(f'<line x1="{dim_left_x - 5:.1f}" y1="{margin_y:.1f}" x2="{dim_left_x + 5:.1f}" y2="{margin_y:.1f}" stroke="#64748B" stroke-width="1.2" />')
-    svg_parts.append(f'<line x1="{dim_left_x - 5:.1f}" y1="{margin_y + content_h:.1f}" x2="{dim_left_x + 5:.1f}" y2="{margin_y + content_h:.1f}" stroke="#64748B" stroke-width="1.2" />')
-    svg_parts.append(
-        f'<text x="{dim_left_x - 8:.1f}" y="{margin_y + (content_h / 2.0):.1f}" '
-        f'font-size="9" font-weight="600" fill="#475569" text-anchor="middle" transform="rotate(-90 {dim_left_x - 8:.1f} {margin_y + (content_h / 2.0):.1f})">{plot_depth_m:.1f} m DEPTH</text>'
+    dim_left_x = margin_x - 24.0
+    dim_y1 = margin_y
+    dim_y2 = margin_y + content_h
+    svg.append(f'<line x1="{margin_x - 4:.1f}" y1="{dim_y1:.1f}" x2="{dim_left_x - 6:.1f}" y2="{dim_y1:.1f}" stroke="#475569" stroke-width="0.8" stroke-dasharray="2 2" />')
+    svg.append(f'<line x1="{margin_x - 4:.1f}" y1="{dim_y2:.1f}" x2="{dim_left_x - 6:.1f}" y2="{dim_y2:.1f}" stroke="#475569" stroke-width="0.8" stroke-dasharray="2 2" />')
+    svg.append(f'<line x1="{dim_left_x:.1f}" y1="{dim_y1:.1f}" x2="{dim_left_x:.1f}" y2="{dim_y2:.1f}" stroke="#64748B" stroke-width="1.2" />')
+    svg.append(f'<line x1="{dim_left_x - 4.5:.1f}" y1="{dim_y1 + 4.5:.1f}" x2="{dim_left_x + 4.5:.1f}" y2="{dim_y1 - 4.5:.1f}" stroke="#38BDF8" stroke-width="1.6" />')
+    svg.append(f'<line x1="{dim_left_x - 4.5:.1f}" y1="{dim_y2 + 4.5:.1f}" x2="{dim_left_x + 4.5:.1f}" y2="{dim_y2 - 4.5:.1f}" stroke="#38BDF8" stroke-width="1.6" />')
+    svg.append(
+        f'<text x="{dim_left_x - 9.0:.1f}" y="{(dim_y1 + dim_y2) / 2.0:.1f}" '
+        f'font-size="9.0" font-weight="600" fill="#94A3B8" text-anchor="middle" '
+        f'transform="rotate(-90 {dim_left_x - 9.0:.1f} {(dim_y1 + dim_y2) / 2.0:.1f})" letter-spacing="0.5">{plot_depth_m:.1f} m DEPTH</text>'
     )
 
-    # 8. Architectural North Compass Rose (Top Right)
+    # -------------------------------------------------------------------------
+    # 9. Architectural North Compass Rose (Top Right)
+    # -------------------------------------------------------------------------
     compass_x = svg_w - 42.0
-    compass_y = 36.0
-    svg_parts.append(f'<g transform="translate({compass_x}, {compass_y})">')
-    svg_parts.append('<circle cx="0" cy="0" r="14" fill="#FFFFFF" stroke="#0F172A" stroke-width="1.2" />')
-    svg_parts.append('<polygon points="0,-12 3.5,0 0,-2 -3.5,0" fill="#0F172A" />')
-    svg_parts.append('<polygon points="0,12 3.5,0 0,2 -3.5,0" fill="#94A3B8" />')
-    svg_parts.append('<text x="0" y="-15" font-size="8.5" font-weight="800" fill="#0F172A" text-anchor="middle">N</text>')
-    svg_parts.append('</g>')
+    compass_y = 38.0
+    svg.append(f'<g transform="translate({compass_x}, {compass_y})">')
+    svg.append('<circle cx="0" cy="0" r="15" fill="#1E293B" stroke="#38BDF8" stroke-width="1.2" />')
+    svg.append('<polygon points="0,-13 4,0 0,-2 -4,0" fill="#38BDF8" />')
+    svg.append('<polygon points="0,13 4,0 0,2 -4,0" fill="#475569" />')
+    svg.append('<text x="0" y="-16" font-size="8.5" font-weight="800" fill="#38BDF8" text-anchor="middle">N</text>')
+    svg.append('</g>')
 
-    # 9. Architectural Graphic Scale Bar (Bottom Left)
+    # -------------------------------------------------------------------------
+    # 10. Architectural Graphic Scale Bar (Bottom Left)
+    # -------------------------------------------------------------------------
     scale_x = margin_x
     scale_y = svg_h - 22.0
-    svg_parts.append(f'<g transform="translate({scale_x}, {scale_y})">')
-    svg_parts.append('<text x="0" y="-6" font-size="7.5" font-weight="600" fill="#64748B">GRAPHIC SCALE (METRIC)</text>')
-    svg_parts.append('<rect x="0" y="0" width="30" height="4" fill="#0F172A" stroke="#0F172A" stroke-width="0.5" />')
-    svg_parts.append('<rect x="30" y="0" width="30" height="4" fill="#FFFFFF" stroke="#0F172A" stroke-width="0.5" />')
-    svg_parts.append('<rect x="60" y="0" width="30" height="4" fill="#0F172A" stroke="#0F172A" stroke-width="0.5" />')
-    svg_parts.append('<text x="0" y="11" font-size="6.5" fill="#64748B" text-anchor="middle">0</text>')
-    svg_parts.append('<text x="30" y="11" font-size="6.5" fill="#64748B" text-anchor="middle">1m</text>')
-    svg_parts.append('<text x="60" y="11" font-size="6.5" fill="#64748B" text-anchor="middle">2m</text>')
-    svg_parts.append('<text x="90" y="11" font-size="6.5" fill="#64748B" text-anchor="middle">3m</text>')
-    svg_parts.append('</g>')
+    svg.append(f'<g transform="translate({scale_x}, {scale_y})">')
+    svg.append('<text x="0" y="-6" font-size="7.5" font-weight="600" fill="#94A3B8" letter-spacing="0.5">GRAPHIC SCALE (METRIC)</text>')
+    svg.append('<rect x="0" y="0" width="30" height="4" fill="#38BDF8" stroke="#38BDF8" stroke-width="0.5" />')
+    svg.append('<rect x="30" y="0" width="30" height="4" fill="#1E293B" stroke="#38BDF8" stroke-width="0.5" />')
+    svg.append('<rect x="60" y="0" width="30" height="4" fill="#38BDF8" stroke="#38BDF8" stroke-width="0.5" />')
+    svg.append('<text x="0" y="11" font-size="6.5" fill="#94A3B8" text-anchor="middle">0</text>')
+    svg.append('<text x="30" y="11" font-size="6.5" fill="#94A3B8" text-anchor="middle">1m</text>')
+    svg.append('<text x="60" y="11" font-size="6.5" fill="#94A3B8" text-anchor="middle">2m</text>')
+    svg.append('<text x="90" y="11" font-size="6.5" fill="#94A3B8" text-anchor="middle">3m</text>')
+    svg.append('</g>')
 
-    svg_parts.append('</svg>')
-    return "".join(svg_parts)
+    svg.append('</svg>')
+    return "".join(svg)

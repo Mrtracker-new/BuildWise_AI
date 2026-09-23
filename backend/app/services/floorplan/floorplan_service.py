@@ -130,76 +130,16 @@ def create_floorplan_reportlab_drawing(
 ) -> Drawing:
     """
     Constructs a native ReportLab vector Drawing object from floor plan data for PDF reports.
+    Delegates to draw_floorplan_reportlab for publication-grade CAD blueprint rendering.
     """
+    from app.services.report_service import draw_floorplan_reportlab
+    placements = floorplan_data.get("placements") or []
     grid_matrix = floorplan_data.get("grid_matrix") or []
-    placements_raw = floorplan_data.get("placements") or []
+    return draw_floorplan_reportlab(placements, grid_matrix, width=max_w, height=max_h)
 
-    rows = len(grid_matrix) if grid_matrix else 10
-    cols = len(grid_matrix[0]) if grid_matrix and grid_matrix[0] else 10
 
-    # Calculate scale factor to fit within max_w x max_h
-    cell_size = min(max_w / max(cols, 1), max_h / max(rows, 1)) * 0.85
-    draw_w = cols * cell_size
-    draw_h = rows * cell_size
-    offset_x = (max_w - draw_w) / 2.0
-    offset_y = (max_h - draw_h) / 2.0
+# Expose draw_floorplan_reportlab as well
+def draw_floorplan_reportlab(*args, **kwargs) -> Drawing:
+    from app.services.report_service import draw_floorplan_reportlab as _dfr
+    return _dfr(*args, **kwargs)
 
-    drawing = Drawing(max_w, max_h)
-
-    # Background canvas
-    drawing.add(Rect(0, 0, max_w, max_h, fillColor=colors.HexColor("#FFFFFF"), strokeColor=colors.HexColor("#CBD5E1"), strokeWidth=0.5))
-
-    # Room color map
-    color_map = {
-        "master_bed": colors.HexColor("#F1F5F9"),
-        "living": colors.HexColor("#F0FDF4"),
-        "kitchen": colors.HexColor("#FEF3C7"),
-        "puja": colors.HexColor("#FEF9C3"),
-        "bath_1": colors.HexColor("#E0F2FE"),
-        "bath_2": colors.HexColor("#E0F2FE"),
-        "bed_2": colors.HexColor("#F8FAFC"),
-        "dining": colors.HexColor("#FDF2F8"),
-        "stairs": colors.HexColor("#F5F3FF"),
-        "corridor": colors.white
-    }
-
-    # Draw rooms
-    for p in placements_raw:
-        if isinstance(p, dict):
-            rid = p.get("room_id", "")
-            r = int(p.get("row", 0))
-            c = int(p.get("col", 0))
-            w = int(p.get("width", 1))
-            h = int(p.get("height", 1))
-            name = str(p.get("room_name", rid.upper()))
-            area_m = float(p.get("area_sqm", 0.0))
-        else:
-            rid = getattr(p, "room_id", "")
-            r = int(getattr(p, "row", 0))
-            c = int(getattr(p, "col", 0))
-            w = int(getattr(p, "width", 1))
-            h = int(getattr(p, "height", 1))
-            name = str(getattr(p, "room_name", rid.upper()))
-            area_m = float(getattr(p, "area_sqm", 0.0))
-
-        # In ReportLab, Y is 0 at bottom, increasing upwards
-        rx = offset_x + (c * cell_size)
-        ry = offset_y + ((rows - (r + h)) * cell_size)
-        rw = w * cell_size
-        rh = h * cell_size
-
-        fcolor = color_map.get(rid, colors.HexColor("#F8FAFC"))
-        drawing.add(Rect(rx, ry, rw, rh, fillColor=fcolor, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.5))
-
-        # Centered label
-        cx = rx + (rw / 2.0)
-        cy = ry + (rh / 2.0)
-        drawing.add(String(cx, cy + 2, name[:12], fontName="Helvetica-Bold", fontSize=7.5, textAnchor="middle", fillColor=colors.HexColor("#0F172A")))
-        drawing.add(String(cx, cy - 8, f"{area_m:.1f} m²", fontName="Helvetica", fontSize=6.5, textAnchor="middle", fillColor=colors.HexColor("#64748B")))
-
-    # North arrow badge in top-right
-    compass_x = max_w - 25.0
-    compass_y = max_h - 25.0
-    drawing.add(String(compass_x, compass_y, "↑ N", fontName="Helvetica-Bold", fontSize=8, textAnchor="middle", fillColor=colors.HexColor("#0F172A")))
-
-    return drawing

@@ -18,7 +18,8 @@ from app.services.recommendation_service import (
 from app.services.vision import analyze_site_vision
 from app.services.floorplan import (
     generate_floor_plan,
-    create_floorplan_reportlab_drawing
+    create_floorplan_reportlab_drawing,
+    draw_floorplan_reportlab
 )
 
 __all__ = [
@@ -37,6 +38,7 @@ __all__ = [
     "get_top_severity_recommendations",
     "analyze_site_vision",
     "generate_floor_plan",
-    "create_floorplan_reportlab_drawing"
+    "create_floorplan_reportlab_drawing",
+    "draw_floorplan_reportlab"
 ]
 
