@@ -37,15 +37,22 @@ export async function downloadPdfReport(analysisData: AnalysisResponse): Promise
   });
 
   if (!resp.ok) {
-    throw new Error(`Report generation failed with status: ${resp.status}`);
+    let errorDetail = `Report generation failed with status: ${resp.status}`;
+    try {
+      const errData = await resp.json();
+      if (errData?.detail) errorDetail = errData.detail;
+    } catch {
+      // ignore json parse error
+    }
+    throw new Error(errorDetail);
   }
 
   const blob = await resp.blob();
   const downloadUrl = window.URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = downloadUrl;
-  const lat = analysisData.coordinates.latitude.toFixed(2);
-  const lon = analysisData.coordinates.longitude.toFixed(2);
+  const lat = analysisData.coordinates?.latitude != null ? analysisData.coordinates.latitude.toFixed(2) : '0.00';
+  const lon = analysisData.coordinates?.longitude != null ? analysisData.coordinates.longitude.toFixed(2) : '0.00';
   link.download = `BuildWise_Report_${lat}_${lon}.pdf`;
   document.body.appendChild(link);
   link.click();

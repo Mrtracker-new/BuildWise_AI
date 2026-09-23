@@ -11,6 +11,7 @@ interface MapCanvasProps {
   onLocationSelect: (lat: number, lon: number) => void;
   invalidateTrigger?: any;
   className?: string;
+  entranceDirection?: string;
 }
 
 export const MapCanvas: React.FC<MapCanvasProps> = ({
@@ -21,11 +22,13 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   onLocationSelect,
   invalidateTrigger,
   className = 'h-full w-full',
+  entranceDirection,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
   const footprintPolygonRef = useRef<L.Polygon | null>(null);
+  const entranceArrowRef = useRef<L.LayerGroup | null>(null);
 
   const onLocationSelectRef = useRef(onLocationSelect);
   useEffect(() => {
@@ -82,6 +85,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       if (footprintPolygonRef.current) {
         try { map.removeLayer(footprintPolygonRef.current); } catch {}
         footprintPolygonRef.current = null;
+      }
+      if (entranceArrowRef.current) {
+        try { map.removeLayer(entranceArrowRef.current); } catch {}
+        entranceArrowRef.current = null;
       }
       map.remove();
       mapInstanceRef.current = null;
@@ -208,9 +215,90 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
               direction: 'top',
             });
         }
-      } else if (footprintPolygonRef.current) {
-        try { map.removeLayer(footprintPolygonRef.current); } catch {}
-        footprintPolygonRef.current = null;
+
+        // Footprint entrance arrow anchored at midpoint of corresponding edge
+        if (entranceDirection) {
+          const DIR_TO_DEG: Record<string, number> = {
+            N: 0, NE: 45, E: 90, SE: 135,
+            S: 180, SW: 225, W: 270, NW: 315,
+          };
+          const entDeg = DIR_TO_DEG[entranceDirection.toUpperCase()] ?? 45;
+          const entRad = (entDeg * Math.PI) / 180.0;
+          const uE = Math.sin(entRad);
+          const uN = Math.cos(entRad);
+
+          const edgeMidpoints = [
+            { metersEast: -halfWidth * shortUnitE, metersNorth: -halfWidth * shortUnitN, normalE: -shortUnitE, normalN: -shortUnitN },
+            { metersEast: halfLength * longUnitE, metersNorth: halfLength * longUnitN, normalE: longUnitE, normalN: longUnitN },
+            { metersEast: halfWidth * shortUnitE, metersNorth: halfWidth * shortUnitN, normalE: shortUnitE, normalN: shortUnitN },
+            { metersEast: -halfLength * longUnitE, metersNorth: -halfLength * longUnitN, normalE: -longUnitE, normalN: -longUnitN },
+          ];
+
+          let bestEdge = edgeMidpoints[0];
+          let bestDot = -Infinity;
+          for (const edge of edgeMidpoints) {
+            const dot = edge.normalE * uE + edge.normalN * uN;
+            if (dot > bestDot) {
+              bestDot = dot;
+              bestEdge = edge;
+            }
+          }
+
+          const anchorDLat = bestEdge.metersNorth / 110540.0;
+          const anchorDLng = bestEdge.metersEast / (111320.0 * Math.cos(latRad));
+          const anchorLat = latitude + anchorDLat;
+          const anchorLng = longitude + anchorDLng;
+
+          const arrowLen = 7.0;
+          const headLen = 2.5;
+          const tipLat = anchorLat + (arrowLen * uN) / 110540.0;
+          const tipLng = anchorLng + (arrowLen * uE) / (111320.0 * Math.cos(latRad));
+
+          const headAngle1 = entRad + (145 * Math.PI) / 180.0;
+          const headAngle2 = entRad - (145 * Math.PI) / 180.0;
+          const wing1Lat = tipLat + (headLen * Math.cos(headAngle1)) / 110540.0;
+          const wing1Lng = tipLng + (headLen * Math.sin(headAngle1)) / (111320.0 * Math.cos(latRad));
+          const wing2Lat = tipLat + (headLen * Math.cos(headAngle2)) / 110540.0;
+          const wing2Lng = tipLng + (headLen * Math.sin(headAngle2)) / (111320.0 * Math.cos(latRad));
+
+          if (entranceArrowRef.current) {
+            try { map.removeLayer(entranceArrowRef.current); } catch {}
+            entranceArrowRef.current = null;
+          }
+
+          const arrowGroup = L.layerGroup();
+          const shaft = L.polyline([[anchorLat, anchorLng], [tipLat, tipLng]], {
+            color: '#4F46E5',
+            weight: 3,
+            lineCap: 'round',
+          });
+          const head = L.polygon([[tipLat, tipLng], [wing1Lat, wing1Lng], [wing2Lat, wing2Lng]], {
+            color: '#4F46E5',
+            fillColor: '#4F46E5',
+            fillOpacity: 1.0,
+            weight: 1,
+          });
+          arrowGroup.addLayer(shaft);
+          arrowGroup.addLayer(head);
+          arrowGroup.addTo(map);
+          arrowGroup.bindTooltip(`Main Entrance: ${entranceDirection.toUpperCase()}`, {
+            permanent: false,
+            direction: 'top',
+          });
+          entranceArrowRef.current = arrowGroup;
+        } else if (entranceArrowRef.current) {
+          try { map.removeLayer(entranceArrowRef.current); } catch {}
+          entranceArrowRef.current = null;
+        }
+      } else {
+        if (footprintPolygonRef.current) {
+          try { map.removeLayer(footprintPolygonRef.current); } catch {}
+          footprintPolygonRef.current = null;
+        }
+        if (entranceArrowRef.current) {
+          try { map.removeLayer(entranceArrowRef.current); } catch {}
+          entranceArrowRef.current = null;
+        }
       }
 
       // Expose map, marker, and footprint for audit testing (prefer visible map instance)
@@ -238,7 +326,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         (window as any).__leafletFootprint = null;
       }
     }
-  }, [latitude, longitude, orientationDegrees, plinthAreaSqFt]);
+  }, [latitude, longitude, orientationDegrees, plinthAreaSqFt, entranceDirection]);
 
   const handleResetView = () => {
     if (mapInstanceRef.current) {

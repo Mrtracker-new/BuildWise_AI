@@ -6,9 +6,12 @@ import { MapCanvas } from './components/MapCanvas';
 import { CoordinatesInput } from './components/CoordinatesInput';
 import { AnalysisForm } from './components/AnalysisForm';
 import { ScoreSummaryCard } from './components/ScoreSummaryCard';
+import { HazardProfileCard } from './components/HazardProfileCard';
 import { FactorBreakdown } from './components/FactorBreakdown';
 import { OrientationCompass } from './components/OrientationCompass';
+import { VastuAdvisoryCard } from './components/VastuAdvisoryCard';
 import { CostBreakdownTable } from './components/CostBreakdownTable';
+import { LandValueCard } from './components/LandValueCard';
 import { RiskMatrix } from './components/RiskMatrix';
 import { RecommendationPanel } from './components/RecommendationPanel';
 import { DownloadReportButton } from './components/DownloadReportButton';
@@ -28,10 +31,13 @@ export const App: React.FC = () => {
     building_typology: 'residential_single',
     floors: 1,
     ai_provider: 'mock',
+    ground_coverage_ratio: 0.60,
   });
 
   const [hasLocation, setHasLocation] = useState<boolean>(true);
   const [analysisData, setAnalysisData] = useState<AnalysisResponse | null>(null);
+  const [overrideLandRate, setOverrideLandRate] = useState<number | null>(null);
+  const [overridePlotArea, setOverridePlotArea] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [backendConnected, setBackendConnected] = useState<boolean>(false);
@@ -194,32 +200,85 @@ export const App: React.FC = () => {
     }
 
     if (analysisData) {
+      const currentEffectiveRate = overrideLandRate !== null
+        ? overrideLandRate
+        : (analysisData.land_value?.indicative_rate_per_sqft ?? null);
+
+      const currentPlotArea = overridePlotArea !== null
+        ? overridePlotArea
+        : (analysisData.land_value?.plot_area_sqft ?? 0);
+
+      const currentLandCost = currentEffectiveRate !== null && currentEffectiveRate > 0 && currentPlotArea > 0
+        ? Math.round(currentEffectiveRate * currentPlotArea)
+        : (analysisData.land_value?.land_cost_inr ?? null);
+
+      const currentCombinedTotal = currentLandCost !== null
+        ? analysisData.cost_estimate.total_estimated_cost_inr + currentLandCost
+        : null;
+
+      const reportPayload: AnalysisResponse = {
+        ...analysisData,
+        land_value: analysisData.land_value
+          ? {
+              ...analysisData.land_value,
+              indicative_rate_per_sqft: currentEffectiveRate,
+              plot_area_sqft: currentPlotArea,
+              land_cost_inr: currentLandCost,
+              combined_project_total_inr: currentCombinedTotal,
+              is_user_override: overrideLandRate !== null || overridePlotArea !== null || analysisData.land_value.is_user_override,
+            }
+          : undefined,
+      };
+
       return (
         <div className="@container w-full min-w-0 space-y-4 animate-fade-in">
-          {/* Scorecard - Always first element visible */}
+          {/* 1. Scorecard - Always first element visible */}
           <ScoreSummaryCard data={analysisData} />
 
-          {/* Factor Breakdown Bars */}
+          {/* 2. Hazard History & Climate Stress Profile */}
+          {analysisData.hazard_profile && (
+            <HazardProfileCard hazard={analysisData.hazard_profile} />
+          )}
+
+          {/* 3. Factor Breakdown Bars */}
           <FactorBreakdown factors={analysisData.factors} />
 
-          {/* Passive Orientation Compass */}
+          {/* 4. Passive Orientation Compass */}
           <OrientationCompass orientation={analysisData.orientation} />
 
-          {/* Cost Breakdown Table */}
+          {/* 5. Vastu & Functional Planning Advisory */}
+          {analysisData.vastu_advisory && (
+            <VastuAdvisoryCard advisory={analysisData.vastu_advisory} />
+          )}
+
+          {/* 6. Cost Breakdown Table */}
           <CostBreakdownTable costEstimate={analysisData.cost_estimate} />
 
-          {/* Risk Mitigation Matrix */}
+          {/* 7. Indicative Land Value & Combined Project Total */}
+          {analysisData.land_value && (
+            <LandValueCard
+              landValue={analysisData.land_value}
+              civilTotalCostInr={analysisData.cost_estimate.total_estimated_cost_inr}
+              onOverrideChange={(rate, area) => {
+                setOverrideLandRate(rate);
+                setOverridePlotArea(area);
+              }}
+            />
+          )}
+
+          {/* 8. Risk Mitigation Matrix */}
           <RiskMatrix risks={analysisData.risks} />
 
-          {/* Engineering Commentary Panel */}
+          {/* 9. Engineering Commentary & Traceable Recommendations */}
           <RecommendationPanel
             summary={analysisData.engineering_summary}
             recommendations={analysisData.detailed_recommendations}
+            recommendationItems={analysisData.recommendation_items}
             aiMetadata={analysisData.ai_metadata}
           />
 
-          {/* Download Vector PDF Report */}
-          <DownloadReportButton analysisData={analysisData} />
+          {/* 10. Download Vector PDF Report */}
+          <DownloadReportButton analysisData={reportPayload} />
         </div>
       );
     }
@@ -291,6 +350,7 @@ export const App: React.FC = () => {
             plinthAreaSqFt={request.built_up_area_sqft}
             onLocationSelect={handleLocationSelect}
             invalidateTrigger={leafletResizeTrigger}
+            entranceDirection={analysisData?.vastu_advisory?.ranked_entrances?.[0]?.direction}
             className="w-full h-full"
           />
 
@@ -394,6 +454,7 @@ export const App: React.FC = () => {
             plinthAreaSqFt={request.built_up_area_sqft}
             onLocationSelect={handleLocationSelect}
             invalidateTrigger={leafletResizeTrigger}
+            entranceDirection={analysisData?.vastu_advisory?.ranked_entrances?.[0]?.direction}
             className="w-full h-full"
           />
         </section>

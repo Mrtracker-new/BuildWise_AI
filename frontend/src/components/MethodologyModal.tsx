@@ -65,22 +65,60 @@ export const MethodologyModal: React.FC<MethodologyModalProps> = ({ isOpen, onCl
             </ul>
           </div>
 
-          {/* Section 2: Orientation */}
+          {/* Section 2: Hazard Aggregation */}
           <div className="space-y-1.5 pt-2 border-t border-slate-100">
             <h4 className="font-semibold text-slate-900 uppercase text-[11px] tracking-wider">
-              2. Passive Solar & Microclimate Orientation
+              2. Hazard History & Climate Stress Aggregation Mapping
             </h4>
             <p>
-              In tropical and subtropical latitudes (e.g. India), high solar altitude angles produce severe east-west facade overheating.
-              The system recommends orienting the building's principal longitudinal axis along East-West (90&deg;) to minimize peak afternoon solar radiation,
-              deflected by up to &plusmn;15&deg; based on prevailing wind vectors to optimize cross-ventilation.
+              Telemetry across seismic, hydrological flood, and storm exposure is synthesized deterministically:
+            </p>
+            <ul className="list-disc list-inside space-y-1 text-[11px] text-slate-600">
+              <li><b>Baseline Rating</b>: Begins at <code>max(flood pressure level, storm exposure level)</code>.</li>
+              <li><b>Seismic Zone IV Upgrade</b>: Upgrades the overall hazard level by exactly one tier (e.g., low &rarr; moderate, moderate &rarr; high).</li>
+              <li><b>Seismic Zone V Rule</b>: In Zone V with at least one historical event (M&ge;4.5 in past 50 yrs), the overall level is forced to at least <b>High</b>.</li>
+              <li><b>Critical Severity Threshold</b>: The overall hazard reaches <b>Critical</b> only when Zone V combines with either <b>High Flood Pressure</b> or <b>High Storm Exposure</b>.</li>
+            </ul>
+            <p className="text-[11px] text-slate-500 italic mt-1">
+              Seismic zones adhere to BIS IS 1893:2016. Historical earthquake events are sourced from USGS FDSN (250km radius, capped at 250). River discharge ratios from Open-Meteo GloFAS (365d) are guarded with a 0.1 m³/s threshold and capped at 20.0x. Extreme wind and precipitation climatology is derived from ECMWF ERA5 (10-year mean).
             </p>
           </div>
 
-          {/* Section 3: Costing */}
+          {/* Section 3: Land Valuation */}
           <div className="space-y-1.5 pt-2 border-t border-slate-100">
             <h4 className="font-semibold text-slate-900 uppercase text-[11px] tracking-wider">
-              3. Preliminary Construction Cost Estimation (CPWD Aligned)
+              3. Indicative Land Value Engine & Multiplier Breakdown
+            </h4>
+            <p>
+              Land circle rates are determined via spatial coordinate matching (haversine distance radius check first, reverse-geocoded locality second). A locality multiplier is applied based on four physical parameters:
+            </p>
+            <div className="p-2 bg-slate-50 rounded border border-slate-200 font-mono text-[11px] text-slate-800">
+              Multiplier = RoadWidth (0.90-1.15) &times; Zoning (1.00-1.10) &times; Frontage (0.95-1.05) &times; Corner (0.95-1.05)
+            </div>
+            <p className="text-[11px] text-slate-600">
+              The aggregate locality multiplier is strictly clamped to the range <b>[0.85, 1.25]</b>. Plot area is derived from built-up area and assumed Ground Coverage Ratio (default 60%, configurable 40-75%). Users may supply custom overrides which recompute totals instantly in the browser.
+            </p>
+          </div>
+
+          {/* Section 4: Vastu Reconciliation */}
+          <div className="space-y-1.5 pt-2 border-t border-slate-100">
+            <h4 className="font-semibold text-slate-900 uppercase text-[11px] tracking-wider">
+              4. Vastu Shastra & Passive Solar Reconciliation
+            </h4>
+            <p>
+              Traditional spatial planning principles (Vastu Purusha Mandala) are evaluated alongside modern building physics:
+            </p>
+            <ul className="list-disc list-inside space-y-0.5 text-[11px] text-slate-600">
+              <li><b>Entrance Portals</b>: 8-direction scoring combines canonical Vastu weights (NE=100, N=95, E=90, S=45), road approach proximity bonus (+35), and passive solar comfort adjustments.</li>
+              <li><b>Approach Road Bearing</b>: Queried from OpenStreetMap Overpass API. When unavailable, it defaults to an explicit unknown state without synthesizing geometry.</li>
+              <li><b>Mandala Room Grid</b>: 3&times;3 room placement matrix assigns microclimatic functions (e.g. Master Bedroom in SW for thermal stability, Kitchen in SE aligned with ventilation currents).</li>
+            </ul>
+          </div>
+
+          {/* Section 5: Costing */}
+          <div className="space-y-1.5 pt-2 border-t border-slate-100">
+            <h4 className="font-semibold text-slate-900 uppercase text-[11px] tracking-wider">
+              5. Preliminary Construction Cost Estimation (CPWD Aligned)
             </h4>
             <p>
               Cost calculations are derived from Indian Central Public Works Department (CPWD) Plinth Area Rates (PAR):
@@ -104,13 +142,13 @@ export const MethodologyModal: React.FC<MethodologyModalProps> = ({ isOpen, onCl
             </p>
           </div>
 
-          {/* Section 4: Data Sources */}
+          {/* Section 6: Data Sources & Provenance */}
           <div className="space-y-1.5 pt-2 border-t border-slate-100">
             <h4 className="font-semibold text-slate-900 uppercase text-[11px] tracking-wider">
-              4. Open-Source Data Provenance
+              6. Open-Source Data Provenance & Offline Resilience
             </h4>
             <p className="text-[11px] text-slate-600">
-              BuildWise AI operates without paid APIs, using OpenStreetMap Nominatim for geocoding, Open-Elevation / Open-Meteo for digital elevation models, and Open-Meteo for meteorological telemetry. If external networks time out, deterministic synthetic spatial harmonics engage automatically.
+              BuildWise AI operates without paid APIs, using OpenStreetMap Nominatim for geocoding, Open-Elevation / Open-Meteo for digital elevation models, USGS FDSN for seismic event catalogs, ECMWF ERA5 for climate reanalysis, and Overpass for road network topology. Responses are cached with a 24-hour TTL on a 0.1° coordinate grid. If external services are unreachable, deterministic fallback models engage with transparent user warnings.
             </p>
           </div>
         </div>

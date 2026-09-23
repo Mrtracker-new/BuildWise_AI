@@ -6,6 +6,9 @@ export interface AnalysisRequest {
   building_typology: string;
   floors: number;
   ai_provider: string;
+  override_land_rate_per_sqft?: number;
+  plot_area_sqft?: number;
+  ground_coverage_ratio?: number;
 }
 
 export interface FactorScore {
@@ -56,6 +59,149 @@ export interface RiskItem {
   mitigation_strategy: string;
 }
 
+// ----------------------------------------------------
+// New Modules Interfaces
+// ----------------------------------------------------
+
+export interface SeismicEvent {
+  magnitude: number;
+  date_iso: string;
+  distance_km: number;
+  place: string;
+}
+
+export interface SeismicProfile {
+  zone: string;
+  zone_factor: number;
+  standard: string;
+  district?: string | null;
+  state?: string | null;
+  event_count: number;
+  is_capped: boolean;
+  event_count_display: string;
+  max_magnitude?: number | null;
+  years_since_last_event?: number | null;
+  recent_major_events: SeismicEvent[];
+  confidence: 'high' | 'moderate' | 'low';
+  confidence_warning?: string | null;
+}
+
+export interface FloodProfile {
+  discharge_peak_to_mean_ratio?: number | null;
+  pressure_level: 'low' | 'moderate' | 'high';
+  ndma_flood_prone: boolean;
+  elevation_amsl_m?: number | null;
+  confidence: 'high' | 'moderate' | 'low';
+  confidence_warning?: string | null;
+}
+
+export interface StormCycloneProfile {
+  max_annual_gust_kmh?: number | null;
+  extreme_rainfall_days?: number | null;
+  exposure_level: 'low' | 'moderate' | 'high';
+  ndma_cyclone_prone: boolean;
+  confidence: 'high' | 'moderate' | 'low';
+  confidence_warning?: string | null;
+}
+
+export interface HazardProfile {
+  seismic: SeismicProfile;
+  flood: FloodProfile;
+  storm_cyclone: StormCycloneProfile;
+  overall_hazard_level: 'low' | 'moderate' | 'high' | 'critical';
+  warnings: string[];
+}
+
+export interface MultiplierBreakdown {
+  road_accessibility_score: number;
+  road_contribution: number;
+  facility_proximity_score: number;
+  facility_contribution: number;
+  net_multiplier: number;
+  is_clamped: boolean;
+}
+
+export interface LandValueEstimate {
+  indicative_rate_per_sqft?: number | null;
+  base_table_rate_per_sqft?: number | null;
+  is_user_override: boolean;
+  locality_multiplier: number;
+  multiplier_breakdown: MultiplierBreakdown;
+  plot_area_sqft: number;
+  ground_coverage_ratio_applied: number;
+  land_cost_inr?: number | null;
+  construction_cost_inr: number;
+  combined_project_total_inr?: number | null;
+  as_of_year?: number | null;
+  jurisdiction_zone?: string | null;
+  source_publication?: string | null;
+  disclaimer: string;
+  confidence_warning?: string | null;
+}
+
+export interface RankedEntrance {
+  direction: string;
+  score: number;
+  vastu_rationale: string;
+  practical_rationale: string;
+  is_approach_side: boolean;
+}
+
+export interface RoomGridZone {
+  zone: string;
+  zone_name: string;
+  primary_room: string;
+  alternative_room: string;
+  prohibited: string[];
+  vastu_rationale: string;
+  civil_engineering_rationale: string;
+}
+
+export interface SlopeReading {
+  drainage_direction: string;
+  azimuth_degrees: number;
+  auspiciousness: 'favourable' | 'neutral' | 'requires_remedy';
+  rationale: string;
+  remedy_notes?: string | null;
+}
+
+export interface ReconciliationItem {
+  topic: string;
+  status: 'concordant' | 'divergent';
+  vastu_position: string;
+  scientific_passive_position: string;
+  recommended_synthesis: string;
+}
+
+export interface RoadApproach {
+  bearing_degrees?: number | null;
+  approach_side: string;
+  distance_meters?: number | null;
+  is_fallback: boolean;
+}
+
+export interface VastuAdvisory {
+  ranked_entrances: RankedEntrance[];
+  room_grid: RoomGridZone[];
+  slope_reading: SlopeReading;
+  reconciliation_notes: ReconciliationItem[];
+  road_approach: RoadApproach;
+}
+
+export interface RecommendationItem {
+  rule_id: string;
+  category: string;
+  category_label: string;
+  severity: 'critical' | 'advisory' | 'optimal';
+  trigger_condition: string;
+  source_data_ref: string;
+  recommendation_text: string;
+  id?: string;
+  title?: string;
+  description?: string;
+  source_standard?: string;
+}
+
 export interface AnalysisResponse {
   request_id: string;
   timestamp: string;
@@ -72,6 +218,10 @@ export interface AnalysisResponse {
   risks: RiskItem[];
   engineering_summary: string;
   detailed_recommendations: string[];
+  hazard_profile?: HazardProfile;
+  land_value?: LandValueEstimate;
+  vastu_advisory?: VastuAdvisory;
+  recommendation_items?: RecommendationItem[];
   ai_metadata: {
     provider_requested?: string;
     provider_used?: string;

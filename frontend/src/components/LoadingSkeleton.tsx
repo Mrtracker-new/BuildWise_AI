@@ -6,12 +6,14 @@ export const LoadingSkeleton: React.FC = () => {
 
   const stages = [
     'Sampling topographic contours and digital elevation model...',
-    'Querying microclimate meteorological indices and prevailing wind vectors...',
-    'Evaluating transportation accessibility and civic infrastructure...',
+    'Querying USGS seismic event catalogs and BIS IS 1893:2016 zoning...',
+    'Analyzing GloFAS river discharge and ERA5 10-year storm climatology...',
+    'Evaluating transportation accessibility and Overpass road approach...',
     'Executing multi-criteria decision analysis (MCDA) matrix...',
-    'Optimizing bioclimatic building longitudinal orientation...',
+    'Optimizing bioclimatic orientation and Vastu Purusha spatial grid...',
+    'Matching guidance circle rates and computing locality multipliers...',
     'Calculating CPWD plinth area cost allocations and terrain surcharge...',
-    'Synthesizing structural engineering narrative...',
+    'Synthesizing structural engineering narrative and traceable action items...',
   ];
 
   useEffect(() => {

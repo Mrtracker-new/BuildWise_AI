@@ -154,6 +154,33 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
         </div>
       </div>
 
+      {/* Ground Coverage Ratio */}
+      <div className="space-y-1.5 min-w-0">
+        <div className="flex justify-between items-center gap-2 min-w-0">
+          <label htmlFor="coverage-input" className="text-xs uppercase tracking-wider font-semibold text-slate-500 whitespace-normal break-words">
+            Ground Coverage Ratio
+          </label>
+          <span className="text-sm font-mono font-semibold text-slate-900 bg-slate-100 px-2 py-0.5 rounded shrink-0 tabular-nums">
+            {Math.round(((request.ground_coverage_ratio ?? 0.60) * 100))}%
+          </span>
+        </div>
+        <input
+          id="coverage-input"
+          type="range"
+          min="0.40"
+          max="0.75"
+          step="0.05"
+          value={request.ground_coverage_ratio ?? 0.60}
+          onChange={(e) => onChange({ ground_coverage_ratio: parseFloat(e.target.value) || 0.60 })}
+          className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-slate-900"
+        />
+        <div className="flex justify-between text-xs font-mono text-slate-400 min-w-0">
+          <span>40% (Spacious)</span>
+          <span>60% (Default)</span>
+          <span>75% (Dense Urban)</span>
+        </div>
+      </div>
+
       {/* AI Explanation Provider */}
       <div className="min-w-0">
         <label htmlFor="ai-provider-select" className="block text-xs uppercase tracking-wider font-semibold text-slate-500 mb-1 whitespace-normal break-words">

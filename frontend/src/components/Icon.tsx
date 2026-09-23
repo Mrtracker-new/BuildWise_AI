@@ -23,7 +23,14 @@ export type IconName =
   | 'x'
   | 'chevron-right'
   | 'chevron-down'
-  | 'loader';
+  | 'loader'
+  | 'activity'
+  | 'waves'
+  | 'cloud-lightning'
+  | 'layout-grid'
+  | 'navigation'
+  | 'arrow-up'
+  | 'tag';
 
 interface IconProps {
   name: IconName;
@@ -235,6 +242,55 @@ export const Icon: React.FC<IconProps> = ({
           <line x1="18" y1="12" x2="22" y2="12" />
           <line x1="4.93" y1="19.07" x2="7.76" y2="16.24" />
           <line x1="16.24" y1="7.76" x2="19.07" y2="4.93" />
+        </svg>
+      );
+    case 'activity':
+      return (
+        <svg {...commonProps}>
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+        </svg>
+      );
+    case 'waves':
+      return (
+        <svg {...commonProps}>
+          <path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1" />
+          <path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1" />
+          <path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1" />
+        </svg>
+      );
+    case 'cloud-lightning':
+      return (
+        <svg {...commonProps}>
+          <path d="M19 16.9A5 5 0 0 0 18 7h-1.26a8 8 0 1 0-11.62 9" />
+          <polyline points="13 11 9 17 15 17 11 23" />
+        </svg>
+      );
+    case 'layout-grid':
+      return (
+        <svg {...commonProps}>
+          <rect width="7" height="7" x="3" y="3" rx="1" />
+          <rect width="7" height="7" x="14" y="3" rx="1" />
+          <rect width="7" height="7" x="14" y="14" rx="1" />
+          <rect width="7" height="7" x="3" y="14" rx="1" />
+        </svg>
+      );
+    case 'navigation':
+      return (
+        <svg {...commonProps}>
+          <polygon points="3 11 22 2 13 21 11 13 3 11" />
+        </svg>
+      );
+    case 'arrow-up':
+      return (
+        <svg {...commonProps}>
+          <line x1="12" y1="19" x2="12" y2="5" />
+          <polyline points="5 12 12 5 19 12" />
+        </svg>
+      );
+    case 'tag':
+      return (
+        <svg {...commonProps}>
+          <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" />
         </svg>
       );
     default:
