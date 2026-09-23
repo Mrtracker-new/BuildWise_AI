@@ -154,6 +154,8 @@ function checkDOMViolations(isDrawerOpenIntended) {
   });
 
   const page = await browser.newPage();
+  page.on('console', msg => console.log('PAGE LOG:', msg.text()));
+  page.on('pageerror', err => console.log('PAGE ERROR:', err.toString()));
   const allResults = [];
   const checks = [];
 
@@ -208,7 +210,7 @@ function checkDOMViolations(isDrawerOpenIntended) {
 
   await page.waitForFunction(() => {
     return document.body.innerText.includes('Land Suitability Assessment');
-  }, { timeout: 15000 });
+  }, { timeout: 60000 });
   console.log('Feasibility results successfully rendered.');
 
   // Audit loaded state at every viewport

@@ -1,59 +1,61 @@
 # BuildWise AI - Geo-Based Intelligent Construction Planning System
 
-BuildWise AI is an open-access, geo-intelligent site feasibility evaluation and preliminary construction planning platform designed for civil engineers, architectural consultants, real estate planners, and prospective builders. Given geographic coordinates and architectural parameters (built-up area, quality grade, building typology, storeys), the application executes deterministic multi-factor land suitability evaluations, passive solar and aerodynamic building orientation recommendations, CPWD-aligned preliminary cost estimates, and professional engineering commentary.
+BuildWise AI is an open-access, geo-intelligent site feasibility evaluation and preliminary construction planning platform designed for civil engineers, architectural consultants, real estate planners, and prospective builders. Given geographic coordinates and architectural parameters (built-up area, quality grade, building typology, storeys), the application executes deterministic multi-factor land suitability evaluations, passive solar and aerodynamic building orientation recommendations, CPWD-aligned preliminary cost estimates, comprehensive hazard and climate stress profiling, indicative land valuation, traditional Vastu Shastra reconciliation, and traceable civil engineering action items with formal IS-code citations.
 
 The application operates completely without paid APIs, without Google Maps Platform, and without mandatory AI API keys by employing a deterministic engineering rule engine. Optional adapters for Groq, Google Gemini, and local Ollama are supported through a decoupled adapter pattern.
 
 ---
 
-## Key Features
+## Core Engineering Capabilities
 
-1. **Free Interactive Spatial Workspace**:
-   - Built on Leaflet.js with OpenStreetMap cartography.
-   - Interactive click-to-pin, draggable marker, coordinate displays, and real-time bounding box synchronization.
-   - Zero map API keys required.
+### 1. Multi-Criteria Decision Analysis (MCDA) Land Suitability
+Evaluates 5 standardized civil engineering criteria normalized on a 0 to 100 scale:
+- **Topographic Slope (25% weight)**: Digital elevation sampling across 33m offsets. Flat ($\le 3\%$) = 100, Steep ($>15\%$) = 20–45.
+- **Flood Risk Approximation (20% weight)**: Altitude AMSL, local depressions, and precipitation indices.
+- **Road Accessibility (20% weight)**: Highway and arterial street network proximity.
+- **Environmental Comfort (15% weight)**: Peak summer heat index and ambient ventilation.
+- **Civic Facility Proximity (20% weight)**: Municipal infrastructure density index.
+- **Classification**: Categorizes feasibility into Suitable ($\ge 70$), Conditionally Suitable (50–70), and Challenging ($< 50$).
 
-2. **Deterministic Land Suitability Engine (MCDA Model)**:
-   - Evaluates 5 standardized civil engineering criteria normalized on a 0 to 100 scale:
-     - Topographic Slope (25% weight): Digital elevation sampling across 33m offsets.
-     - Flood Risk Approximation (20% weight): Altitude AMSL, local depressions, and precipitation indices.
-     - Road Accessibility (20% weight): Highway and arterial street network proximity.
-     - Environmental & Thermal Comfort (15% weight): Peak summer heat index and ambient ventilation.
-     - Civic Facility Proximity (20% weight): Municipal infrastructure density index.
-   - Categorizes feasibility into Suitable (>= 70), Conditionally Suitable (50 - 70), and Challenging (< 50).
+### 2. Hazard History & Climate Stress Profile (Module 1)
+Integrates live and static civil disaster mitigation datasets:
+- **Seismic Hazard**: Matches site against BIS IS 1893:2016 seismic zones (Zones II to V) and zone acceleration factors ($Z = 0.10$ to $0.36$). Queries USGS FDSN API for historical earthquakes ($M \ge 4.5$ within 250 km, past 50 years, ordered by magnitude and capped at 250 with a `250+` indicator and confidence warning).
+- **River Discharge & Inundation**: Queries Open-Meteo GloFAS river discharge (past 365 days). Guarded by a $0.1\text{ m}^3\text{/s}$ minimum flow threshold (negligible flow or dry channels set the discharge ratio to null, falling back gracefully to elevation AMSL and NDMA atlas proxies with low confidence warnings). Discharge ratios are capped at $20.0\times$.
+- **Extreme Climatology**: Analyzes ECMWF ERA5 reanalysis data over the past 10 complete calendar years for maximum annual wind gusts and extreme precipitation days ($\ge 50\text{ mm/day}$).
+- **Deterministic Hazard Aggregation**: Starts at $\max(\text{flood pressure}, \text{storm exposure})$; upgrades by one level for Seismic Zone IV; forces at least High for Zone V with historical events; reaches Critical only when Zone V coincides with High Flood or High Storm. Published in Methodology dialog.
 
-3. **Passive Bioclimatic Orientation Optimization**:
-   - Calculates solar noon altitude profiles and solar declination.
-   - Recommends optimal principal longitudinal building axis (East-West at 90 degrees in tropical/subtropical latitudes) to prevent peak solar facade overheating.
-   - Deflects axis by up to +/- 15 degrees based on prevailing wind vectors to optimize cross-ventilation.
-   - Visualized with a custom SVG technical engineering compass.
+### 3. Indicative Land Value Engine & Project Economics (Module 2)
+Provides preliminary capital expenditure forecasting:
+- **Guidance Circle Rates**: Matches state Inspector General of Registration (IGR) and Revenue Department published circle rates via spatial coordinate matching (haversine distance radius check first, reverse-geocoded locality second).
+- **Deterministic Locality Multiplier**: Computed from road accessibility and civic infrastructure factor scores:
+  $$\text{Multiplier} = 1.0 + \frac{\text{RoadScore} - 70}{200} + \frac{\text{FacilityScore} - 70}{200}$$
+  Strictly clamped between $0.85\times$ and $1.25\times$.
+- **Plot Area & Ground Coverage**: Derives plot area using built-up area and configurable Ground Coverage Ratio (default 60%, range 40–75%).
+- **Interactive Browser Recomputation**: Users can supply custom land rates or plot area overrides. Changes recompute land acquisition cost and combined project expenditure (land + CPWD construction) debounced in the browser with a User-Supplied badge without server round-trips.
 
-4. **Preliminary Construction Cost Estimation (CPWD Aligned)**:
-   - Uses Central Public Works Department (CPWD) Plinth Area Rates (PAR) benchmarks:
-     - Basic Specification: INR 1,500 /sq ft
-     - Standard Specification: INR 2,200 /sq ft
-     - Premium Specification: INR 3,500 /sq ft
-   - Applies dynamic terrain slope multipliers (1.0x for flat up to 1.25x for steep grades).
-   - Itemizes budget across Structural Works (50%), Architectural Finishes (18%), MEP Services (14%), Site Grading (8-15%), and Contingencies (8-10%).
+### 4. Vastu Shastra & Passive Solar Reconciliation (Module 3)
+Reconciles traditional Indian architectural canon with modern bioclimatic building physics:
+- **Entrance Portal Ranking**: Evaluates 8 cardinal and intercardinal orientations combining canonical Vastu weights (NE=100, N=95, E=90, S=45), road approach alignment bonus ($+35$ points within $45^\circ$), rear access penalty, and passive solar microclimate terms.
+- **Unfabricated Fallback Geometry**: When OpenStreetMap Overpass road queries fail or time out, road approach defaults to an explicit unknown state (`bearing_degrees: null`, `approach_side: "unknown"`, `is_fallback: True`), skipping approach bonuses and ranking portals purely on Vastu and microclimate. Never fabricates geometry.
+- **Mandala Room Matrix**: 9-zone layout (*Vastu Purusha Mandala*) mapping functional rooms (e.g. Master Bedroom in SW for thermal mass; Kitchen in SE to utilize prevailing winds for cooking fume extraction).
+- **Downhill Drainage Aspect**: Calculates topographic slope aspect across cardinal offsets to verify water runoff direction and prescribe structural remediation swales for southern/southwestern slopes.
 
-5. **Site Risk Identification & Mitigation Matrix**:
-   - Automatically detects topographic differential settlement risks, drainage surcharges, and heavy transit mixer access constraints.
-   - Assigns severity ratings (Low, Medium, High) with prescribed engineering countermeasures.
+### 5. Traceable Recommendation Engine with IS-Code Citations (Module 4)
+Emits categorized, severity-ranked civil engineering action items:
+- Categorized into Structural & Seismic Safety, Hydrology & Flood Defense, Site Grading & Geotechnical, Access & Circulation, Vastu & Functional Planning, Land Valuation & Phasing, Climate & Passive Design, and Extreme Wind Defense.
+- Formally cross-referenced with Indian Standards: **IS 1893:2016**, **IS 13920:2016** (ductile detailing), **IS 4326:2013** (earthquake resistance), **IS 875 Part 3** (design wind loads), **NBC 2016 Part 8**, and **CPWD PAR**.
+- Rule IDs include `STR-001/002`, `FLD-001/002`, `SLP-001/002`, `ACC-001`, `VAS-001/002`, `LND-001/002/003`, `CLM-001`, and `STM-001`.
+- Payloads passed to the AI narrative adapter are capped at the top 8 severity-ranked items to safeguard low-hardware Ollama context windows, while full structured items remain in UI and PDF.
 
-6. **Pluggable AI & Rule-Based Explanation Layer**:
-   - Default provider: `mock` (deterministic, zero latency, zero API keys, no network calls).
-   - Optional providers: `groq`, `gemini`, `ollama`.
-   - Automatic fallback to deterministic generator on timeout, missing key, or network error.
-   - AI generates only qualitative explanations and actionable recommendations; all numerical calculations remain strictly deterministic.
+### 6. Interactive Spatial Workspace & Entrance Geometry
+- Built on Leaflet.js with OpenStreetMap cartography and zero paid API keys.
+- **Oriented Building Footprint**: Simulates the building footprint oriented along the optimal passive solar axis.
+- **Midpoint Entrance Arrow**: Computes outward unit vectors using geographic bearing mathematics clockwise from North and anchors an SVG entrance indicator at the exact midpoint of the corresponding footprint edge.
 
-7. **Vector PDF Engineering Feasibility Report**:
-   - Server-side compilation using ReportLab into a clean A4 multi-page technical report.
-   - Contains executive scorecard, factor tables, orientation details, itemized budgets, risk matrices, and formal engineering disclaimers.
-
-8. **Minimal, Engineered Design System**:
-   - Clean slate and white palette with high data-to-ink ratio.
-   - 100% Inline SVG icons with consistent 1.75px stroke width.
-   - Zero emojis anywhere in UI, code, or documentation.
+### 7. Pluggable AI Commentary & Vector PDF Export
+- Default provider: `mock` (deterministic, zero latency, zero API keys, no network calls).
+- Optional providers: `groq`, `gemini`, `ollama` with automatic fallback to deterministic generator.
+- Server-side compilation using ReportLab into a clean A4 multi-page technical report with executive scorecard, hazard matrix, Vastu room grid, CPWD budget, and disclaimers. Compiles strictly under 3.0 seconds.
 
 ---
 
@@ -61,17 +63,17 @@ The application operates completely without paid APIs, without Google Maps Platf
 
 ### Frontend
 - **Framework**: React 19, TypeScript
-- **Tooling**: Vite
-- **Styling**: Tailwind CSS
+- **Tooling**: Vite 8, Tailwind CSS with `@tailwindcss/container-queries`
 - **Mapping**: Leaflet.js with OpenStreetMap Cartography
-- **Iconography**: Custom Inline SVG Icon System
+- **Testing & Audit**: Puppeteer Core (9-viewport responsive DOM integrity audit)
+- **Linter**: Oxlint
 
 ### Backend
 - **Framework**: Python 3.10+, FastAPI, Uvicorn
 - **Data Validation**: Pydantic v2
-- **HTTP Client**: HTTPX (async requests with 3.5s timeout)
+- **HTTP Client**: HTTPX (async requests with 3.5s timeout and 24h spatial coordinate caching)
 - **Document Generation**: ReportLab
-- **Testing**: Pytest, Pytest-AsyncIO
+- **Testing**: Pytest, Pytest-AsyncIO (offline deterministic unit tests with recorded fixtures)
 
 ---
 
@@ -81,75 +83,49 @@ The application operates completely without paid APIs, without Google Maps Platf
 Buildwise/
 |-- backend/
 |   |-- app/
-|   |   |-- __init__.py
 |   |   |-- main.py                    # FastAPI application and route endpoints
 |   |   |-- config.py                  # Environment settings and configuration
 |   |   |-- schemas/
-|   |   |   |-- __init__.py
 |   |   |   |-- request.py             # Pydantic request models
 |   |   |   `-- response.py            # Pydantic response models
 |   |   |-- services/
-|   |   |   |-- __init__.py
 |   |   |   |-- suitability_service.py # MCDA multi-criteria scoring logic
 |   |   |   |-- orientation_service.py # Passive solar and wind orientation calculations
 |   |   |   |-- cost_service.py        # CPWD plinth area rate cost estimation
+|   |   |   |-- hazard_service.py      # Module 1: Seismic, flood, storm hazard evaluation
+|   |   |   |-- landvalue_service.py   # Module 2: Indicative circle rates and locality multiplier
+|   |   |   |-- vastu_service.py       # Module 3: Vastu entrance ranking and Mandala matrix
+|   |   |   |-- recommendation_service.py # Module 4: Categorized, traceable civil rules
 |   |   |   |-- risk_service.py        # Site constraints and mitigation evaluator
 |   |   |   |-- report_service.py      # ReportLab vector PDF generator
 |   |   |   `-- external_data_service.py # OSM, elevation, and climate integrations
-|   |   |-- ai/
-|   |   |   |-- __init__.py            # Adapter factory
-|   |   |   |-- base_adapter.py        # Abstract interface
-|   |   |   |-- mock_adapter.py        # Default deterministic explanation generator
-|   |   |   |-- groq_adapter.py        # Optional Groq cloud adapter
-|   |   |   |-- gemini_adapter.py      # Optional Google Gemini adapter
-|   |   |   `-- ollama_adapter.py      # Optional local Ollama adapter
-|   |   `-- utils/
-|   |       |-- __init__.py
-|   |       |-- geo_utils.py           # Haversine distance, solar path, synthetic terrain
-|   |       `-- cache_utils.py         # Thread-safe spatial coordinate TTL cache
-|   |-- tests/
-|   |   |-- __init__.py
-|   |   |-- test_suitability.py        # Unit tests for suitability formulas
-|   |   |-- test_orientation.py        # Unit tests for orientation logic
-|   |   |-- test_cost.py               # Unit tests for CPWD cost calculations
-|   |   `-- test_api.py                # Integration tests for API routes and PDF stream
-|   |-- requirements.txt               # Backend dependencies
-|   |-- .env.example                   # Environment configuration template
-|   |-- .env                           # Active environment settings
-|   `-- run_backend.py                 # Backend entry point script
+|   |   |-- ai/                        # Pluggable AI explanation adapters (mock, groq, gemini, ollama)
+|   |   `-- utils/                     # Geo math, haversine distance, and 24h spatial cache
+|   |-- data/                          # Versioned static catalogs (v1.0.0 with source notes)
+|   |   |-- seismic_zones.json         # BIS IS 1893:2016 state baselines and city overrides
+|   |   |-- ndma_hazard_districts.json # Major river basins and coastal cyclone districts
+|   |   |-- guidance_values.json       # State guidance circle rates with center coordinates
+|   |   `-- vastu_rules.json           # Canonical orientation weights and climate adjustments
+|   `-- tests/                         # Pytest test suite (all offline-deterministic unit tests)
 |
 |-- frontend/
-|   |-- public/
-|   |   `-- favicon.svg                # Clean SVG geometric favicon
 |   |-- src/
 |   |   |-- components/
-|   |   |   |-- AppHeader.tsx          # Navigation bar with telemetry and modal trigger
-|   |   |   |-- CoordinatesInput.tsx   # Precise coordinates display and manual sync
-|   |   |   |-- AnalysisForm.tsx       # Parameters form (area, grade, typology, storeys)
-|   |   |   |-- MapCanvas.tsx          # Leaflet map container and footprint simulation
+|   |   |   |-- HazardProfileCard.tsx  # Seismic, flood, and storm telemetry display
+|   |   |   |-- LandValueCard.tsx      # SRO circle rates, locality multiplier, and user override
+|   |   |   |-- VastuAdvisoryCard.tsx  # Entrance ranking, Mandala grid, and scientific reconciliation
+|   |   |   |-- RecommendationPanel.tsx# Severity-ranked traceable civil action items
+|   |   |   |-- MapCanvas.tsx          # Leaflet map with oriented footprint and midpoint entrance arrow
 |   |   |   |-- ScoreSummaryCard.tsx   # Circular gauge scorecard and feasibility classification
 |   |   |   |-- FactorBreakdown.tsx    # 5 progress bars for MCDA evaluation factors
 |   |   |   |-- OrientationCompass.tsx # Custom SVG engineering compass
 |   |   |   |-- CostBreakdownTable.tsx # Itemized CPWD budget allocations
-|   |   |   |-- RiskMatrix.tsx         # Site constraints and mitigation items
-|   |   |   |-- RecommendationPanel.tsx# Technical commentary and action items
-|   |   |   |-- DownloadReportButton.tsx# Async PDF export trigger
-|   |   |   |-- StatusBanner.tsx       # Warnings and degraded mode alerts
-|   |   |   |-- EmptyState.tsx         # Initial walkthrough instructions
-|   |   |   |-- LoadingSkeleton.tsx    # Staged progress and pulse placeholders
-|   |   |   |-- MethodologyModal.tsx   # Reference dialog for calculation standards
+|   |   |   |-- MethodologyModal.tsx   # Calculation standards dialog with hazard aggregation rules
 |   |   |   `-- Icon.tsx               # Unified inline SVG icon library
-|   |   |-- services/
-|   |   |   |-- api.ts                 # Backend fetch client
-|   |   |   `-- types.ts               # TypeScript data definitions
-|   |   |-- App.tsx                    # Master responsive workspace layout
-|   |   |-- main.tsx                   # React client bootstrap
-|   |   `-- index.css                  # Tailwind directives and Leaflet overrides
-|   |-- index.html                     # HTML5 shell
-|   |-- package.json                   # Frontend dependencies
-|   |-- tsconfig.json                  # TypeScript compiler settings
-|   |-- tailwind.config.js             # Tailwind design token configuration
-|   `-- vite.config.ts                 # Vite bundler configuration
+|   |   |-- services/                  # API client and TypeScript definitions
+|   |   `-- App.tsx                    # Responsive workspace layout
+|   `-- scripts/
+|       `-- audit.cjs                  # Automated 9-viewport Puppeteer DOM integrity audit
 |
 |-- run_project.bat                    # Windows one-click startup launcher
 `-- README.md                          # System documentation
@@ -160,162 +136,73 @@ Buildwise/
 ## Local Installation & Setup
 
 ### Prerequisites
-- Python 3.10 or higher
-- Node.js 18.0 or higher
-- npm 9.0 or higher
+- Python 3.10+
+- Node.js 18+
+- npm 9+
 
-### 1. Backend Setup
+### 1. Launch with One-Click Script (Windows)
+Double-click `run_project.bat` from the root directory to automatically launch both the backend and frontend in separate console windows.
+- Frontend: `http://localhost:5173/`
+- Backend API Docs: `http://localhost:8000/docs`
 
-1. Open a terminal and navigate to the backend directory:
-   ```bash
-   cd backend
-   ```
+### 2. Manual Launch
 
-2. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Configure environment settings:
-   Copy `.env.example` to `.env` (already created with default mock values):
-   ```bash
-   cp .env.example .env
-   ```
-
-4. Run the backend calculation engine unit tests:
-   ```bash
-   python -m pytest tests/
-   ```
-
-5. Start the FastAPI server:
-   ```bash
-   python run_backend.py
-   ```
-   The backend will be live at: `http://127.0.0.1:8000` (API documentation at `http://127.0.0.1:8000/docs`).
-
-### 2. Frontend Setup
-
-1. Open a new terminal and navigate to the frontend directory:
-   ```bash
-   cd frontend
-   ```
-
-2. Install npm dependencies:
-   ```bash
-   npm install
-   ```
-
-3. Build the production bundle to verify types:
-   ```bash
-   npm run build
-   ```
-
-4. Start the Vite development server:
-   ```bash
-   npm run dev
-   ```
-   The frontend will be live at: `http://127.0.0.1:5173/`.
-
-### 3. One-Click Launch (Windows)
-
-Double-click `run_project.bat` from the root directory to automatically launch both the backend and frontend services in separate console windows.
-
----
-
-## Configuration Reference (`backend/.env`)
-
-```ini
-# Server Binding
-HOST=127.0.0.1
-PORT=8000
-CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
-
-# AI Explanation Provider: mock (default), groq, gemini, ollama
-DEFAULT_AI_PROVIDER=mock
-
-# Optional API Keys (Leave blank to use zero-config deterministic mock provider)
-GROQ_API_KEY=
-GEMINI_API_KEY=
-OLLAMA_BASE_URL=http://localhost:11434
-```
-
----
-
-## How to Use BuildWise AI
-
-1. **Select Coordinates**:
-   - Click anywhere on the interactive map canvas to drop a marker pin.
-   - Alternatively, enter exact Latitude and Longitude values into the input fields and click "Update Pin".
-   - The system automatically queries OpenStreetMap Nominatim for the reverse geocoded address.
-
-2. **Configure Parameters**:
-   - Adjust the built-up plinth area slider between 500 and 50,000 square feet.
-   - Choose the specification quality grade (Basic, Standard, Premium).
-   - Select the building typology and number of storeys.
-   - Select your preferred technical explanation engine (defaults to Mock Deterministic).
-
-3. **Run Feasibility Analysis**:
-   - Click "Run Site Feasibility Analysis".
-   - The engine queries digital elevation contours and meteorological telemetry, normalizes MCDA factors, aligns orientation, and estimates CPWD budgets.
-
-4. **Review Results**:
-   - **Scorecard**: Review the composite score (0-100) and classification tag.
-   - **Factor Breakdown**: Inspect the 5 factors, weights, and normalized bars.
-   - **Orientation Compass**: View the optimal building longitudinal axis, summer/winter solar paths, and prevailing wind vector.
-   - **Cost Table**: Examine the itemized preliminary construction budget and terrain slope multiplier.
-   - **Risk Matrix**: Review identified geotechnical and climatic site constraints with mitigations.
-   - **Technical Commentary**: Read the engineering narrative and actionable recommendations.
-
-5. **Download PDF Report**:
-   - Click "Download Engineering Feasibility Report (PDF)" to stream an official vector A4 engineering report directly to your browser.
-
----
-
-## Testing & Quality Assurance
-
-The system includes automated test suites for deterministic calculation algorithms, backend API schemas, ReportLab vector PDF compilation, and headless browser UI integrity across all responsive viewports.
-
-### 1. Deterministic Calculation & Backend Test Suite
+#### Backend
 ```bash
 cd backend
+pip install -r requirements.txt
 python -m pytest tests/ -v
+python -m uvicorn app.main:app --port 8000
 ```
-Test coverage includes:
-- Topographic slope grading thresholds and score boundaries.
-- Hydrological flood risk deductions and altitude metrics.
-- Multi-criteria weights summation (strictly equals 1.0).
-- Bioclimatic passive building orientation angles across Northern and Southern hemispheres.
-- CPWD plinth area base rates, terrain multipliers, and sub-allocation sums.
-- API health check, analysis endpoint schema validation, and PDF binary stream header checks.
 
-### 2. Frontend Responsive UI Integrity Audit Suite
+#### Frontend
+```bash
+cd frontend
+npm install
+npm run build
+npm run audit:ui
+npm run dev
+```
+
+---
+
+## Verification & Automated Test Suites
+
+### 1. Backend Pytest Suite
+```bash
+cd backend
+python -m pytest
+```
+Runs 36 tests covering:
+- MCDA suitability weighting and factor boundaries.
+- Bioclimatic solar noon angles and wind cross-ventilation azimuths.
+- CPWD plinth area cost itemization and slope multipliers.
+- USGS earthquake parsing, magnitude ordering, and 250-event cap warning.
+- Open-Meteo flood guards (dry channel $<0.1\text{ m}^3\text{/s}$ ratio suppression and $20.0\times$ cap).
+- ERA5 10-year mean gust and extreme rainfall calculations.
+- Haversine guidance value spatial matching without geocoding dependency.
+- Vastu entrance portal ranking with road approach bonus (South road top 3: NE, E, S).
+- Unfabricated geometry fallback when Overpass is unreachable.
+- Vector PDF compilation timing (strictly $<3.0$ seconds).
+- Offline resilience and differential comparisons (Bengaluru Zone II vs Guwahati Zone V; Patna flood plain vs Bengaluru upland).
+
+### 2. Frontend Responsive UI Integrity Audit
 ```bash
 cd frontend
 npm run audit:ui
 ```
-Automated Chromium DOM integrity audit across 10 viewport-state configurations (2560x1440, 1920x1080, 1536x900, 1535x900 drawer open/closed, 1366x768 drawer open/closed, 1024x768 drawer open/closed, 900x1000, 768x1024, 390x844). Enforces:
-- Zero horizontal overflow (`scrollWidth <= clientWidth`) on all non-scrolling surfaces.
+Runs automated Chromium Puppeteer checks across 9 standard viewports (`2560x1440`, `1920x1080`, `1536x900`, `1535x900`, `1366x768`, `1024x768`, `900x1000`, `768x1024`, `390x844`) in both Empty and Loaded states. Asserts:
+- Zero horizontal overflow (`scrollWidth <= clientWidth`).
 - Zero page-level horizontal overflow (`document.documentElement.scrollWidth <= window.innerWidth`).
 - Zero vertical clipping on text containers.
 - Zero off-canvas projections.
-- Score gauge SVG dimensions strictly maintained at 120x120px.
-- StatusBanner single-line truncation with full tooltip on desktop and natural word-wrapping below 1024px.
-- Telemetry notice popover reachability via keyboard (`Enter`, `Escape`) and mouse.
-- Formula wrapping with `<wbr>` operator breaks and `overflow-x-auto`.
-- Rail scrolling semantics (`overflow-y-auto overflow-x-clip`) and center map clipping (`overflow-hidden`).
+- Footprint centroid and marker pin coincide within 1px across zoom levels 12–19.
+- Footprint long axis runs within $5^\circ$ of East-West.
 
 ---
 
 ## Engineering Limitations & Assumptions
 
-1. **Preliminary Planning Scope**: Calculations are intended for preliminary architectural feasibility, conceptual planning, and initial budgeting. They do not substitute for an on-site physical geotechnical borehole survey, certified structural analysis, or municipal regulatory sanctions.
-2. **Economic Benchmarks**: Cost estimation defaults to CPWD Plinth Area Rates (PAR) benchmarked in Indian Rupees (INR). Geographic slope, solar altitude, and wind vectors function globally.
-3. **Open Elevation Sampling**: Elevation sampling utilizes Open-Meteo elevation and SRTM models. In remote locations with localized digital elevation errors, a conservative synthetic gradient engages automatically.
-
----
-
-## Future Enhancements
-
-- Integration of geotechnical soil classification GIS layers (e.g., USGS / Survey of India maps).
-- Direct export of 2D DXF boundary contours and 3D IFC / gbXML bioclimatic massing models.
-- Support for customizable municipal building bye-laws (FAR/FSI, setbacks, ground coverage).
+1. **Preliminary Planning Scope**: All calculations are intended for preliminary architectural feasibility, conceptual planning, and initial budgeting. They do not substitute for an on-site physical geotechnical borehole survey, certified structural analysis, or municipal regulatory sanctions.
+2. **Economic Benchmarks**: Land valuation and construction cost estimation default to published Indian state guidance circle rates and CPWD Plinth Area Rates (PAR) benchmarked in Indian Rupees (INR). Geographic slope, solar altitude, seismic risk, and wind vectors function globally.
+3. **Data Provenance Transparency**: Static tables (`seismic_zones.json`, `ndma_hazard_districts.json`, `guidance_values.json`) versioned at 1.0.0 cover state-level baselines, major river basins, and primary demo economic corridors with explicit source notes. Future iterations (v1.1.0) will expand to exhaustive nationwide district registries.
