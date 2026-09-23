@@ -1,7 +1,8 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Icon } from './Icon';
+import type { GeoJsonFeatureCollection } from '../services/types';
 
 interface MapCanvasProps {
   latitude: number | null;
@@ -12,6 +13,8 @@ interface MapCanvasProps {
   invalidateTrigger?: any;
   className?: string;
   entranceDirection?: string;
+  treeClusters?: GeoJsonFeatureCollection | null;
+  waterBodies?: GeoJsonFeatureCollection | null;
 }
 
 export const MapCanvas: React.FC<MapCanvasProps> = ({
@@ -23,12 +26,19 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   invalidateTrigger,
   className = 'h-full w-full',
   entranceDirection,
+  treeClusters,
+  waterBodies,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
   const footprintPolygonRef = useRef<L.Polygon | null>(null);
   const entranceArrowRef = useRef<L.LayerGroup | null>(null);
+  const treeLayerRef = useRef<L.GeoJSON | null>(null);
+  const waterLayerRef = useRef<L.GeoJSON | null>(null);
+
+  const [showTreeLayer, setShowTreeLayer] = useState<boolean>(true);
+  const [showWaterLayer, setShowWaterLayer] = useState<boolean>(true);
 
   const onLocationSelectRef = useRef(onLocationSelect);
   useEffect(() => {
@@ -89,6 +99,14 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       if (entranceArrowRef.current) {
         try { map.removeLayer(entranceArrowRef.current); } catch {}
         entranceArrowRef.current = null;
+      }
+      if (treeLayerRef.current) {
+        try { map.removeLayer(treeLayerRef.current); } catch {}
+        treeLayerRef.current = null;
+      }
+      if (waterLayerRef.current) {
+        try { map.removeLayer(waterLayerRef.current); } catch {}
+        waterLayerRef.current = null;
       }
       map.remove();
       mapInstanceRef.current = null;
@@ -321,12 +339,119 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         try { map.removeLayer(footprintPolygonRef.current); } catch {}
         footprintPolygonRef.current = null;
       }
+      if (treeLayerRef.current) {
+        try { map.removeLayer(treeLayerRef.current); } catch {}
+        treeLayerRef.current = null;
+      }
+      if (waterLayerRef.current) {
+        try { map.removeLayer(waterLayerRef.current); } catch {}
+        waterLayerRef.current = null;
+      }
       if (typeof window !== 'undefined') {
         (window as any).__leafletMarker = null;
         (window as any).__leafletFootprint = null;
+        (window as any).__leafletTreeClusters = null;
+        (window as any).__leafletWaterBodies = null;
       }
     }
   }, [latitude, longitude, orientationDegrees, plinthAreaSqFt, entranceDirection]);
+
+  // Synchronize Ecological GeoJSON Layers (Tree Clusters & Water Bodies)
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    // 1. Manage Tree Clusters Layer
+    if (treeLayerRef.current) {
+      try { map.removeLayer(treeLayerRef.current); } catch {}
+      treeLayerRef.current = null;
+    }
+
+    if (showTreeLayer && treeClusters && treeClusters.features && treeClusters.features.length > 0) {
+      const geoLayer = L.geoJSON(treeClusters as any, {
+        style: (feature) => {
+          const rank = feature?.properties?.rank || feature?.properties?.preservation_rank;
+          let color = '#047857';
+          let fillColor = '#059669';
+          if (rank === 'preserve') {
+            color = '#065f46';
+            fillColor = '#10b981';
+          } else if (rank === 'compensate') {
+            color = '#b45309';
+            fillColor = '#f59e0b';
+          } else if (rank === 'removable') {
+            color = '#be123c';
+            fillColor = '#f43f5e';
+          }
+          return {
+            color,
+            weight: 1.5,
+            fillColor,
+            fillOpacity: 0.35,
+            dashArray: '4, 4',
+          };
+        },
+        onEachFeature: (feature, layer) => {
+          const props = feature.properties || {};
+          const id = props.cluster_id || 'Cluster';
+          const area = props.area_sqm ? `${props.area_sqm} m²` : '';
+          const ndvi = props.mean_ndvi !== undefined ? ` (NDVI: ${props.mean_ndvi.toFixed(2)})` : '';
+          const r = props.rank || props.preservation_rank;
+          const rank = r ? ` [${r.toUpperCase()}]` : '';
+          layer.bindTooltip(`Tree ${id}: ${area}${ndvi}${rank}`, {
+            permanent: false,
+            direction: 'top',
+          });
+        },
+      }).addTo(map);
+
+      treeLayerRef.current = geoLayer;
+    }
+
+    // 2. Manage Water Bodies Layer
+    if (waterLayerRef.current) {
+      try { map.removeLayer(waterLayerRef.current); } catch {}
+      waterLayerRef.current = null;
+    }
+
+    if (showWaterLayer && waterBodies && waterBodies.features && waterBodies.features.length > 0) {
+      const geoLayer = L.geoJSON(waterBodies as any, {
+        style: {
+          color: '#0369A1',
+          weight: 1.5,
+          fillColor: '#0284C7',
+          fillOpacity: 0.4,
+        },
+        onEachFeature: (feature, layer) => {
+          const props = feature.properties || {};
+          const id = props.cluster_id || 'Water Body';
+          const area = props.area_sqm ? `${props.area_sqm} m²` : '';
+          layer.bindTooltip(`${id}: ${area}`, {
+            permanent: false,
+            direction: 'top',
+          });
+        },
+      }).addTo(map);
+
+      waterLayerRef.current = geoLayer;
+    }
+
+    if (typeof window !== 'undefined') {
+      (window as any).__leafletTreeClusters = treeLayerRef.current;
+      (window as any).__leafletWaterBodies = waterLayerRef.current;
+    }
+
+    return () => {
+      if (treeLayerRef.current) {
+        try { map.removeLayer(treeLayerRef.current); } catch {}
+        treeLayerRef.current = null;
+      }
+      if (waterLayerRef.current) {
+        try { map.removeLayer(waterLayerRef.current); } catch {}
+        waterLayerRef.current = null;
+      }
+    };
+  }, [treeClusters, waterBodies, showTreeLayer, showWaterLayer]);
 
   const handleResetView = () => {
     if (mapInstanceRef.current) {
@@ -369,16 +494,56 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         </div>
       )}
 
-      {/* Floating Recenter Button */}
-      <button
-        type="button"
-        onClick={handleResetView}
-        className="absolute top-3 right-3 z-20 bg-white border border-slate-200 text-slate-700 hover:text-slate-900 hover:bg-slate-50 p-2 rounded shadow-sm transition-colors"
-        title="Recenter Map View"
-        aria-label="Recenter Map View"
-      >
-        <Icon name="crosshair" size={16} />
-      </button>
+      {/* Floating Controls: Recenter + Ecological Layer Toggles */}
+      <div className="absolute top-3 right-3 z-20 flex flex-col items-end gap-1.5 pointer-events-auto">
+        <button
+          type="button"
+          onClick={handleResetView}
+          className="bg-white border border-slate-200 text-slate-700 hover:text-slate-900 hover:bg-slate-50 p-2 rounded shadow-sm transition-colors cursor-pointer"
+          title="Recenter Map View"
+          aria-label="Recenter Map View"
+        >
+          <Icon name="crosshair" size={16} />
+        </button>
+
+        {/* Layer Toggles Pill (shown only when features exist) */}
+        {((treeClusters?.features?.length ?? 0) > 0 || (waterBodies?.features?.length ?? 0) > 0) && (
+          <div className="bg-white/95 backdrop-blur-sm border border-slate-200 rounded-md shadow-sm p-1 flex flex-col gap-1 text-xs">
+            {(treeClusters?.features?.length ?? 0) > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowTreeLayer((prev) => !prev)}
+                className={`flex items-center gap-1 px-2 py-1 rounded transition-colors text-[11px] font-medium cursor-pointer ${
+                  showTreeLayer
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-300'
+                    : 'text-slate-500 hover:bg-slate-100 border border-transparent'
+                }`}
+                title="Toggle Tree Canopy Layer"
+                aria-label="Toggle Tree Canopy Layer"
+              >
+                <Icon name="tree" size={12} className={showTreeLayer ? 'text-emerald-700' : 'text-slate-400'} />
+                <span>Canopy ({treeClusters?.features.length})</span>
+              </button>
+            )}
+            {(waterBodies?.features?.length ?? 0) > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowWaterLayer((prev) => !prev)}
+                className={`flex items-center gap-1 px-2 py-1 rounded transition-colors text-[11px] font-medium cursor-pointer ${
+                  showWaterLayer
+                    ? 'bg-sky-50 text-sky-800 border border-sky-300'
+                    : 'text-slate-500 hover:bg-slate-100 border border-transparent'
+                }`}
+                title="Toggle Water Bodies Layer"
+                aria-label="Toggle Water Bodies Layer"
+              >
+                <Icon name="droplet" size={12} className={showWaterLayer ? 'text-sky-700' : 'text-slate-400'} />
+                <span>Water ({waterBodies?.features.length})</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

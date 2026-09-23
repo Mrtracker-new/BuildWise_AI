@@ -151,6 +151,28 @@ export const MethodologyModal: React.FC<MethodologyModalProps> = ({ isOpen, onCl
               BuildWise AI operates without paid APIs, using OpenStreetMap Nominatim for geocoding, Open-Elevation / Open-Meteo for digital elevation models, USGS FDSN for seismic event catalogs, ECMWF ERA5 for climate reanalysis, and Overpass for road network topology. Responses are cached with a 24-hour TTL on a 0.1° coordinate grid. If external services are unreachable, deterministic fallback models engage with transparent user warnings.
             </p>
           </div>
+
+          {/* Section 7: Ecological Site Vision & Tree Preservation */}
+          <div className="space-y-1.5 pt-2 border-t border-slate-100">
+            <h4 className="font-semibold text-slate-900 uppercase text-[11px] tracking-wider">
+              7. Remote Sensing & Ecological Site Vision Pipeline
+            </h4>
+            <p className="text-[11px] text-slate-600">
+              The ecological vision module queries the keyless Copernicus Sentinel-2 L2A archive via the Element84 Earth Search STAC API, fetching cloud-screened (&lt;20% cloud cover) multispectral Cloud-Optimized GeoTIFFs (COGs) across a 240m &times; 240m site window at 10m spatial resolution.
+            </p>
+            <div className="p-2.5 bg-slate-50 rounded border border-slate-200 font-mono text-[11px] text-slate-800 space-y-1 overflow-x-auto scrollbar-thin">
+              <div>NDVI = (B08 - B04) / (B08 + B04) &rarr; Canopy Mask if NDVI &gt; 0.40</div>
+              <div>NDWI = (B03 - B08) / (B03 + B08) &rarr; Water Mask if NDWI &gt; 0.05</div>
+              <div>NDBI = (B11 - B08) / (B11 + B08) &rarr; Built-up Mask if NDBI &gt; 0.00</div>
+            </div>
+            <ul className="list-disc list-inside space-y-1 text-[11px] text-slate-600">
+              <li><b>Band Resolution Alignment</b>: B11 (SWIR 1610nm, 20m GSD) is upsampled to the 10m grid shape using bilinear spline interpolation prior to NDBI calculation.</li>
+              <li><b>Cloud & Shadow Masking</b>: Sentinel-2 Scene Classification Layer (SCL) masks saturated, cloud, and cirrus pixels (classes 1, 8, 9, 10, 11).</li>
+              <li><b>SegFormer B0 AI Refinement</b>: A CPU-optimized <code>nvidia/segformer-b0-finetuned-ade-512-512</code> model (capped at 2 CPU threads) processes bilinearly upscaled 512&times;512 RGB tensors with percentile contrast enhancement, mapping ADE20K tree classes (&#123;4, 9, 17, 29, 72&#125;) and downscaling back to 24&times;24 via nearest-neighbor interpolation. If unavailable or slow, it falls back instantly to Index-only mode.</li>
+              <li><b>Connected Component Vectorization</b>: Binary masks are segmented using 8-connectivity labeling, filtered to clusters &ge; 25 m², simplified via Douglas-Peucker (&epsilon;=0.0001°), and projected to WGS84 GeoJSON polygons.</li>
+              <li><b>Tree Preservation Hierarchy</b>: Clusters &ge; 100 m² with NDVI &ge; 0.50 are marked <b>PRESERVE</b> (mandatory root protection zone). Clusters &ge; 50 m² overlapping the proposed building footprint are marked <b>COMPENSATE</b> (translocation/replanting). Small clusters &lt; 50 m² overlapping footprint are marked <b>REMOVABLE</b>, and others are marked <b>CONTEXT</b>.</li>
+            </ul>
+          </div>
         </div>
 
         {/* Modal Footer */}

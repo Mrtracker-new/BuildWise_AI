@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import type { AnalysisRequest, AnalysisResponse } from './services/types';
-import { fetchHealth, submitAnalysis } from './services/api';
+import type { AnalysisRequest, AnalysisResponse, SiteVisionResponse } from './services/types';
+import { fetchHealth, submitAnalysis, submitSiteVision } from './services/api';
 import { AppHeader } from './components/AppHeader';
 import { MapCanvas } from './components/MapCanvas';
 import { CoordinatesInput } from './components/CoordinatesInput';
 import { AnalysisForm } from './components/AnalysisForm';
 import { ScoreSummaryCard } from './components/ScoreSummaryCard';
 import { HazardProfileCard } from './components/HazardProfileCard';
+import { SiteVisionCard } from './components/SiteVisionCard';
 import { FactorBreakdown } from './components/FactorBreakdown';
 import { OrientationCompass } from './components/OrientationCompass';
 import { VastuAdvisoryCard } from './components/VastuAdvisoryCard';
@@ -38,6 +39,8 @@ export const App: React.FC = () => {
   const [analysisData, setAnalysisData] = useState<AnalysisResponse | null>(null);
   const [overrideLandRate, setOverrideLandRate] = useState<number | null>(null);
   const [overridePlotArea, setOverridePlotArea] = useState<number | null>(null);
+  const [siteVisionData, setSiteVisionData] = useState<SiteVisionResponse | null>(null);
+  const [isSiteVisionLoading, setIsSiteVisionLoading] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [backendConnected, setBackendConnected] = useState<boolean>(false);
@@ -121,17 +124,50 @@ export const App: React.FC = () => {
       longitude: lon,
     }));
     setHasLocation(true);
+    setSiteVisionData(null);
   };
 
   const handleClearLocation = () => {
     setHasLocation(false);
     setAnalysisData(null);
+    setSiteVisionData(null);
     setErrorMessage(null);
     setIsDrawerOpen(false);
   };
 
   const handleRequestChange = (updated: Partial<AnalysisRequest>) => {
     setRequest((prev) => ({ ...prev, ...updated }));
+  };
+
+  // Run Satellite Vision Analysis
+  const handleRunSiteVision = async (modeOverride?: 'segformer' | 'index-only') => {
+    if (!hasLocation) return;
+    setIsSiteVisionLoading(true);
+    try {
+      const resp = await submitSiteVision({
+        latitude: request.latitude,
+        longitude: request.longitude,
+        plot_area_sqft: overridePlotArea ?? (analysisData?.land_value?.plot_area_sqft ?? 2000),
+        mode_override: modeOverride,
+        orientation_deg: analysisData?.orientation?.optimal_axis_degrees ?? undefined,
+      });
+      setSiteVisionData(resp);
+    } catch (err: any) {
+      setSiteVisionData({
+        mode: 'unavailable',
+        green_cover_pct: 0,
+        water_cover_pct: 0,
+        built_up_pct: 0,
+        tree_clusters: { type: 'FeatureCollection', features: [] },
+        water_bodies: { type: 'FeatureCollection', features: [] },
+        preservation_plan: [],
+        warnings: [err.message || 'Satellite vision service temporarily unreachable.'],
+        timing_ms: {},
+      });
+    } finally {
+      setIsSiteVisionLoading(false);
+      triggerMapResize();
+    }
   };
 
   // Run Feasibility Analysis
@@ -147,6 +183,9 @@ export const App: React.FC = () => {
 
     // On 1024px - 1535px, open the drawer so results/skeleton are immediately visible
     setIsDrawerOpen(true);
+
+    // Concurrently trigger site vision scan
+    handleRunSiteVision();
 
     try {
       const response = await submitAnalysis(request);
@@ -175,6 +214,7 @@ export const App: React.FC = () => {
     });
     setHasLocation(true);
     setAnalysisData(null);
+    setSiteVisionData(null);
     setErrorMessage(null);
     setIsDrawerOpen(false);
     setIsWarningDismissed(false);
@@ -218,6 +258,7 @@ export const App: React.FC = () => {
 
       const reportPayload: AnalysisResponse = {
         ...analysisData,
+        site_vision: siteVisionData ?? undefined,
         land_value: analysisData.land_value
           ? {
               ...analysisData.land_value,
@@ -240,7 +281,15 @@ export const App: React.FC = () => {
             <HazardProfileCard hazard={analysisData.hazard_profile} />
           )}
 
-          {/* 3. Factor Breakdown Bars */}
+          {/* 3. Ecological Site Vision & Tree Preservation */}
+          <SiteVisionCard
+            data={siteVisionData}
+            isLoading={isSiteVisionLoading}
+            onScan={handleRunSiteVision}
+            hasCoordinates={hasLocation}
+          />
+
+          {/* 4. Factor Breakdown Bars */}
           <FactorBreakdown factors={analysisData.factors} />
 
           {/* 4. Passive Orientation Compass */}
@@ -351,6 +400,8 @@ export const App: React.FC = () => {
             onLocationSelect={handleLocationSelect}
             invalidateTrigger={leafletResizeTrigger}
             entranceDirection={analysisData?.vastu_advisory?.ranked_entrances?.[0]?.direction}
+            treeClusters={siteVisionData?.tree_clusters}
+            waterBodies={siteVisionData?.water_bodies}
             className="w-full h-full"
           />
 
@@ -455,6 +506,8 @@ export const App: React.FC = () => {
             onLocationSelect={handleLocationSelect}
             invalidateTrigger={leafletResizeTrigger}
             entranceDirection={analysisData?.vastu_advisory?.ranked_entrances?.[0]?.direction}
+            treeClusters={siteVisionData?.tree_clusters}
+            waterBodies={siteVisionData?.water_bodies}
             className="w-full h-full"
           />
         </section>
