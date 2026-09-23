@@ -1,6 +1,7 @@
 import math
 from typing import List, Dict, Tuple, Optional, Any, Set
 from app.services.floorplan.grid_model import RoomBox, SpatialGrid, ROOM_CATALOG
+from app.schemas.floorplan import RectanglesModel, EnvelopeRect, RoomRectangle, DoorGeometry, WindowGeometry
 
 # Professional architectural pastel fills (15% opacity is applied in SVG rendering)
 PASTEL_COLORS: Dict[str, str] = {
@@ -73,22 +74,23 @@ def _subtract_intervals(
 
 
 def generate_blueprint_svg(
-    placements: List[RoomBox],
-    grid: SpatialGrid,
-    plot_width_m: float,
-    plot_depth_m: float
+    placements: Any = None,
+    grid: Any = None,
+    plot_width_m: float = 10.0,
+    plot_depth_m: float = 12.0,
+    rectangles: Optional[RectanglesModel] = None,
+    theme: str = "cad"
 ) -> str:
     """
-    Renders an architectural 2D blueprint SVG from a solved RoomBox layout.
-    Features:
-    - Clean wall joints (interior walls terminate at inner face of exterior walls, no corner poke-through)
-    - Calculated 0.9m door gaps (true gaps in wall lines, zero overlapping rect cover-ups)
-    - Mathematically verified SVG <path> door swing arcs swinging strictly INTO rooms
-    - 3-line exterior window representations
-    - Architectural dimension lines with 45-degree diagonal slashes
-    - Centered uppercase typography with metric dimensions and 15% opacity fills
-    - Dark mode CAD drafting aesthetic (AutoCAD / Revit digital drafting style)
+    Renders an architectural 2D blueprint SVG from a solved layout.
+    Delegates to generate_blueprint_from_rectangles when continuous rectangles model is provided,
+    or falls back to legacy RoomBox drafting.
     """
+    if isinstance(placements, RectanglesModel):
+        return generate_blueprint_from_rectangles(placements, plot_width_m, plot_depth_m, theme=theme)
+    if rectangles is not None:
+        return generate_blueprint_from_rectangles(rectangles, plot_width_m, plot_depth_m, theme=theme)
+
     cell_px = 52.0
     margin_x = 80.0
     margin_y = 80.0
@@ -688,6 +690,292 @@ def generate_blueprint_svg(
     svg.append('<text x="30" y="11" font-size="6.5" fill="#94A3B8" text-anchor="middle">1m</text>')
     svg.append('<text x="60" y="11" font-size="6.5" fill="#94A3B8" text-anchor="middle">2m</text>')
     svg.append('<text x="90" y="11" font-size="6.5" fill="#94A3B8" text-anchor="middle">3m</text>')
+    svg.append('</g>')
+
+    svg.append('</svg>')
+    return "".join(svg)
+
+
+def generate_blueprint_from_rectangles(
+    rectangles: RectanglesModel,
+    plot_width_m: float,
+    plot_depth_m: float,
+    theme: str = "cad"
+) -> str:
+    """
+    Renders an architectural 2D blueprint SVG from a RectanglesModel.
+    Supports 'cad' (dark digital CAD theme) and 'paper' (publication paper blueprint theme).
+    Features:
+    - Envelope drawn as closed exterior walls (6px thick) with door/window openings
+    - Clean interior partition walls (3px thick) sharing exact coordinates, zero poke-through
+    - True wall gaps for 0.9m doors with 90-degree swing arcs
+    - 3-line exterior window representations
+    - 45-degree diagonal ticked dimension lines along top and left
+    - Centered uppercase typography with metric dimensions and 12% opacity pastel fills
+    """
+    is_cad = (theme.lower() == "cad")
+    bg_sheet = "#0F172A" if is_cad else "#FFFFFF"
+    grid_line = "#1E293B" if is_cad else "#E2E8F0"
+    ext_stroke = "#38BDF8" if is_cad else "#0F172A"
+    int_stroke = "#94A3B8" if is_cad else "#475569"
+    dim_stroke = "#64748B" if is_cad else "#334155"
+    dim_tick_stroke = "#38BDF8" if is_cad else "#0F172A"
+    text_primary = "#F8FAFC" if is_cad else "#0F172A"
+    text_secondary = "#94A3B8" if is_cad else "#64748B"
+    door_stroke = "#38BDF8" if is_cad else "#0284C7"
+    fill_op = "0.12" if is_cad else "0.10"
+
+    scale_px = min(680.0 / max(plot_width_m, 0.1), 540.0 / max(plot_depth_m, 0.1))
+    scale_px = max(36.0, min(56.0, scale_px))
+
+    margin_x = 75.0
+    margin_y = 75.0
+    content_w = plot_width_m * scale_px
+    content_h = plot_depth_m * scale_px
+    svg_w = content_w + (2.0 * margin_x)
+    svg_h = content_h + (2.0 * margin_y)
+
+    def px(x): return margin_x + (x * scale_px)
+    def py(y): return margin_y + (y * scale_px)
+
+    svg = []
+    svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_w:.1f} {svg_h:.1f}" width="100%" height="100%" style="background-color:{bg_sheet};">')
+    svg.append(f'''
+      <defs>
+        <pattern id="arch-sheet-grid-1m" width="{scale_px:.1f}" height="{scale_px:.1f}" patternUnits="userSpaceOnUse">
+          <path d="M {scale_px:.1f} 0 L 0 0 0 {scale_px:.1f}" fill="none" stroke="{grid_line}" stroke-width="0.6" />
+        </pattern>
+        <marker id="entry-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 9 5 L 0 9 z" fill="#10B981" />
+        </marker>
+      </defs>
+    ''')
+
+    # Drawing Sheet Background & Grid
+    svg.append(f'<rect width="{svg_w:.1f}" height="{svg_h:.1f}" fill="{bg_sheet}" />')
+    svg.append(f'<rect x="{margin_x:.1f}" y="{margin_y:.1f}" width="{content_w:.1f}" height="{content_h:.1f}" fill="url(#arch-sheet-grid-1m)" />')
+    # Setback boundary
+    svg.append(f'<rect x="{margin_x:.1f}" y="{margin_y:.1f}" width="{content_w:.1f}" height="{content_h:.1f}" fill="none" stroke="{dim_stroke}" stroke-width="1.0" stroke-dasharray="4 4" />')
+
+    # Room Fills
+    for r in rectangles.rooms:
+        rx = px(r.x)
+        ry = py(r.y)
+        rw = r.width * scale_px
+        rh = r.height * scale_px
+        fcolor = PASTEL_COLORS.get(r.room_id, "#38BDF8")
+        svg.append(f'<rect x="{rx:.1f}" y="{ry:.1f}" width="{rw:.1f}" height="{rh:.1f}" fill="{fcolor}" fill-opacity="{fill_op}" id="room-{r.room_id}" />')
+
+    # Interior Shared Walls (with door cutouts)
+    doors = rectangles.doors
+    rooms = rectangles.rooms
+    for i in range(len(rooms)):
+        r1 = rooms[i]
+        for j in range(i + 1, len(rooms)):
+            r2 = rooms[j]
+            # Vertical contact
+            if abs((r1.x + r1.width) - r2.x) < 0.05 or abs((r2.x + r2.width) - r1.x) < 0.05:
+                wx = (r1.x + r1.width) if abs((r1.x + r1.width) - r2.x) < 0.05 else (r2.x + r2.width)
+                y1 = max(r1.y, r2.y)
+                y2 = min(r1.y + r1.height, r2.y + r2.height)
+                if y2 - y1 >= 0.1:
+                    base = (py(y1), py(y2))
+                    cuts = []
+                    for d in doors:
+                        if d.wall_edge == "vertical" and abs(d.x1 - wx) < 0.08:
+                            cuts.append((py(d.y1), py(d.y2)))
+                    segs = _subtract_intervals(base, cuts)
+                    for sy1, sy2 in segs:
+                        svg.append(f'<line x1="{px(wx):.1f}" y1="{sy1:.1f}" x2="{px(wx):.1f}" y2="{sy2:.1f}" stroke="{int_stroke}" stroke-width="3.0" stroke-linecap="square" />')
+
+            # Horizontal contact
+            elif abs((r1.y + r1.height) - r2.y) < 0.05 or abs((r2.y + r2.height) - r1.y) < 0.05:
+                wy = (r1.y + r1.height) if abs((r1.y + r1.height) - r2.y) < 0.05 else (r2.y + r2.height)
+                x1 = max(r1.x, r2.x)
+                x2 = min(r1.x + r1.width, r2.x + r2.width)
+                if x2 - x1 >= 0.1:
+                    base = (px(x1), px(x2))
+                    cuts = []
+                    for d in doors:
+                        if d.wall_edge == "horizontal" and abs(d.y1 - wy) < 0.08:
+                            cuts.append((px(d.x1), px(d.x2)))
+                    segs = _subtract_intervals(base, cuts)
+                    for sx1, sx2 in segs:
+                        svg.append(f'<line x1="{sx1:.1f}" y1="{py(wy):.1f}" x2="{sx2:.1f}" y2="{py(wy):.1f}" stroke="{int_stroke}" stroke-width="3.0" stroke-linecap="square" />')
+
+    # Exterior Envelope Walls (with door and window cutouts)
+    env = rectangles.envelope
+    # North Edge (y = env.y)
+    n_base = (px(env.x), px(env.x + env.width))
+    n_cuts = []
+    for d in doors:
+        if d.wall_edge == "horizontal" and abs(d.y1 - env.y) < 0.05:
+            n_cuts.append((px(d.x1), px(d.x2)))
+    for w in rectangles.windows:
+        if w.wall_edge == "north" and abs(w.y1 - env.y) < 0.05:
+            n_cuts.append((px(w.x1), px(w.x2)))
+    for sx1, sx2 in _subtract_intervals(n_base, n_cuts):
+        svg.append(f'<line x1="{sx1:.1f}" y1="{py(env.y):.1f}" x2="{sx2:.1f}" y2="{py(env.y):.1f}" stroke="{ext_stroke}" stroke-width="6.0" stroke-linecap="square" />')
+
+    # South Edge (y = env.y + env.height)
+    s_y = env.y + env.height
+    s_base = (px(env.x), px(env.x + env.width))
+    s_cuts = []
+    for d in doors:
+        if d.wall_edge == "horizontal" and abs(d.y1 - s_y) < 0.05:
+            s_cuts.append((px(d.x1), px(d.x2)))
+    for w in rectangles.windows:
+        if w.wall_edge == "south" and abs(w.y1 - s_y) < 0.05:
+            s_cuts.append((px(w.x1), px(w.x2)))
+    for sx1, sx2 in _subtract_intervals(s_base, s_cuts):
+        svg.append(f'<line x1="{sx1:.1f}" y1="{py(s_y):.1f}" x2="{sx2:.1f}" y2="{py(s_y):.1f}" stroke="{ext_stroke}" stroke-width="6.0" stroke-linecap="square" />')
+
+    # West Edge (x = env.x)
+    w_base = (py(env.y), py(env.y + env.height))
+    w_cuts = []
+    for d in doors:
+        if d.wall_edge == "vertical" and abs(d.x1 - env.x) < 0.05:
+            w_cuts.append((py(d.y1), py(d.y2)))
+    for w in rectangles.windows:
+        if w.wall_edge == "west" and abs(w.x1 - env.x) < 0.05:
+            w_cuts.append((py(w.y1), py(w.y2)))
+    for sy1, sy2 in _subtract_intervals(w_base, w_cuts):
+        svg.append(f'<line x1="{px(env.x):.1f}" y1="{sy1:.1f}" x2="{px(env.x):.1f}" y2="{sy2:.1f}" stroke="{ext_stroke}" stroke-width="6.0" stroke-linecap="square" />')
+
+    # East Edge (x = env.x + env.width)
+    e_x = env.x + env.width
+    e_base = (py(env.y), py(env.y + env.height))
+    e_cuts = []
+    for d in doors:
+        if d.wall_edge == "vertical" and abs(d.x1 - e_x) < 0.05:
+            e_cuts.append((py(d.y1), py(d.y2)))
+    for w in rectangles.windows:
+        if w.wall_edge == "east" and abs(w.x1 - e_x) < 0.05:
+            e_cuts.append((py(w.y1), py(w.y2)))
+    for sy1, sy2 in _subtract_intervals(e_base, e_cuts):
+        svg.append(f'<line x1="{px(e_x):.1f}" y1="{sy1:.1f}" x2="{px(e_x):.1f}" y2="{sy2:.1f}" stroke="{ext_stroke}" stroke-width="6.0" stroke-linecap="square" />')
+
+    # Windows (3-line representation)
+    for win in rectangles.windows:
+        if win.wall_edge in ("north", "south"):
+            x1 = px(win.x1)
+            x2 = px(win.x2)
+            y = py(win.y1)
+            svg.append(f'<line x1="{x1:.1f}" y1="{y - 2.0:.1f}" x2="{x2:.1f}" y2="{y - 2.0:.1f}" stroke="#0284C7" stroke-width="1.0" />')
+            svg.append(f'<line x1="{x1:.1f}" y1="{y:.1f}" x2="{x2:.1f}" y2="{y:.1f}" stroke="{ext_stroke}" stroke-width="1.2" />')
+            svg.append(f'<line x1="{x1:.1f}" y1="{y + 2.0:.1f}" x2="{x2:.1f}" y2="{y + 2.0:.1f}" stroke="#0284C7" stroke-width="1.0" />')
+            svg.append(f'<line x1="{x1:.1f}" y1="{y - 2.5:.1f}" x2="{x1:.1f}" y2="{y + 2.5:.1f}" stroke="{ext_stroke}" stroke-width="1.0" />')
+            svg.append(f'<line x1="{x2:.1f}" y1="{y - 2.5:.1f}" x2="{x2:.1f}" y2="{y + 2.5:.1f}" stroke="{ext_stroke}" stroke-width="1.0" />')
+        else:
+            y1 = py(win.y1)
+            y2 = py(win.y2)
+            x = px(win.x1)
+            svg.append(f'<line x1="{x - 2.0:.1f}" y1="{y1:.1f}" x2="{x - 2.0:.1f}" y2="{y2:.1f}" stroke="#0284C7" stroke-width="1.0" />')
+            svg.append(f'<line x1="{x:.1f}" y1="{y1:.1f}" x2="{x:.1f}" y2="{y2:.1f}" stroke="{ext_stroke}" stroke-width="1.2" />')
+            svg.append(f'<line x1="{x + 2.0:.1f}" y1="{y1:.1f}" x2="{x + 2.0:.1f}" y2="{y2:.1f}" stroke="#0284C7" stroke-width="1.0" />')
+            svg.append(f'<line x1="{x - 2.5:.1f}" y1="{y1:.1f}" x2="{x + 2.5:.1f}" y2="{y1:.1f}" stroke="{ext_stroke}" stroke-width="1.0" />')
+            svg.append(f'<line x1="{x - 2.5:.1f}" y1="{y2:.1f}" x2="{x + 2.5:.1f}" y2="{y2:.1f}" stroke="{ext_stroke}" stroke-width="1.0" />')
+
+    # Doors (Leaf Line + Swing Arc)
+    for d in doors:
+        hx = px(d.hinge_x)
+        hy = py(d.hinge_y)
+        dw = d.width_m * scale_px
+        if d.wall_edge == "vertical":
+            if d.swing_direction == "inward_left":
+                lx = hx - dw
+                ly = hy
+                swp = 1
+                arc_x = lx
+                arc_y = hy
+                start_x = hx
+                start_y = hy + dw
+            else:
+                lx = hx + dw
+                ly = hy
+                swp = 0
+                arc_x = lx
+                arc_y = hy
+                start_x = hx
+                start_y = hy + dw
+            svg.append(f'<line x1="{hx:.1f}" y1="{hy:.1f}" x2="{lx:.1f}" y2="{ly:.1f}" stroke="{door_stroke}" stroke-width="2.0" />')
+            svg.append(f'<path d="M {start_x:.1f} {start_y:.1f} A {dw:.1f} {dw:.1f} 0 0 {swp} {arc_x:.1f} {arc_y:.1f}" fill="none" stroke="{door_stroke}" stroke-width="1.4" stroke-dasharray="3 3" />')
+        else: # horizontal
+            if d.swing_direction == "inward_left":
+                lx = hx
+                ly = hy - dw
+                swp = 0
+                arc_x = lx
+                arc_y = ly
+                start_x = hx + dw
+                start_y = hy
+            else:
+                lx = hx
+                ly = hy + dw
+                swp = 1
+                arc_x = lx
+                arc_y = ly
+                start_x = hx + dw
+                start_y = hy
+            svg.append(f'<line x1="{hx:.1f}" y1="{hy:.1f}" x2="{lx:.1f}" y2="{ly:.1f}" stroke="{door_stroke}" stroke-width="2.0" />')
+            svg.append(f'<path d="M {start_x:.1f} {start_y:.1f} A {dw:.1f} {dw:.1f} 0 0 {swp} {arc_x:.1f} {arc_y:.1f}" fill="none" stroke="{door_stroke}" stroke-width="1.4" stroke-dasharray="3 3" />')
+
+        if d.door_id == "main_entry":
+            mx = (px(d.x1) + px(d.x2)) / 2.0
+            my = (py(d.y1) + py(d.y2)) / 2.0
+            svg.append(f'<line x1="{mx:.1f}" y1="{my - 22.0:.1f}" x2="{mx:.1f}" y2="{my - 6.0:.1f}" stroke="#10B981" stroke-width="2.2" marker-end="url(#entry-arrow)" />')
+            svg.append(f'<text x="{mx:.1f}" y="{my - 26.0:.1f}" font-size="8.5" font-weight="700" fill="#10B981" text-anchor="middle" letter-spacing="1">MAIN ENTRY</text>')
+
+    # Centered Room Labels
+    for r in rooms:
+        cx = px(r.x + r.width / 2.0)
+        cy = py(r.y + r.height / 2.0)
+        svg.append(f'<text x="{cx:.1f}" y="{cy - 4.0:.1f}" font-size="10.5" font-weight="700" fill="{text_primary}" text-anchor="middle" letter-spacing="1">{r.room_name.upper()}</text>')
+        svg.append(f'<text x="{cx:.1f}" y="{cy + 10.0:.1f}" font-size="8.5" font-weight="500" fill="{text_secondary}" text-anchor="middle">{r.width:.2f}m × {r.height:.2f}m | {r.area_sqm:.1f} m²</text>')
+
+    # Dimension lines along top and left
+    dim_top_y = margin_y - 24.0
+    dim_x1 = margin_x
+    dim_x2 = margin_x + content_w
+    svg.append(f'<line x1="{dim_x1:.1f}" y1="{margin_y - 4:.1f}" x2="{dim_x1:.1f}" y2="{dim_top_y - 6:.1f}" stroke="#475569" stroke-width="0.8" stroke-dasharray="2 2" />')
+    svg.append(f'<line x1="{dim_x2:.1f}" y1="{margin_y - 4:.1f}" x2="{dim_x2:.1f}" y2="{dim_top_y - 6:.1f}" stroke="#475569" stroke-width="0.8" stroke-dasharray="2 2" />')
+    svg.append(f'<line x1="{dim_x1:.1f}" y1="{dim_top_y:.1f}" x2="{dim_x2:.1f}" y2="{dim_top_y:.1f}" stroke="{dim_stroke}" stroke-width="1.2" />')
+    svg.append(f'<line x1="{dim_x1 - 4.5:.1f}" y1="{dim_top_y + 4.5:.1f}" x2="{dim_x1 + 4.5:.1f}" y2="{dim_top_y - 4.5:.1f}" stroke="{dim_tick_stroke}" stroke-width="1.6" />')
+    svg.append(f'<line x1="{dim_x2 - 4.5:.1f}" y1="{dim_top_y + 4.5:.1f}" x2="{dim_x2 + 4.5:.1f}" y2="{dim_top_y - 4.5:.1f}" stroke="{dim_tick_stroke}" stroke-width="1.6" />')
+    svg.append(f'<text x="{(dim_x1 + dim_x2) / 2.0:.1f}" y="{dim_top_y - 7.0:.1f}" font-size="9.0" font-weight="600" fill="{text_secondary}" text-anchor="middle" letter-spacing="0.5">{plot_width_m:.1f} m FRONTAGE</text>')
+
+    dim_left_x = margin_x - 24.0
+    dim_y1 = margin_y
+    dim_y2 = margin_y + content_h
+    svg.append(f'<line x1="{margin_x - 4:.1f}" y1="{dim_y1:.1f}" x2="{dim_left_x - 6:.1f}" y2="{dim_y1:.1f}" stroke="#475569" stroke-width="0.8" stroke-dasharray="2 2" />')
+    svg.append(f'<line x1="{margin_x - 4:.1f}" y1="{dim_y2:.1f}" x2="{dim_left_x - 6:.1f}" y2="{dim_y2:.1f}" stroke="#475569" stroke-width="0.8" stroke-dasharray="2 2" />')
+    svg.append(f'<line x1="{dim_left_x:.1f}" y1="{dim_y1:.1f}" x2="{dim_left_x:.1f}" y2="{dim_y2:.1f}" stroke="{dim_stroke}" stroke-width="1.2" />')
+    svg.append(f'<line x1="{dim_left_x - 4.5:.1f}" y1="{dim_y1 + 4.5:.1f}" x2="{dim_left_x + 4.5:.1f}" y2="{dim_y1 - 4.5:.1f}" stroke="{dim_tick_stroke}" stroke-width="1.6" />')
+    svg.append(f'<line x1="{dim_left_x - 4.5:.1f}" y1="{dim_y2 + 4.5:.1f}" x2="{dim_left_x + 4.5:.1f}" y2="{dim_y2 - 4.5:.1f}" stroke="{dim_tick_stroke}" stroke-width="1.6" />')
+    svg.append(f'<text x="{dim_left_x - 9.0:.1f}" y="{(dim_y1 + dim_y2) / 2.0:.1f}" font-size="9.0" font-weight="600" fill="{text_secondary}" text-anchor="middle" transform="rotate(-90 {dim_left_x - 9.0:.1f} {(dim_y1 + dim_y2) / 2.0:.1f})" letter-spacing="0.5">{plot_depth_m:.1f} m DEPTH</text>')
+
+    # North Compass
+    compass_x = svg_w - 42.0
+    compass_y = 38.0
+    svg.append(f'<g transform="translate({compass_x}, {compass_y})">')
+    svg.append(f'<circle cx="0" cy="0" r="15" fill="#1E293B" stroke="{dim_tick_stroke}" stroke-width="1.2" />')
+    svg.append(f'<polygon points="0,-13 4,0 0,-2 -4,0" fill="{dim_tick_stroke}" />')
+    svg.append('<polygon points="0,13 4,0 0,2 -4,0" fill="#475569" />')
+    svg.append(f'<text x="0" y="-16" font-size="8.5" font-weight="800" fill="{dim_tick_stroke}" text-anchor="middle">N</text>')
+    svg.append('</g>')
+
+    # Scale bar
+    scale_x = margin_x
+    scale_y = svg_h - 22.0
+    svg.append(f'<g transform="translate({scale_x}, {scale_y})">')
+    svg.append(f'<text x="0" y="-6" font-size="7.5" font-weight="600" fill="{text_secondary}" letter-spacing="0.5">GRAPHIC SCALE (METRIC)</text>')
+    svg.append(f'<rect x="0" y="0" width="30" height="4" fill="{dim_tick_stroke}" stroke="{dim_tick_stroke}" stroke-width="0.5" />')
+    svg.append(f'<rect x="30" y="0" width="30" height="4" fill="#1E293B" stroke="{dim_tick_stroke}" stroke-width="0.5" />')
+    svg.append(f'<rect x="60" y="0" width="30" height="4" fill="{dim_tick_stroke}" stroke="{dim_tick_stroke}" stroke-width="0.5" />')
+    svg.append(f'<text x="0" y="11" font-size="6.5" fill="{text_secondary}" text-anchor="middle">0</text>')
+    svg.append(f'<text x="30" y="11" font-size="6.5" fill="{text_secondary}" text-anchor="middle">1m</text>')
+    svg.append(f'<text x="60" y="11" font-size="6.5" fill="{text_secondary}" text-anchor="middle">2m</text>')
+    svg.append(f'<text x="90" y="11" font-size="6.5" fill="{text_secondary}" text-anchor="middle">3m</text>')
     svg.append('</g>')
 
     svg.append('</svg>')

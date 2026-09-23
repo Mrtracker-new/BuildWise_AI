@@ -260,7 +260,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       {floorPlan && (
         <div className="space-y-3 pt-2">
           {/* Metrics Strip */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
             <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
               <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Vastu Score</span>
               <span className="text-base font-bold text-slate-900 font-mono">
@@ -274,9 +274,15 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
               </span>
             </div>
             <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Space Efficiency</span>
+              <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Envelope Util.</span>
               <span className="text-base font-bold text-slate-900 font-mono">
                 {floorPlan.metrics.space_utilization_pct.toFixed(0)}%
+              </span>
+            </div>
+            <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+              <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Plot Coverage</span>
+              <span className="text-base font-bold text-slate-900 font-mono">
+                {floorPlan.metrics.plot_coverage_pct ? `${floorPlan.metrics.plot_coverage_pct.toFixed(0)}%` : 'N/A'}
               </span>
             </div>
             <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
@@ -305,6 +311,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
           {/* Blueprint SVG Viewer */}
           <BlueprintViewer
             svgString={floorPlan.svg_blueprint}
+            svgPaperString={floorPlan.svg_blueprint_paper}
             placements={floorPlan.placements}
             plotWidthM={plotWidth}
             plotDepthM={plotDepth}

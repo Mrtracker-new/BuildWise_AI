@@ -310,6 +310,59 @@ export interface SiteVisionResponse {
 // Generative Floor Plan Engine Interfaces (CSP & Vastu)
 // ----------------------------------------------------
 
+export interface EnvelopeRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  area_sqm: number;
+}
+
+export interface RoomRectangle {
+  room_id: string;
+  room_name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  area_sqm: number;
+  zone: string;
+  vastu_compliant: boolean;
+}
+
+export interface DoorGeometry {
+  door_id: string;
+  from_room: string;
+  to_room: string;
+  wall_edge: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  hinge_x: number;
+  hinge_y: number;
+  swing_direction: string;
+  width_m: number;
+}
+
+export interface WindowGeometry {
+  window_id: string;
+  room_id: string;
+  wall_edge: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  width_m: number;
+}
+
+export interface RectanglesModel {
+  envelope: EnvelopeRect;
+  rooms: RoomRectangle[];
+  doors: DoorGeometry[];
+  windows: WindowGeometry[];
+}
+
 export interface FloorPlanRequest {
   plot_width_m: number;
   plot_depth_m: number;
@@ -335,6 +388,7 @@ export interface FloorPlanMetrics {
   vastu_compliance_pct: number;
   plumbing_adjacency_score: number;
   space_utilization_pct: number;
+  plot_coverage_pct?: number;
   total_built_up_sqm: number;
   circulation_efficiency_pct: number;
 }
@@ -343,7 +397,9 @@ export interface FloorPlanResponse {
   status: 'optimal' | 'compromise' | 'failed';
   grid_matrix: string[][];
   placements: RoomPlacement[];
+  rectangles?: RectanglesModel;
   svg_blueprint: string;
+  svg_blueprint_paper?: string;
   metrics: FloorPlanMetrics;
   warnings: string[];
   timing_ms: number;

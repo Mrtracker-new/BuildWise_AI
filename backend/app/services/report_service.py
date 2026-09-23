@@ -97,17 +97,295 @@ def _subtract_intervals_rl(
     return segments
 
 
+def _draw_rectangles_reportlab(
+    rectangles: Any,
+    width: float = 520.0,
+    height: float = 220.0
+) -> Drawing:
+    """
+    Renders a continuous envelope RectanglesModel into native ReportLab vector
+    drawing shapes (Line, Rect, String, ArcPath) in Paper Blueprint theme.
+    """
+    def _get(obj: Any, key: str, default: Any = None) -> Any:
+        if hasattr(obj, key):
+            return getattr(obj, key)
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return default
+
+    env = _get(rectangles, "envelope")
+    env_x = float(_get(env, "x", 1.0))
+    env_y = float(_get(env, "y", 1.0))
+    env_w = float(_get(env, "width", 8.0))
+    env_h = float(_get(env, "height", 8.0))
+
+    rooms_data = _get(rectangles, "rooms", []) or []
+    doors_data = _get(rectangles, "doors", []) or []
+    windows_data = _get(rectangles, "windows", []) or []
+
+    # Determine plot dimensions
+    max_x = max([env_x + env_w] + [float(_get(r, "x", 0)) + float(_get(r, "width", 0)) for r in rooms_data])
+    max_y = max([env_y + env_h] + [float(_get(r, "y", 0)) + float(_get(r, "height", 0)) for r in rooms_data])
+    plot_w = max_x + 1.0
+    plot_d = max_y + 1.5
+
+    pad_x = 35.0
+    pad_y = 25.0
+    avail_w = width - (2.0 * pad_x)
+    avail_h = height - (2.0 * pad_y)
+    scale = min(avail_w / max(plot_w, 0.1), avail_h / max(plot_d, 0.1))
+    draw_w = plot_w * scale
+    draw_h = plot_d * scale
+    offset_x = (width - draw_w) / 2.0
+    offset_y = (height - draw_h) / 2.0
+
+    def x_pt(xm: float) -> float:
+        return offset_x + (xm * scale)
+
+    def y_pt(ym: float) -> float:
+        return offset_y + ((plot_d - ym) * scale)
+
+    drawing = Drawing(width, height)
+    # Sheet background and setback line
+    drawing.add(Rect(0, 0, width, height, fillColor=colors.HexColor("#FFFFFF"), strokeColor=colors.HexColor("#CBD5E1"), strokeWidth=0.5))
+    drawing.add(Rect(offset_x, offset_y, draw_w, draw_h, fillColor=None, strokeColor=colors.HexColor("#CBD5E1"), strokeWidth=0.75, strokeDashArray=[3, 3]))
+
+    # Architectural pastel room fills
+    color_map = {
+        "master_bed": colors.HexColor("#F1F5F9"),
+        "living": colors.HexColor("#F0FDF4"),
+        "kitchen": colors.HexColor("#FEF3C7"),
+        "puja": colors.HexColor("#FEF9C3"),
+        "bath_1": colors.HexColor("#E0F2FE"),
+        "bath_2": colors.HexColor("#E0F2FE"),
+        "bed_2": colors.HexColor("#F8FAFC"),
+        "dining": colors.HexColor("#FDF2F8"),
+        "stairs": colors.HexColor("#F5F3FF"),
+        "corridor": colors.white
+    }
+
+    parsed_rooms = []
+    for r in rooms_data:
+        rid = _get(r, "room_id", "")
+        rx = float(_get(r, "x", 0.0))
+        ry = float(_get(r, "y", 0.0))
+        rw = float(_get(r, "width", 0.0))
+        rh = float(_get(r, "height", 0.0))
+        fc = color_map.get(rid, colors.HexColor("#F8FAFC"))
+        drawing.add(Rect(x_pt(rx), y_pt(ry + rh), rw * scale, rh * scale, fillColor=fc, strokeColor=None, strokeWidth=0))
+        parsed_rooms.append({
+            "id": rid,
+            "name": str(_get(r, "room_name", rid.replace("_", " ").title())),
+            "x": rx,
+            "y": ry,
+            "w": rw,
+            "h": rh,
+            "area": float(_get(r, "area_sqm", rw * rh)),
+            "zone": str(_get(r, "zone", "")),
+            "vastu": bool(_get(r, "vastu_compliant", False))
+        })
+
+    parsed_doors = []
+    for d in doors_data:
+        parsed_doors.append({
+            "id": str(_get(d, "door_id", "")),
+            "edge": str(_get(d, "wall_edge", "")),
+            "x1": float(_get(d, "x1", 0.0)),
+            "y1": float(_get(d, "y1", 0.0)),
+            "x2": float(_get(d, "x2", 0.0)),
+            "y2": float(_get(d, "y2", 0.0)),
+            "hx": float(_get(d, "hinge_x", 0.0)),
+            "hy": float(_get(d, "hinge_y", 0.0)),
+            "swing": str(_get(d, "swing_direction", "inward_right")),
+            "w_m": float(_get(d, "width_m", 0.9))
+        })
+
+    parsed_windows = []
+    for w in windows_data:
+        parsed_windows.append({
+            "id": str(_get(w, "window_id", "")),
+            "edge": str(_get(w, "wall_edge", "")),
+            "x1": float(_get(w, "x1", 0.0)),
+            "y1": float(_get(w, "y1", 0.0)),
+            "x2": float(_get(w, "x2", 0.0)),
+            "y2": float(_get(w, "y2", 0.0)),
+            "w_m": float(_get(w, "width_m", 1.2))
+        })
+
+    # Interior Shared Partition Walls (thin 1.2pt navy)
+    for i in range(len(parsed_rooms)):
+        r1 = parsed_rooms[i]
+        for j in range(i + 1, len(parsed_rooms)):
+            r2 = parsed_rooms[j]
+            # Vertical shared wall
+            if abs((r1["x"] + r1["w"]) - r2["x"]) < 0.05 or abs((r2["x"] + r2["w"]) - r1["x"]) < 0.05:
+                wx = (r1["x"] + r1["w"]) if abs((r1["x"] + r1["w"]) - r2["x"]) < 0.05 else (r2["x"] + r2["w"])
+                y1 = max(r1["y"], r2["y"])
+                y2 = min(r1["y"] + r1["h"], r2["y"] + r2["h"])
+                if y2 - y1 >= 0.1:
+                    base = (y1, y2)
+                    cuts = []
+                    for d in parsed_doors:
+                        if d["edge"] == "vertical" and abs(d["x1"] - wx) < 0.08:
+                            cuts.append((min(d["y1"], d["y2"]), max(d["y1"], d["y2"])))
+                    segs = _subtract_intervals_rl(base, cuts)
+                    for sy1, sy2 in segs:
+                        drawing.add(Line(x_pt(wx), y_pt(sy1), x_pt(wx), y_pt(sy2), strokeColor=colors.HexColor("#475569"), strokeWidth=1.2))
+
+            # Horizontal shared wall
+            elif abs((r1["y"] + r1["h"]) - r2["y"]) < 0.05 or abs((r2["y"] + r2["h"]) - r1["y"]) < 0.05:
+                wy = (r1["y"] + r1["h"]) if abs((r1["y"] + r1["h"]) - r2["y"]) < 0.05 else (r2["y"] + r2["h"])
+                x1 = max(r1["x"], r2["x"])
+                x2 = min(r1["x"] + r1["w"], r2["x"] + r2["w"])
+                if x2 - x1 >= 0.1:
+                    base = (x1, x2)
+                    cuts = []
+                    for d in parsed_doors:
+                        if d["edge"] == "horizontal" and abs(d["y1"] - wy) < 0.08:
+                            cuts.append((min(d["x1"], d["x2"]), max(d["x1"], d["x2"])))
+                    segs = _subtract_intervals_rl(base, cuts)
+                    for sx1, sx2 in segs:
+                        drawing.add(Line(x_pt(sx1), y_pt(wy), x_pt(sx2), y_pt(wy), strokeColor=colors.HexColor("#475569"), strokeWidth=1.2))
+
+    # Exterior Envelope Walls (thick 2.4pt dark navy)
+    # North
+    n_cuts = []
+    for d in parsed_doors:
+        if d["edge"] == "horizontal" and abs(d["y1"] - env_y) < 0.05:
+            n_cuts.append((min(d["x1"], d["x2"]), max(d["x1"], d["x2"])))
+    for w in parsed_windows:
+        if w["edge"] == "north" and abs(w["y1"] - env_y) < 0.05:
+            n_cuts.append((min(w["x1"], w["x2"]), max(w["x1"], w["x2"])))
+    for sx1, sx2 in _subtract_intervals_rl((env_x, env_x + env_w), n_cuts):
+        drawing.add(Line(x_pt(sx1), y_pt(env_y), x_pt(sx2), y_pt(env_y), strokeColor=colors.HexColor("#0F172A"), strokeWidth=2.4))
+
+    # South
+    s_y = env_y + env_h
+    s_cuts = []
+    for d in parsed_doors:
+        if d["edge"] == "horizontal" and abs(d["y1"] - s_y) < 0.05:
+            s_cuts.append((min(d["x1"], d["x2"]), max(d["x1"], d["x2"])))
+    for w in parsed_windows:
+        if w["edge"] == "south" and abs(w["y1"] - s_y) < 0.05:
+            s_cuts.append((min(w["x1"], w["x2"]), max(w["x1"], w["x2"])))
+    for sx1, sx2 in _subtract_intervals_rl((env_x, env_x + env_w), s_cuts):
+        drawing.add(Line(x_pt(sx1), y_pt(s_y), x_pt(sx2), y_pt(s_y), strokeColor=colors.HexColor("#0F172A"), strokeWidth=2.4))
+
+    # West
+    w_cuts = []
+    for d in parsed_doors:
+        if d["edge"] == "vertical" and abs(d["x1"] - env_x) < 0.05:
+            w_cuts.append((min(d["y1"], d["y2"]), max(d["y1"], d["y2"])))
+    for w in parsed_windows:
+        if w["edge"] == "west" and abs(w["x1"] - env_x) < 0.05:
+            w_cuts.append((min(w["y1"], w["y2"]), max(w["y1"], w["y2"])))
+    for sy1, sy2 in _subtract_intervals_rl((env_y, env_y + env_h), w_cuts):
+        drawing.add(Line(x_pt(env_x), y_pt(sy1), x_pt(env_x), y_pt(sy2), strokeColor=colors.HexColor("#0F172A"), strokeWidth=2.4))
+
+    # East
+    e_x = env_x + env_w
+    e_cuts = []
+    for d in parsed_doors:
+        if d["edge"] == "vertical" and abs(d["x1"] - e_x) < 0.05:
+            e_cuts.append((min(d["y1"], d["y2"]), max(d["y1"], d["y2"])))
+    for w in parsed_windows:
+        if w["edge"] == "east" and abs(w["x1"] - e_x) < 0.05:
+            e_cuts.append((min(w["y1"], w["y2"]), max(w["y1"], w["y2"])))
+    for sy1, sy2 in _subtract_intervals_rl((env_y, env_y + env_h), e_cuts):
+        drawing.add(Line(x_pt(e_x), y_pt(sy1), x_pt(e_x), y_pt(sy2), strokeColor=colors.HexColor("#0F172A"), strokeWidth=2.4))
+
+    # Windows (3-line representation with cyan tint)
+    for win in parsed_windows:
+        if win["edge"] in ("north", "south"):
+            wx1 = x_pt(win["x1"])
+            wx2 = x_pt(win["x2"])
+            wy = y_pt(win["y1"])
+            drawing.add(Line(wx1, wy - 1.5, wx2, wy - 1.5, strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8))
+            drawing.add(Line(wx1, wy, wx2, wy, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.0))
+            drawing.add(Line(wx1, wy + 1.5, wx2, wy + 1.5, strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8))
+            drawing.add(Line(wx1, wy - 2.0, wx1, wy + 2.0, strokeColor=colors.HexColor("#0F172A"), strokeWidth=0.8))
+            drawing.add(Line(wx2, wy - 2.0, wx2, wy + 2.0, strokeColor=colors.HexColor("#0F172A"), strokeWidth=0.8))
+        else:
+            wy1 = y_pt(win["y1"])
+            wy2 = y_pt(win["y2"])
+            wx = x_pt(win["x1"])
+            drawing.add(Line(wx - 1.5, wy1, wx - 1.5, wy2, strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8))
+            drawing.add(Line(wx, wy1, wx, wy2, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.0))
+            drawing.add(Line(wx + 1.5, wy1, wx + 1.5, wy2, strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8))
+            drawing.add(Line(wx - 2.0, wy1, wx + 2.0, wy1, strokeColor=colors.HexColor("#0F172A"), strokeWidth=0.8))
+            drawing.add(Line(wx - 2.0, wy2, wx + 2.0, wy2, strokeColor=colors.HexColor("#0F172A"), strokeWidth=0.8))
+
+    # Doors (Leaf Line + Swing Arc)
+    for d in parsed_doors:
+        hx = x_pt(d["hx"])
+        hy = y_pt(d["hy"])
+        R = d["w_m"] * scale
+        if d["edge"] == "vertical":
+            if d["swing"] == "inward_left":
+                leaf_x = hx - R
+                leaf_y = hy
+                start_ang, end_ang = 270, 360
+            else:
+                leaf_x = hx + R
+                leaf_y = hy
+                start_ang, end_ang = 180, 270
+        else:
+            if d["swing"] == "inward_left":
+                leaf_x = hx
+                leaf_y = hy + R
+                start_ang, end_ang = 0, 90
+            else:
+                leaf_x = hx
+                leaf_y = hy - R
+                start_ang, end_ang = 270, 360
+        drawing.add(Line(hx, hy, leaf_x, leaf_y, strokeColor=colors.HexColor("#0284C7"), strokeWidth=1.2))
+        arc = ArcPath(strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8, strokeDashArray=[2, 2], fillColor=None)
+        arc.addArc(hx, hy, R, start_ang, end_ang)
+        drawing.add(arc)
+
+    # Centered Room Typography
+    for r in parsed_rooms:
+        cx = x_pt(r["x"] + r["w"] / 2.0)
+        cy = y_pt(r["y"] + r["h"] / 2.0)
+        drawing.add(String(cx, cy + 3.0, r["name"].upper(), textAnchor="middle", fontSize=6.5, fontName="Helvetica-Bold", fillColor=colors.HexColor("#0F172A")))
+        drawing.add(String(cx, cy - 6.0, f"{r['w']:.1f}m × {r['h']:.1f}m | {r['area']:.1f} m²", textAnchor="middle", fontSize=5.0, fontName="Helvetica", fillColor=colors.HexColor("#475569")))
+        drawing.add(String(cx, cy - 13.0, f"[{r['zone']}]", textAnchor="middle", fontSize=4.5, fontName="Helvetica", fillColor=colors.HexColor("#16A34A" if r["vastu"] else "#94A3B8")))
+
+    # Metric Dimension Lines
+    dim_top_y = y_pt(0.0) + 12.0
+    dim_x1 = x_pt(0.0)
+    dim_x2 = x_pt(plot_w)
+    drawing.add(Line(dim_x1, dim_top_y, dim_x2, dim_top_y, strokeColor=colors.HexColor("#334155"), strokeWidth=0.8))
+    drawing.add(Line(dim_x1 - 3, dim_top_y + 3, dim_x1 + 3, dim_top_y - 3, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.2))
+    drawing.add(Line(dim_x2 - 3, dim_top_y + 3, dim_x2 + 3, dim_top_y - 3, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.2))
+    drawing.add(String((dim_x1 + dim_x2) / 2.0, dim_top_y + 3.0, f"{plot_w:.1f}m FRONTAGE", textAnchor="middle", fontSize=5.5, fontName="Helvetica-Bold", fillColor=colors.HexColor("#475569")))
+
+    dim_left_x = x_pt(0.0) - 14.0
+    dim_y1 = y_pt(0.0)
+    dim_y2 = y_pt(plot_d)
+    drawing.add(Line(dim_left_x, dim_y1, dim_left_x, dim_y2, strokeColor=colors.HexColor("#334155"), strokeWidth=0.8))
+    drawing.add(Line(dim_left_x - 3, dim_y1 + 3, dim_left_x + 3, dim_y1 - 3, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.2))
+    drawing.add(Line(dim_left_x - 3, dim_y2 + 3, dim_left_x + 3, dim_y2 - 3, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.2))
+
+    return drawing
+
+
 def draw_floorplan_reportlab(
     placements: Any,
     grid_matrix: Any,
     width: float = 520.0,
-    height: float = 220.0
+    height: float = 220.0,
+    rectangles: Any = None
 ) -> Drawing:
     """
     Translates solved room placements and grid matrix into native ReportLab
     vector drawing shapes (Line, Rect, String, ArcPath, Group).
     Ensures crisp, publication-grade vector rendering in PDF reports.
+    Delegates to _draw_rectangles_reportlab when continuous RectanglesModel is provided.
     """
+    if rectangles is not None:
+        return _draw_rectangles_reportlab(rectangles, width=width, height=height)
+
     drawing = Drawing(width, height)
 
     # 1. Normalize placements into standard dictionaries
@@ -1035,7 +1313,8 @@ def generate_pdf_report(
             floorplan.get("placements") or [],
             floorplan.get("grid_matrix") or [],
             width=520.0,
-            height=220.0
+            height=220.0,
+            rectangles=floorplan.get("rectangles")
         )
         story.append(drawing)
         story.append(Spacer(1, 6))

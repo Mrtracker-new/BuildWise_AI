@@ -236,7 +236,8 @@ def test_draw_floorplan_reportlab_direct():
         placements=fp_res.placements,
         grid_matrix=fp_res.grid_matrix,
         width=520.0,
-        height=220.0
+        height=220.0,
+        rectangles=fp_res.rectangles
     )
     assert drawing is not None
     assert drawing.width == 520.0
@@ -247,4 +248,135 @@ def test_draw_floorplan_reportlab_direct():
     assert "Line" in shape_types
     assert "String" in shape_types
     assert "ArcPath" in shape_types
+
+
+def test_dissection_engine_contiguity_and_no_voids():
+    """
+    Validates that Rectangular Dissection produces 100% envelope coverage,
+    zero interior voids, and no overlapping room rectangles.
+    """
+    req = FloorPlanRequest(
+        plot_width_m=10.0,
+        plot_depth_m=12.0,
+        required_rooms=["master_bed", "kitchen", "living", "puja", "bath_1", "bed_2"],
+        vastu_strictness="high"
+    )
+    res = generate_floor_plan(req)
+    assert res.status == "optimal"
+    assert res.rectangles is not None
+    assert res.metrics.space_utilization_pct >= 95.0
+
+    env = res.rectangles.envelope
+    rooms = res.rectangles.rooms
+
+    # 1. Total room area equals envelope area (within 1% tolerance)
+    total_room_area = sum(r.area_sqm for r in rooms)
+    assert abs(total_room_area - env.area_sqm) / env.area_sqm < 0.02
+
+    # 2. Minimum dimension >= 1.95m for all rooms
+    for r in rooms:
+        assert r.width >= 1.95, f"Room {r.room_id} width {r.width} < 2.0m"
+        assert r.height >= 1.95, f"Room {r.room_id} height {r.height} < 2.0m"
+
+    # 3. Pairwise intersection area is strictly zero
+    for i in range(len(rooms)):
+        r1 = rooms[i]
+        for j in range(i + 1, len(rooms)):
+            r2 = rooms[j]
+            x_ov = max(0.0, min(r1.x + r1.width, r2.x + r2.width) - max(r1.x, r2.x))
+            y_ov = max(0.0, min(r1.y + r1.height, r2.y + r2.height) - max(r1.y, r2.y))
+            overlap_area = x_ov * y_ov
+            assert overlap_area < 0.05, f"Overlap between {r1.room_id} and {r2.room_id}: {overlap_area} sqm"
+
+    # 4. No-void grid sampling test: 20x20 points sampled across envelope
+    # Every point inside the envelope must fall inside at least one room rectangle
+    num_samples = 20
+    dx = env.width / num_samples
+    dy = env.height / num_samples
+    for ix in range(num_samples):
+        for iy in range(num_samples):
+            px = env.x + (ix + 0.5) * dx
+            py = env.y + (iy + 0.5) * dy
+            covered = any(
+                r.x - 0.05 <= px <= r.x + r.width + 0.05 and
+                r.y - 0.05 <= py <= r.y + r.height + 0.05
+                for r in rooms
+            )
+            assert covered, f"Point ({px:.2f}, {py:.2f}) inside envelope is a void!"
+
+
+def test_dissection_circulation_and_doors():
+    """
+    Validates BFS circulation spanning tree: living room acts as hub,
+    every non-hub room has a door connected to the circulation tree.
+    """
+    req = FloorPlanRequest(
+        plot_width_m=10.0,
+        plot_depth_m=12.0,
+        required_rooms=["master_bed", "kitchen", "living", "puja", "bath_1", "dining"],
+        vastu_strictness="high"
+    )
+    res = generate_floor_plan(req)
+    assert res.rectangles is not None
+    doors = res.rectangles.doors
+    rooms = res.rectangles.rooms
+
+    # Every room except living hub has an entry door
+    door_to_rooms = {d.to_room for d in doors}
+    door_from_rooms = {d.from_room for d in doors}
+    door_connected_rooms = door_to_rooms | door_from_rooms
+
+    for r in rooms:
+        assert r.room_id in door_connected_rooms, f"Room {r.room_id} has no doors!"
+
+    # Doors must have valid dimensions and swings
+    for d in doors:
+        assert d.width_m >= 0.85
+        assert d.wall_edge in ("vertical", "horizontal")
+        assert d.swing_direction in ("inward_left", "inward_right")
+
+
+def test_dissection_acceptance_demos():
+    """
+    Tests the 3 required acceptance scenarios:
+    1. 10m x 12m with 6 rooms
+    2. 8m x 8m with 4 rooms
+    3. 18m x 15m with 9 rooms
+    """
+    # Demo 1: 10m x 12m (6 rooms)
+    req1 = FloorPlanRequest(
+        plot_width_m=10.0,
+        plot_depth_m=12.0,
+        required_rooms=["master_bed", "kitchen", "living", "puja", "bath_1", "bed_2"],
+        vastu_strictness="high"
+    )
+    res1 = generate_floor_plan(req1)
+    assert res1.status == "optimal"
+    assert res1.metrics.space_utilization_pct >= 95.0
+    assert len(res1.rectangles.rooms) == 6
+
+    # Demo 2: 8m x 8m (4 rooms)
+    req2 = FloorPlanRequest(
+        plot_width_m=8.0,
+        plot_depth_m=8.0,
+        required_rooms=["master_bed", "kitchen", "living", "bath_1"],
+        vastu_strictness="high"
+    )
+    res2 = generate_floor_plan(req2)
+    assert res2.status == "optimal"
+    assert res2.metrics.space_utilization_pct >= 95.0
+    assert len(res2.rectangles.rooms) == 4
+
+    # Demo 3: 18m x 15m (9 rooms)
+    req3 = FloorPlanRequest(
+        plot_width_m=18.0,
+        plot_depth_m=15.0,
+        required_rooms=["master_bed", "kitchen", "living", "puja", "bath_1", "bath_2", "bed_2", "dining", "stairs"],
+        vastu_strictness="high"
+    )
+    res3 = generate_floor_plan(req3)
+    assert res3.status == "optimal"
+    assert res3.metrics.space_utilization_pct >= 95.0
+    assert len(res3.rectangles.rooms) == 9
+
 

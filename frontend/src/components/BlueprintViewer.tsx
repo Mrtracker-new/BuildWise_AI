@@ -4,6 +4,7 @@ import { Icon } from './Icon';
 
 interface BlueprintViewerProps {
   svgString: string;
+  svgPaperString?: string;
   placements?: RoomPlacement[];
   plotWidthM?: number;
   plotDepthM?: number;
@@ -23,23 +24,27 @@ const ROOM_COLOR_MAP: Record<string, { bg: string; border: string; text: string;
 
 export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   svgString,
+  svgPaperString,
   placements = [],
   plotWidthM,
   plotDepthM,
 }) => {
+  const [mode, setMode] = useState<'cad' | 'paper'>('cad');
   const [zoom, setZoom] = useState<number>(1.0);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState<boolean>(false);
   const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const panStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
+  const activeSvg = (mode === 'paper' && svgPaperString) ? svgPaperString : svgString;
+
   // Sanitize raw SVG string to eliminate any potential script tags or inline events
   const sanitizedSvg = useMemo(() => {
-    if (!svgString) return '';
-    return svgString
+    if (!activeSvg) return '';
+    return activeSvg
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
       .replace(/on\w+\s*=\s*["'][^"']*["']/gi, '');
-  }, [svgString]);
+  }, [activeSvg]);
 
   const handleZoomIn = () => setZoom((z) => Math.min(2.5, +(z + 0.25).toFixed(2)));
   const handleZoomOut = () => setZoom((z) => Math.max(0.75, +(z - 0.25).toFixed(2)));
@@ -84,7 +89,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   };
 
   return (
-    <div className="flex flex-col w-full min-w-0 rounded-xl border border-slate-800 bg-slate-900 shadow-xl overflow-hidden @container">
+    <div id="blueprint-viewer-container" className="flex flex-col w-full min-w-0 rounded-xl border border-slate-800 bg-slate-900 shadow-xl overflow-hidden @container">
       {/* Dark CAD Top Controls Bar */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 bg-slate-950/90 border-b border-slate-800 text-xs text-slate-300">
         <div className="flex items-center gap-2 font-medium text-slate-200">
@@ -101,6 +106,34 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
               {plotWidthM}m × {plotDepthM}m
             </span>
           )}
+
+          {/* Mode Switcher: Dark CAD vs Paper Mode */}
+          <div className="flex items-center rounded-md bg-slate-900 border border-slate-700/80 p-0.5 ml-1">
+            <button
+              type="button"
+              onClick={() => setMode('cad')}
+              className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors cursor-pointer ${
+                mode === 'cad'
+                  ? 'bg-cyan-600 text-slate-950 shadow-xs'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Dark CAD Digital Blueprint"
+            >
+              CAD
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('paper')}
+              className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors cursor-pointer ${
+                mode === 'paper'
+                  ? 'bg-cyan-600 text-slate-950 shadow-xs'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Paper Blueprint Mode"
+            >
+              PAPER
+            </button>
+          </div>
         </div>
 
         {/* Zoom & Action Controls */}
@@ -140,8 +173,8 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
           <button
             type="button"
             onClick={handleDownloadSvg}
-            title="Download CAD SVG Blueprint"
-            aria-label="Download CAD SVG Blueprint"
+            title="Download Blueprint SVG"
+            aria-label="Download Blueprint SVG"
             className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold text-[11px] transition-colors shadow-xs ml-1 cursor-pointer"
           >
             <Icon name="download" size={12} />
@@ -152,7 +185,9 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
 
       {/* SVG Canvas Container with CSS Pan & Zoom Transform (no viewBox modification) */}
       <div
-        className={`relative w-full h-[380px] sm:h-[460px] bg-slate-900 overflow-hidden select-none ${
+        className={`relative w-full h-[380px] sm:h-[460px] ${
+          mode === 'paper' ? 'bg-slate-100' : 'bg-slate-900'
+        } overflow-hidden select-none transition-colors duration-200 ${
           isPanning ? 'cursor-grabbing' : 'cursor-grab'
         }`}
         onMouseDown={handleMouseDown}
@@ -167,8 +202,8 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
         >
           <defs>
             <pattern id="viewer-ambient-grid" width="52" height="52" patternUnits="userSpaceOnUse">
-              <path d="M 52 0 L 0 0 0 52" fill="none" stroke="#1E293B" strokeWidth="0.75" />
-              <path d="M 26 0 L 26 52 M 0 26 L 52 26" fill="none" stroke="#1E293B" strokeWidth="0.3" strokeDasharray="2 2" />
+              <path d="M 52 0 L 0 0 0 52" fill="none" stroke={mode === 'paper' ? '#CBD5E1' : '#1E293B'} strokeWidth="0.75" />
+              <path d="M 26 0 L 26 52 M 0 26 L 52 26" fill="none" stroke={mode === 'paper' ? '#E2E8F0' : '#1E293B'} strokeWidth="0.3" strokeDasharray="2 2" />
             </pattern>
           </defs>
           <rect width="100%" height="100%" fill="url(#viewer-ambient-grid)" />
