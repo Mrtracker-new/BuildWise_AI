@@ -1,0 +1,40 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "source": "National Disaster Management Authority (NDMA) Vulnerability Atlas of India & BMTPC Flood and Wind Hazard Maps",
+    "retrieval_date": "2026-09-23",
+    "coverage": "major_river_basins_and_coastal_cyclone_districts_v1",
+    "coverage_scope_note": "Version 1.0.0 enumerates primary flood-prone alluvial basins (Brahmaputra, Ganga, Mahanadi, Godavari, Kosi, Yamuna) and high/very-high risk coastal cyclone districts (Odisha, Andhra Pradesh, Tamil Nadu, West Bengal, Gujarat coastlines). Exhaustive national district coverage is scheduled for version 1.1.0."
+  },
+  "flood_prone_districts": [
+    { "name": "kamrup", "state": "Assam", "basin": "Brahmaputra", "source_note": "NDMA Atlas, Category I Severe Alluvial Flood Basin" },
+    { "name": "guwahati", "state": "Assam", "basin": "Brahmaputra", "source_note": "NDMA Atlas, Category I Brahmaputra River Flood Plain" },
+    { "name": "dibrugarh", "state": "Assam", "basin": "Brahmaputra", "source_note": "NDMA Atlas, Upper Brahmaputra Inundation Zone" },
+    { "name": "barpeta", "state": "Assam", "basin": "Brahmaputra", "source_note": "NDMA Atlas, Lower Brahmaputra Severe Flood Zone" },
+    { "name": "patna", "state": "Bihar", "basin": "Ganga-Son", "source_note": "NDMA Atlas, Gangetic Lowland Inundation Zone" },
+    { "name": "darbhanga", "state": "Bihar", "basin": "Kosi-Bagmati", "source_note": "NDMA Atlas, North Bihar Severe Flash Flood Zone" },
+    { "name": "madhubani", "state": "Bihar", "basin": "Kosi", "source_note": "NDMA Atlas, North Bihar Alluvial Inundation Zone" },
+    { "name": "cuttack", "state": "Odisha", "basin": "Mahanadi", "source_note": "NDMA Atlas, Mahanadi Deltaic Flood Plain" },
+    { "name": "puri", "state": "Odisha", "basin": "Coastal Delta", "source_note": "NDMA Atlas, Coastal Tidal & Deltaic Surcharge" },
+    { "name": "mumbai", "state": "Maharashtra", "basin": "Mithi / Coastal", "source_note": "NDMA Atlas, High-Tide Coastal Waterlogging Zone" },
+    { "name": "alappuzha", "state": "Kerala", "basin": "Vembanad / Pamba", "source_note": "NDMA Atlas, Below Sea-Level Lowland Flood Basin" },
+    { "name": "ernakulam", "state": "Kerala", "basin": "Periyar", "source_note": "NDMA Atlas, Periyar River Inundation Corridor" },
+    { "name": "varanasi", "state": "Uttar Pradesh", "basin": "Ganga", "source_note": "NDMA Atlas, Gangetic Plain Inundation Zone" }
+  ],
+  "cyclone_prone_districts": [
+    { "name": "puri", "state": "Odisha", "risk_category": "Very High", "source_note": "NDMA Cyclone Atlas, Bay of Bengal Direct Landfall Zone" },
+    { "name": "jagatsinghpur", "state": "Odisha", "risk_category": "Very High", "source_note": "NDMA Cyclone Atlas, 1999 Super Cyclone Core Corridor" },
+    { "name": "balasore", "state": "Odisha", "risk_category": "Very High", "source_note": "NDMA Cyclone Atlas, North Bay Cyclone Track" },
+    { "name": "srikakulam", "state": "Andhra Pradesh", "risk_category": "Very High", "source_note": "NDMA Cyclone Atlas, North Coastal AP Severe Track" },
+    { "name": "visakhapatnam", "state": "Andhra Pradesh", "risk_category": "High", "source_note": "NDMA Cyclone Atlas, Hudhud Landfall Coastal Zone" },
+    { "name": "east godavari", "state": "Andhra Pradesh", "risk_category": "Very High", "source_note": "NDMA Cyclone Atlas, Godavari Delta Landfall Zone" },
+    { "name": "nellore", "state": "Andhra Pradesh", "risk_category": "Very High", "source_note": "NDMA Cyclone Atlas, South AP Coastal Cyclone Belt" },
+    { "name": "chennai", "state": "Tamil Nadu", "risk_category": "High", "source_note": "NDMA Cyclone Atlas, Coromandel Coast Severe Storm Track" },
+    { "name": "tiruvallur", "state": "Tamil Nadu", "risk_category": "High", "source_note": "NDMA Cyclone Atlas, North Tamil Nadu Coastal Zone" },
+    { "name": "cuddalore", "state": "Tamil Nadu", "risk_category": "Very High", "source_note": "NDMA Cyclone Atlas, Thane Cyclone Core Corridor" },
+    { "name": "south 24 parganas", "state": "West Bengal", "risk_category": "Very High", "source_note": "NDMA Cyclone Atlas, Sundarbans Storm Surge Corridor" },
+    { "name": "purba medinipur", "state": "West Bengal", "risk_category": "Very High", "source_note": "NDMA Cyclone Atlas, Digha Coastal Landfall Track" },
+    { "name": "kutch", "state": "Gujarat", "risk_category": "High", "source_note": "NDMA Cyclone Atlas, Arabian Sea Cyclone Coastal Belt" },
+    { "name": "porbandar", "state": "Gujarat", "risk_category": "High", "source_note": "NDMA Cyclone Atlas, Saurashtra Coast Cyclone Belt" }
+  ]
+}

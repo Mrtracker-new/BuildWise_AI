@@ -35,8 +35,28 @@ class MockExplanationAdapter(BaseExplanationAdapter):
         slope_pct = slope_factor.get("raw_value", 2.0)
         slope_score = slope_factor.get("score", 100.0)
 
-        flood_factor = factors.get("flood_risk", {})
-        flood_score = flood_factor.get("score", 80.0)
+        # Module 1 Hazard data
+        hazard = analysis_data.get("hazard_profile", {})
+        seismic = hazard.get("seismic", {})
+        seismic_zone = seismic.get("zone", "Zone III")
+        seismic_factor = seismic.get("zone_factor", 0.16)
+        flood_prof = hazard.get("flood", {})
+        flood_pressure = flood_prof.get("pressure_level", "low").upper()
+        storm_prof = hazard.get("storm_cyclone", {})
+        storm_exposure = storm_prof.get("exposure_level", "low").upper()
+
+        # Module 2 Land Value data
+        land_val = analysis_data.get("land_value", {})
+        ind_rate = land_val.get("indicative_rate_per_sqft")
+        land_cost = land_val.get("land_cost_inr")
+        combined_total = land_val.get("combined_project_total_inr")
+
+        # Module 3 Vastu data
+        vastu = analysis_data.get("vastu_advisory", {})
+        ranked_ents = vastu.get("ranked_entrances", [])
+        top_ent = ranked_ents[0] if ranked_ents else {"direction": "NE", "score": 100.0}
+        road_app = vastu.get("road_approach", {})
+        app_side = road_app.get("approach_side", "unknown")
 
         # 1. Executive Summary Synthesis
         summary_paragraphs = []
@@ -49,6 +69,15 @@ class MockExplanationAdapter(BaseExplanationAdapter):
             f"and civic service proximity."
         )
         summary_paragraphs.append(para_1)
+
+        # Hazard commentary
+        hazard_commentary = (
+            f"Hazard history and climate stress profiling classifies the site under BIS IS 1893:2016 {seismic_zone} "
+            f"(Zone Factor Z={seismic_factor:.2f}). Hydrological telemetry indicates {flood_pressure} flood pressure, "
+            f"while historical 10-year meteorological archives indicate {storm_exposure} storm wind and cyclonic exposure. "
+            f"Structural ductility and elevated plinth levels must be detailed accordingly."
+        )
+        summary_paragraphs.append(hazard_commentary)
 
         if slope_score >= 80.0:
             slope_commentary = (
@@ -65,36 +94,53 @@ class MockExplanationAdapter(BaseExplanationAdapter):
         orientation_commentary = (
             f"Passive bioclimatic layout analysis advises establishing the building longitudinal axis along {optimal_axis} degrees ({axis_label}). "
             f"This orientation limits peak afternoon solar exposure on long vertical facades while facilitating natural cross-ventilation, "
-            f"rated as {vent_rating} based on local prevailing wind vectors."
+            f"rated as {vent_rating} based on local prevailing wind vectors. "
+            f"Functional planning aligns primary entrance orientation toward the {top_ent.get('direction', 'NE')} facade ({top_ent.get('score', 100):.0f}/100 rating) "
+            f"relative to the {app_side} approach access road."
         )
         summary_paragraphs.append(f"{slope_commentary} {orientation_commentary}")
 
-        cost_commentary = (
-            f"The preliminary capital expenditure estimate for the proposed built-up area totals INR {total_cost:,.0f} "
-            f"(benchmark range INR {cost.get('cost_range_min_inr', 0):,.0f} to INR {cost.get('cost_range_max_inr', 0):,.0f}). "
-            f"Civil structural framing constitutes approximately 50% of the baseline investment, with architectural finishes "
-            f"and MEP services comprising 18% and 14% respectively."
-        )
+        # Cost & Land Value commentary
+        if ind_rate is not None and combined_total is not None:
+            cost_commentary = (
+                f"The preliminary capital expenditure estimate for the proposed built-up area totals INR {total_cost:,.0f} for construction works. "
+                f"Indicative land valuation at INR {ind_rate:,.0f}/sq ft yields an estimated land outlay of INR {land_cost:,.0f}, "
+                f"bringing the combined preliminary project outlay to INR {combined_total:,.0f}. "
+                f"Civil structural framing constitutes approximately 50% of construction baseline investment."
+            )
+        else:
+            cost_commentary = (
+                f"The preliminary construction expenditure estimate for the proposed built-up area totals INR {total_cost:,.0f} "
+                f"(benchmark range INR {cost.get('cost_range_min_inr', 0):,.0f} to INR {cost.get('cost_range_max_inr', 0):,.0f}). "
+                f"Civil structural framing constitutes approximately 50% of the baseline investment, with architectural finishes "
+                f"and MEP services comprising 18% and 14% respectively."
+            )
         summary_paragraphs.append(cost_commentary)
 
         executive_summary = "\n\n".join(summary_paragraphs)
 
-        # 2. Detailed Actionable Recommendations
-        recommendations = [
-            f"Align primary building massing along the recommended {optimal_axis} degree axis to optimize natural solar shading and daylight distribution.",
-            f"Provide continuous horizontal overhangs (minimum 600mm projection) along south-facing fenestrations to block high-angle summer solar radiation.",
-            "Incorporate dedicated cross-ventilation apertures with operable louvers or casement sashes on windward and leeward building facades.",
-            f"Establish the finished plinth level at minimum +600mm above adjacent road crown level to mitigate surface stormwater ingress.",
-            "Execute standard geotechnical plate load testing (minimum 3 sample points across footprint) to verify in-situ safe bearing capacity prior to foundation casting.",
-            "Install a dual-stage rainwater harvesting percolation pit network designed for local peak rainfall intensity.",
-            "Apply high-albedo solar reflective coating or vegetative thermal roof insulation to minimize heat transfer to top-floor habitable areas."
-        ]
-
-        if slope_pct > 8.0:
-            recommendations.append("Engage a structural geotechnical specialist to detail reinforced concrete retaining walls and subsurface weep-hole drainage channels.")
-
-        if flood_score < 70.0:
-            recommendations.append("Incorporate perimeter French drains and sump pump provisions for high-water-table damp proofing.")
+        # 2. Traceable Actionable Recommendations
+        # If structured recommendations were passed, use their texts directly
+        recs_input = analysis_data.get("recommendations") or analysis_data.get("recommendation_items")
+        if recs_input and isinstance(recs_input, list) and len(recs_input) > 0:
+            recommendations = []
+            for item in recs_input:
+                if isinstance(item, dict):
+                    t = item.get("recommendation_text")
+                    if t:
+                        recommendations.append(t)
+                elif isinstance(item, str):
+                    recommendations.append(item)
+        else:
+            recommendations = [
+                f"Align primary building massing along the recommended {optimal_axis} degree axis to optimize natural solar shading and daylight distribution.",
+                f"Provide continuous horizontal overhangs (minimum 600mm projection) along south-facing fenestrations to block high-angle summer solar radiation.",
+                "Incorporate dedicated cross-ventilation apertures with operable louvers or casement sashes on windward and leeward building facades.",
+                f"Establish the finished plinth level at minimum +600mm above adjacent road crown level to mitigate surface stormwater ingress.",
+                "Execute standard geotechnical plate load testing (minimum 3 sample points across footprint) to verify in-situ safe bearing capacity prior to foundation casting.",
+                "Install a dual-stage rainwater harvesting percolation pit network designed for local peak rainfall intensity.",
+                "Apply high-albedo solar reflective coating or vegetative thermal roof insulation to minimize heat transfer to top-floor habitable areas."
+            ]
 
         duration_ms = round((time.time() - start_time) * 1000.0, 2)
         metadata = {

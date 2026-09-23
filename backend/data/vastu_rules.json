@@ -1,0 +1,159 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "source": "Traditional Indian Vastu Shastra Architectural Canons (Manasara, Mayamata, Samarangana Sutradhara) reconciled with National Building Code of India (NBC 2016 Part 8) and IS 8888 Building Physics",
+    "retrieval_date": "2026-09-23",
+    "coverage": "canonical_8_direction_entrance_weights_and_3x3_functional_grid_v1",
+    "coverage_scope_note": "Version 1.0.0 defines the complete 8-direction entrance weight matrix, approach-road alignment criteria, 3x3 functional room grid with prohibitions and passive design reconciliations, and topographic drainage slope auspiciousness rules."
+  },
+  "entrance_weights": {
+    "NE": { "base_weight": 100.0, "deity": "Ishanya", "element": "Water / Ether", "canonical_significance": "Most auspicious quadrant for primary entrance (Maha-Dwara); fosters spiritual clarity, prosperity, and cosmic equilibrium." },
+    "N": { "base_weight": 95.0, "deity": "Kubera", "element": "North Magnetic Pole", "canonical_significance": "Highly auspicious; governs wealth, prosperity, and progressive vitality; provides cool diffuse northern illumination." },
+    "E": { "base_weight": 90.0, "deity": "Indra / Surya", "element": "Solar Energy", "canonical_significance": "Auspicious portal welcoming beneficial morning ultraviolet solar rays and vitality." },
+    "NW": { "base_weight": 65.0, "deity": "Vayu", "element": "Air / Wind", "canonical_significance": "Secondary acceptable entrance; governs movement, trade, and social guests; requires balanced fenestration." },
+    "W": { "base_weight": 60.0, "deity": "Varuna", "element": "Water / Sunset", "canonical_significance": "Neutral to acceptable for specific commercial and professional uses; requires thermal shading from harsh afternoon sun." },
+    "S": { "base_weight": 45.0, "deity": "Yama", "element": "Earth / Dharma", "canonical_significance": "Conditional entrance; auspicious when aligned with favorable sub-padas (Pushpadanta/Vithatha) and required by road frontage; requires internal entry foyer baffle." },
+    "SE": { "base_weight": 40.0, "deity": "Agni", "element": "Fire", "canonical_significance": "Generally unfavorable for main residential gateway; acceptable primarily as secondary service or kitchen entrance." },
+    "SW": { "base_weight": 20.0, "deity": "Nirriti", "element": "Earth / Heaviness", "canonical_significance": "Strictly discouraged in traditional canon for primary entrance; denotes structural dissipation and heavy instability; should remain heavy and enclosed." }
+  },
+  "climate_adjustments": {
+    "N": 10.0,
+    "NE": 10.0,
+    "E": 10.0,
+    "S": 5.0,
+    "NW": 0.0,
+    "SE": -5.0,
+    "W": -10.0,
+    "SW": -15.0
+  },
+  "room_grid": [
+    {
+      "zone": "NE",
+      "zone_name": "Ishanya",
+      "primary_room": "Puja / Meditation Room",
+      "alternative_room": "Open Porch / Light Study",
+      "prohibited": ["Toilet", "Septic Tank", "Heavy Master Bedroom", "Kitchen"],
+      "vastu_rationale": "Ishanya is the sacred quadrant governed by water and divine ether; must remain clean, light, and unpolluted.",
+      "civil_engineering_rationale": "Northeast receives pure, glare-free morning daylight with minimal heat buildup; ideal for quiet reflection and clean water retention."
+    },
+    {
+      "zone": "N",
+      "zone_name": "Kubera",
+      "primary_room": "Living Room / Entrance Foyer",
+      "alternative_room": "Home Office / Library",
+      "prohibited": ["Heavy Storage", "Septic Tank", "Toilets"],
+      "vastu_rationale": "Governed by Kubera (lord of wealth); open living zones here encourage harmonious social and economic interaction.",
+      "civil_engineering_rationale": "Consistent diffuse daylight without thermal solar gain makes North ideal for primary family gathering and daytime occupancy."
+    },
+    {
+      "zone": "E",
+      "zone_name": "Indra / Surya",
+      "primary_room": "Living Verandah / Family Lounge",
+      "alternative_room": "Children's Study / Guest Room",
+      "prohibited": ["Toilet", "Septic Tank", "Heavy Storage"],
+      "vastu_rationale": "Surya brings early solar energy and life vitality; wide openings in the East welcome positive daybreak light.",
+      "civil_engineering_rationale": "Captures low-angle morning solar rays that sanitize indoor spaces without excessive afternoon thermal loads."
+    },
+    {
+      "zone": "SE",
+      "zone_name": "Agneya",
+      "primary_room": "Kitchen / Cooking Hearth",
+      "alternative_room": "Electrical Distribution / Utility Room",
+      "prohibited": ["Master Bedroom", "Puja Room", "Water Sump"],
+      "vastu_rationale": "Domain of Agni (Fire deity); placing the cooking stove in the Southeast preserves energetic balance and family health.",
+      "civil_engineering_rationale": "Kitchen in SE allows early morning prep light while prevailing southwest winds naturally carry cooking heat and aromas out of the building."
+    },
+    {
+      "zone": "S",
+      "zone_name": "Yama",
+      "primary_room": "Bedroom / Office",
+      "alternative_room": "Secondary Staircase / Storage",
+      "prohibited": ["Puja Room", "Underground Sump"],
+      "vastu_rationale": "Requires moderate weight and intermediate stability; serves well as transitional living or storage space.",
+      "civil_engineering_rationale": "Acts as an effective thermal buffer against high southern solar radiation; deep overhangs protect south windows."
+    },
+    {
+      "zone": "SW",
+      "zone_name": "Nirriti",
+      "primary_room": "Master Bedroom",
+      "alternative_room": "Overhead Water Tank / Heavy Storage",
+      "prohibited": ["Puja Room", "Main Entrance Gate", "Kitchen", "Underground Sump"],
+      "vastu_rationale": "Heaviest, most grounded quadrant; represents stability, leadership, and restful sleep for the head of household.",
+      "civil_engineering_rationale": "Provides maximum acoustic privacy from street noise and acts as high thermal mass shielding living zones from harsh afternoon western heat."
+    },
+    {
+      "zone": "W",
+      "zone_name": "Varuna",
+      "primary_room": "Dining Room / Children's Bedroom",
+      "alternative_room": "Study Room / Staircase",
+      "prohibited": ["Underground Water Tank"],
+      "vastu_rationale": "Governed by Varuna; promotes balanced digestion, social dining, and structured intellectual study.",
+      "civil_engineering_rationale": "Provides warm evening daylight for dinner hours; vertical louvers or deep reveals shield windows from low-angle sunset glare."
+    },
+    {
+      "zone": "NW",
+      "zone_name": "Vayu",
+      "primary_room": "Guest Bedroom / Bathrooms",
+      "alternative_room": "Pantry / Garage / Laundry",
+      "prohibited": ["Master Bedroom", "Puja Room"],
+      "vastu_rationale": "Domain of Vayu (Air); governs movement, guests, and cyclical changes; ideal for transient spaces.",
+      "civil_engineering_rationale": "Excellent natural ventilation and negative pressure exhaust zone for wet areas and plumbing shafts."
+    },
+    {
+      "zone": "Center",
+      "zone_name": "Brahmasthan",
+      "primary_room": "Central Atrium / Circulation Hall",
+      "alternative_room": "Open Courtyard (Angan)",
+      "prohibited": ["Heavy Columns", "Toilets", "Kitchen", "Staircase"],
+      "vastu_rationale": "The cosmic heart of the residence; must remain open, uncluttered, and spiritually resonant.",
+      "civil_engineering_rationale": "Central light-well or double-height hall drives natural stack-effect buoyancy ventilation, exhausting warm stale air through clerestories."
+    }
+  ],
+  "slope_drainage_rules": {
+    "N": { "status": "favourable", "description": "Terrain slopes toward North; gravity surface runoff aligns with natural drainage and promotes open northern daylight." },
+    "NE": { "status": "favourable", "description": "Terrain slopes toward Northeast (Ishanya); canonical ideal for water runoff and morning solar orientation." },
+    "E": { "status": "favourable", "description": "Terrain slopes toward East; promotes clean eastward stormwater discharge and unhindered sunrise light." },
+    "S": { "status": "requires_remedy", "description": "Terrain slopes toward South; requires raising southern plinth and installing perimeter interceptor swales to divert runoff." },
+    "SW": { "status": "requires_remedy", "description": "Terrain slopes toward Southwest (Nirriti); causes unwanted moisture surcharge along heavy foundations; remedial stepped retaining walls and northern bypass swales mandatory." },
+    "SE": { "status": "neutral", "description": "Terrain slopes toward Southeast; manageable surface runoff with standard perimeter channel drains." },
+    "W": { "status": "neutral", "description": "Terrain slopes toward West; standard stepped grading and western foundation damp-proofing required." },
+    "NW": { "status": "neutral", "description": "Terrain slopes toward Northwest; standard perimeter gravity discharge toward municipal storm main." }
+  },
+  "reconciliation_principles": [
+    {
+      "topic": "Kitchen Placement in Southeast (Agneya)",
+      "status": "concordant",
+      "vastu_position": "Agni (Fire) governs Southeast; kitchen must face East/Southeast for domestic harmony.",
+      "scientific_passive_position": "Southeast orientation captures early morning daylight for breakfast prep while prevailing Southwesterly winds naturally draft heat and fumes away from bedrooms.",
+      "recommended_synthesis": "Both traditions converge: locate the kitchen in Southeast with cooking counter along the eastern wall and exhaust fans on the southern/eastern facade."
+    },
+    {
+      "topic": "Master Bedroom in Southwest (Nirriti)",
+      "status": "concordant",
+      "vastu_position": "Nirriti represents stability and grounding; master suite must occupy Southwest.",
+      "scientific_passive_position": "Master bedroom and heavy wardrobe closets in Southwest act as a solid thermal buffer against harsh low-angle afternoon solar radiation.",
+      "recommended_synthesis": "Both traditions agree: position the master bedroom in Southwest with thick masonry walls and deep window overhangs."
+    },
+    {
+      "topic": "Water Sump & Rainwater Harvesting in Northeast",
+      "status": "concordant",
+      "vastu_position": "Ishanya is the water/ether quadrant; underground water storage brings health and prosperity.",
+      "scientific_passive_position": "Underground sump in Northeast keeps stored water cool away from southern heat; morning breezes across open water features provide passive evaporative cooling.",
+      "recommended_synthesis": "Install underground rainwater sump in the Northeast open setback with clean inspection access."
+    },
+    {
+      "topic": "Approach Road on Southern Boundary",
+      "status": "divergent",
+      "vastu_position": "Traditional canon discourages southern main entrance doors as Yama's portal.",
+      "scientific_passive_position": "When public municipal road is strictly on the South, direct vehicular and pedestrian access from the South is an engineering necessity.",
+      "recommended_synthesis": "Position the main boundary gate along the favorable southern pada (Pushpadanta/Vithatha), and utilize an angled internal entry foyer that redirects the front door visually toward the North or East."
+    },
+    {
+      "topic": "Commercial Frontage on West",
+      "status": "divergent",
+      "vastu_position": "Vastu prioritizes East and North portals over Western entrances.",
+      "scientific_passive_position": "Commercial and retail properties mandate direct street visibility and pedestrian entry regardless of cardinal facing.",
+      "recommended_synthesis": "Provide western entrance for commercial foot traffic with deep recessed colonnades or vertical architectural fins to block low-angle afternoon solar glare."
+    }
+  ]
+}

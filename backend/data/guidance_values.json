@@ -1,0 +1,180 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "source": "State Inspector General of Registration (IGR) and Revenue Departments (Karnataka Dept of Stamps and Registration, Delhi Revenue Dept, Maharashtra IGR, Assam Revenue Dept, Telangana Registration & Stamps, Tamil Nadu Registration Dept, West Bengal Directorate of Registration)",
+    "retrieval_date": "2026-09-23",
+    "coverage": "major_metropolitan_and_state_capital_guidance_values_v1",
+    "coverage_scope_note": "Version 1.0.0 provides published guidance values and circle rates across primary Indian metropolitan economic centers with geospatial coordinates (center_lat, center_lon, radius_km) for resilient spatial matching without reverse geocoding dependency. Tier-2/3 municipalities are scheduled for version 1.1.0.",
+    "mandatory_disclaimer": "Indicative guidance-value estimate based on published state government circle rates. Local sub-registrar rates vary by specific survey number, road width, and municipal tax ward. Verify official valuation and stamp duty with the local Sub-Registrar Office before legal transaction."
+  },
+  "entries": [
+    {
+      "id": "blr_core",
+      "city": "Bengaluru",
+      "zone_label": "Bengaluru Central Urban Core (Zone A)",
+      "center_lat": 12.9716,
+      "center_lon": 77.5946,
+      "radius_km": 12.0,
+      "rate_inr_per_sqft": 8500.0,
+      "publication_source": "Department of Stamps and Registration, Government of Karnataka, Guidance Value Notification",
+      "effective_year": 2024,
+      "source_note": "Karnataka Guidance Values 2023-2024 revision for Central Bengaluru wards"
+    },
+    {
+      "id": "blr_tech_corridor",
+      "city": "Bengaluru",
+      "zone_label": "Bengaluru Outer Growth Corridors (Bellandur / Whitefield / Electronic City)",
+      "center_lat": 12.9352,
+      "center_lon": 77.6946,
+      "radius_km": 25.0,
+      "rate_inr_per_sqft": 6200.0,
+      "publication_source": "Department of Stamps and Registration, Government of Karnataka",
+      "effective_year": 2024,
+      "source_note": "Karnataka Guidance Values for Mahadevapura and Bommanahalli revenue sub-districts"
+    },
+    {
+      "id": "del_central_prime",
+      "city": "Delhi",
+      "zone_label": "Delhi NCT Category A/B Prime Residential",
+      "center_lat": 28.6139,
+      "center_lon": 77.2090,
+      "radius_km": 15.0,
+      "rate_inr_per_sqft": 14000.0,
+      "publication_source": "Delhi Revenue Department Circle Rates Notification",
+      "effective_year": 2024,
+      "source_note": "Delhi Circle Rates Schedule for Category A and B Municipal Colonies"
+    },
+    {
+      "id": "del_ncr_corridor",
+      "city": "Delhi NCR",
+      "zone_label": "Delhi NCR Standard Arterial Corridors (Noida / Gurugram)",
+      "center_lat": 28.4595,
+      "center_lon": 77.0266,
+      "radius_km": 35.0,
+      "rate_inr_per_sqft": 7500.0,
+      "publication_source": "Haryana Revenue Dept / UP Stamp & Registration Dept Circle Rates",
+      "effective_year": 2024,
+      "source_note": "Gurugram / Gautam Buddha Nagar District Collector Circle Rate Gazette"
+    },
+    {
+      "id": "mum_island_city",
+      "city": "Mumbai",
+      "zone_label": "Mumbai Island City Core (South Mumbai)",
+      "center_lat": 18.9388,
+      "center_lon": 72.8354,
+      "radius_km": 12.0,
+      "rate_inr_per_sqft": 28000.0,
+      "publication_source": "Inspector General of Registration (IGR) Maharashtra Annual Statement of Rates (ASR)",
+      "effective_year": 2024,
+      "source_note": "Maharashtra Ready Reckoner (ASR) Schedule for Mumbai City District"
+    },
+    {
+      "id": "mum_suburbs",
+      "city": "Mumbai",
+      "zone_label": "Mumbai Western & Eastern Suburbs (Bandra - Andheri - Thane)",
+      "center_lat": 19.1136,
+      "center_lon": 72.8697,
+      "radius_km": 30.0,
+      "rate_inr_per_sqft": 15000.0,
+      "publication_source": "Inspector General of Registration (IGR) Maharashtra Annual Statement of Rates (ASR)",
+      "effective_year": 2024,
+      "source_note": "Maharashtra Ready Reckoner (ASR) Schedule for Mumbai Suburban District"
+    },
+    {
+      "id": "gau_central",
+      "city": "Guwahati",
+      "zone_label": "Guwahati Urban Area (GS Road / Dispur / Kamrup Metro)",
+      "center_lat": 26.1445,
+      "center_lon": 91.7362,
+      "radius_km": 20.0,
+      "rate_inr_per_sqft": 3800.0,
+      "publication_source": "Revenue & Disaster Management Department, Government of Assam, Zonal Valuation",
+      "effective_year": 2024,
+      "source_note": "Kamrup Metropolitan District Circle Office Zonal Land Valuation Rate"
+    },
+    {
+      "id": "hyd_west_hitec",
+      "city": "Hyderabad",
+      "zone_label": "Hyderabad HITEC City / Gachibowli Growth Corridor",
+      "center_lat": 17.4435,
+      "center_lon": 78.3772,
+      "radius_km": 18.0,
+      "rate_inr_per_sqft": 7200.0,
+      "publication_source": "Registration and Stamps Department, Government of Telangana Market Values",
+      "effective_year": 2024,
+      "source_note": "Telangana Basic Value Guidelines for Serilingampally & Rangareddy Urban Mandals"
+    },
+    {
+      "id": "hyd_central",
+      "city": "Hyderabad",
+      "zone_label": "Hyderabad Central Urban Core (Banjara / Secunderabad)",
+      "center_lat": 17.3850,
+      "center_lon": 78.4867,
+      "radius_km": 22.0,
+      "rate_inr_per_sqft": 5800.0,
+      "publication_source": "Registration and Stamps Department, Government of Telangana Market Values",
+      "effective_year": 2024,
+      "source_note": "Telangana Basic Value Guidelines for Hyderabad District Urban Mandals"
+    },
+    {
+      "id": "chn_central",
+      "city": "Chennai",
+      "zone_label": "Chennai Urban Core & OMR Growth Corridor",
+      "center_lat": 13.0827,
+      "center_lon": 80.2707,
+      "radius_km": 25.0,
+      "rate_inr_per_sqft": 6800.0,
+      "publication_source": "Registration Department, Government of Tamil Nadu Guideline Value Revision",
+      "effective_year": 2024,
+      "source_note": "Tamil Nadu Registration Dept Guideline Value Schedule for Chennai Central/South"
+    },
+    {
+      "id": "kol_central",
+      "city": "Kolkata",
+      "zone_label": "Kolkata Urban Core & Salt Lake / New Town Corridors",
+      "center_lat": 22.5726,
+      "center_lon": 88.3639,
+      "radius_km": 25.0,
+      "rate_inr_per_sqft": 5400.0,
+      "publication_source": "Directorate of Registration and Stamp Revenue, Government of West Bengal",
+      "effective_year": 2024,
+      "source_note": "West Bengal Directorate of Registration Circle Rate Registry for Kolkata & Bidhannagar"
+    },
+    {
+      "id": "pun_central",
+      "city": "Pune",
+      "zone_label": "Pune Urban Metropolitan Corridor (Shivajinagar / Hinjewadi / Kharadi)",
+      "center_lat": 18.5204,
+      "center_lon": 73.8567,
+      "radius_km": 25.0,
+      "rate_inr_per_sqft": 5800.0,
+      "publication_source": "Inspector General of Registration (IGR) Maharashtra Annual Statement of Rates (ASR)",
+      "effective_year": 2024,
+      "source_note": "Maharashtra Ready Reckoner (ASR) Schedule for Pune Municipal Corporation"
+    },
+    {
+      "id": "ahm_central",
+      "city": "Ahmedabad",
+      "zone_label": "Ahmedabad West / SG Highway Urban Corridor",
+      "center_lat": 23.0225,
+      "center_lon": 72.5714,
+      "radius_km": 25.0,
+      "rate_inr_per_sqft": 4800.0,
+      "publication_source": "Revenue Department, Government of Gujarat Jantri (Annual Statement of Rates)",
+      "effective_year": 2024,
+      "source_note": "Gujarat Jantri Revised Valuation Schedule for Ahmedabad Urban Area"
+    },
+    {
+      "id": "pat_central",
+      "city": "Patna",
+      "zone_label": "Patna Urban Area (Bailey Road / Fraser Road Corridor)",
+      "center_lat": 25.5941,
+      "center_lon": 85.1376,
+      "radius_km": 20.0,
+      "rate_inr_per_sqft": 4200.0,
+      "publication_source": "Registration, Excise and Prohibition Department, Government of Bihar Minimum Valuation Register (MVR)",
+      "effective_year": 2024,
+      "source_note": "Bihar MVR Schedule for Patna Sadar Sub-Registry"
+    }
+  ]
+}

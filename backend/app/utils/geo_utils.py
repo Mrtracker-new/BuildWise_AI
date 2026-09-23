@@ -17,6 +17,27 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
     return EARTH_RADIUS_METERS * c
 
+def calculate_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """
+    Calculates initial forward bearing (azimuth) from (lat1, lon1) to (lat2, lon2)
+    in degrees clockwise from true north (0 to 360).
+    """
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_lambda = math.radians(lon2 - lon1)
+    y = math.sin(delta_lambda) * math.cos(phi2)
+    x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(delta_lambda)
+    bearing = math.degrees(math.atan2(y, x))
+    return (bearing + 360.0) % 360.0
+
+def azimuth_to_cardinal_8(azimuth_deg: float) -> str:
+    """
+    Converts compass azimuth in degrees (0-360) to 8-point cardinal label.
+    """
+    directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+    idx = int(((azimuth_deg + 22.5) % 360.0) // 45.0)
+    return directions[idx]
+
 def get_cardinal_offsets(lat: float, lon: float, distance_meters: float = 30.0) -> Dict[str, Tuple[float, float]]:
     """
     Returns coordinate pairs for North, South, East, West at distance_meters offset.
@@ -41,7 +62,6 @@ def calculate_synthetic_elevation(lat: float, lon: float) -> float:
     Deterministic mathematical fallback function when external elevation APIs fail.
     Based on spatial harmonics to produce continuous realistic terrain heights (50m to 1200m).
     """
-    # Harmonic components
     wave1 = math.sin(lat * 0.5) * math.cos(lon * 0.5) * 300.0
     wave2 = math.sin(lat * 2.1 + lon * 1.7) * 120.0
     wave3 = math.cos(lat * 8.3 - lon * 6.1) * 45.0
@@ -53,7 +73,6 @@ def calculate_solar_profile(latitude: float) -> Dict[str, float]:
     Determines seasonal solar zenith and azimuth indicators based on latitude.
     """
     is_northern = latitude >= 0.0
-    # Summer solstice declination +23.45, winter -23.45
     summer_zenith = abs(latitude - 23.45)
     winter_zenith = abs(latitude - (-23.45))
     equinox_zenith = abs(latitude)

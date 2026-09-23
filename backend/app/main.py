@@ -18,14 +18,19 @@ from app.services import (
     calculate_building_orientation,
     calculate_construction_cost,
     identify_site_risks,
-    generate_pdf_report
+    generate_pdf_report,
+    evaluate_hazard_profile,
+    calculate_land_value,
+    evaluate_vastu_advisory,
+    generate_recommendations,
+    get_top_severity_recommendations
 )
 from app.ai import get_ai_adapter
 
 app = FastAPI(
     title="BuildWise AI API",
-    description="Geo-based intelligent construction feasibility, orientation, and cost estimation engine.",
-    version="1.0.0"
+    description="Geo-based intelligent construction feasibility, orientation, cost estimation, hazard, land value, and Vastu advisory engine.",
+    version="1.1.0"
 )
 
 # CORS configuration
@@ -44,7 +49,7 @@ async def health_check():
     """
     return HealthResponse(
         status="healthy",
-        version="1.0.0",
+        version="1.1.0",
         ai_adapters_available=["mock", "groq", "gemini", "ollama"],
         active_default_ai=settings.DEFAULT_AI_PROVIDER
     )
@@ -53,7 +58,8 @@ async def health_check():
 async def analyze_site(req: AnalysisRequest):
     """
     Executes full multi-criteria site feasibility, orientation optimization,
-    CPWD construction cost estimation, risk synthesis, and technical explanation.
+    CPWD construction cost estimation, risk synthesis, hazard profiling,
+    indicative circle rate land valuation, Vastu advisory, and traceable engineering recommendations.
     """
     request_id = f"BW-{uuid.uuid4().hex[:8].upper()}"
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -76,7 +82,7 @@ async def analyze_site(req: AnalysisRequest):
         warnings.append("Microclimate telemetry unavailable. Latitudinal climate averages applied.")
         is_degraded = True
 
-    # 2. Deterministic calculations
+    # 2. Deterministic calculations (MCDA, orientation, CPWD costs, risks)
     overall_score, verdict, factors = evaluate_land_suitability(
         lat=req.latitude,
         lon=req.longitude,
@@ -97,9 +103,12 @@ async def analyze_site(req: AnalysisRequest):
         floors=req.floors
     )
 
-    # Road score from factors
+    # Road and facility scores from factors
     road_factor = next((f for f in factors if f.factor_id == "road_access"), None)
     road_score = road_factor.score if road_factor else 75.0
+
+    facility_factor = next((f for f in factors if f.factor_id == "facility_proximity"), None)
+    facility_score = facility_factor.score if facility_factor else 75.0
 
     risks = identify_site_risks(
         slope_pct=slope_pct,
@@ -109,7 +118,63 @@ async def analyze_site(req: AnalysisRequest):
         floors=req.floors
     )
 
-    # 3. Assemble structured data for AI adapter
+    # 3. Module 1: Hazard History & Climate Stress Profile
+    hazard_profile, hazard_warnings = await evaluate_hazard_profile(
+        lat=req.latitude,
+        lon=req.longitude,
+        elevation_m=elevation_m,
+        address=address
+    )
+    for w in hazard_warnings:
+        if w not in warnings:
+            warnings.append(w)
+    if any("unreachable" in w.lower() or "unavailable" in w.lower() for w in hazard_warnings):
+        is_degraded = True
+
+    # 4. Module 2: Indicative Land Value Engine
+    land_value = calculate_land_value(
+        lat=req.latitude,
+        lon=req.longitude,
+        address=address,
+        road_score=road_score,
+        facility_score=facility_score,
+        built_up_area_sqft=req.built_up_area_sqft,
+        floors=req.floors,
+        total_construction_cost_inr=cost_estimate.total_estimated_cost_inr,
+        override_rate_per_sqft=req.override_land_rate_per_sqft,
+        plot_area_sqft=req.plot_area_sqft,
+        ground_coverage_ratio=req.ground_coverage_ratio or 0.60
+    )
+    if land_value.confidence_warning and land_value.confidence_warning not in warnings:
+        warnings.append(land_value.confidence_warning)
+
+    # 5. Module 3: Vastu & Functional Planning Advisory
+    vastu_advisory, vastu_warnings = await evaluate_vastu_advisory(
+        lat=req.latitude,
+        lon=req.longitude,
+        elevation_m=elevation_m
+    )
+    for w in vastu_warnings:
+        if w not in warnings:
+            warnings.append(w)
+    if vastu_advisory.road_approach.is_fallback:
+        is_degraded = True
+
+    # 6. Module 4: Ranked Traceable Recommendation Engine
+    recommendation_items = generate_recommendations(
+        factors=factors,
+        hazard_profile=hazard_profile,
+        land_value=land_value,
+        vastu_advisory=vastu_advisory,
+        orientation=orientation,
+        cost_estimate=cost_estimate
+    )
+    detailed_recs = [item.recommendation_text for item in recommendation_items]
+
+    # Cap recommendations passed to AI payload to top 8 severity-ranked (Amendment 10)
+    top_8_recs = get_top_severity_recommendations(recommendation_items, limit=8)
+
+    # 7. Assemble structured data for AI adapter
     intermediate_data = {
         "request_id": request_id,
         "coordinates": {"latitude": req.latitude, "longitude": req.longitude},
@@ -120,15 +185,19 @@ async def analyze_site(req: AnalysisRequest):
         "orientation": orientation.model_dump(),
         "cost_estimate": cost_estimate.model_dump(),
         "risks": [r.model_dump() for r in risks],
+        "hazard_profile": hazard_profile.model_dump(),
+        "land_value": land_value.model_dump(),
+        "vastu_advisory": vastu_advisory.model_dump(),
+        "recommendations": [r.model_dump() for r in top_8_recs],
         "built_up_area_sqft": req.built_up_area_sqft,
         "quality_grade": req.quality_grade,
         "floors": req.floors
     }
 
-    # 4. Generate engineering commentary via requested AI adapter
+    # 8. Generate engineering commentary via requested AI adapter
     provider_name = req.ai_provider or settings.DEFAULT_AI_PROVIDER
     adapter = get_ai_adapter(provider_name)
-    summary, recommendations, ai_meta = await adapter.generate_explanation(intermediate_data)
+    summary, ai_recs, ai_meta = await adapter.generate_explanation(intermediate_data)
 
     if ai_meta.get("fallback_reason"):
         warnings.append(f"AI Provider note: {ai_meta.get('fallback_reason')}")
@@ -144,8 +213,12 @@ async def analyze_site(req: AnalysisRequest):
         orientation=orientation,
         cost_estimate=cost_estimate,
         risks=risks,
+        hazard_profile=hazard_profile,
+        land_value=land_value,
+        vastu_advisory=vastu_advisory,
+        recommendation_items=recommendation_items,
+        detailed_recommendations=detailed_recs,
         engineering_summary=summary,
-        detailed_recommendations=recommendations,
         ai_metadata=ai_meta,
         degraded_mode=is_degraded,
         warnings=warnings
@@ -161,9 +234,11 @@ async def create_pdf_report(req: ReportRequest):
 
     try:
         pdf_stream = generate_pdf_report(req.analysis_data)
-        coords = req.analysis_data.get("coordinates", {})
-        lat_str = f"{coords.get('latitude', 0.0):.2f}"
-        lon_str = f"{coords.get('longitude', 0.0):.2f}"
+        coords = req.analysis_data.get("coordinates") or {}
+        lat_val = coords.get('latitude') if isinstance(coords.get('latitude'), (int, float)) else 0.0
+        lon_val = coords.get('longitude') if isinstance(coords.get('longitude'), (int, float)) else 0.0
+        lat_str = f"{lat_val:.2f}"
+        lon_str = f"{lon_val:.2f}"
         filename = f"BuildWise_Report_{lat_str}_{lon_str}.pdf"
 
         return StreamingResponse(
@@ -172,4 +247,6 @@ async def create_pdf_report(req: ReportRequest):
             headers={"Content-Disposition": f'attachment; filename="{filename}"'}
         )
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"PDF generation error: {str(e)}")
