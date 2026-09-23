@@ -10,6 +10,10 @@ from app.schemas.response import (
     AnalysisResponse,
     HealthResponse
 )
+from app.schemas.site_vision import (
+    SiteVisionRequest,
+    SiteVisionResponse
+)
 from app.services import (
     fetch_reverse_geocode,
     fetch_elevation_and_slope,
@@ -23,8 +27,10 @@ from app.services import (
     calculate_land_value,
     evaluate_vastu_advisory,
     generate_recommendations,
-    get_top_severity_recommendations
+    get_top_severity_recommendations,
+    analyze_site_vision
 )
+
 from app.ai import get_ai_adapter
 
 app = FastAPI(
@@ -250,3 +256,24 @@ async def create_pdf_report(req: ReportRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"PDF generation error: {str(e)}")
+
+@app.post("/api/site-vision", response_model=SiteVisionResponse)
+async def site_vision_analysis(req: SiteVisionRequest):
+    """
+    Executes ecological satellite vision analysis over Copernicus Sentinel-2 L2A imagery.
+    Computes Green Cover Index, water detection, built-up ratio, and Tree Preservation Plan.
+    """
+    try:
+        response = await analyze_site_vision(
+            latitude=req.latitude,
+            longitude=req.longitude,
+            plot_area_sqft=req.plot_area_sqft,
+            mode_override=req.mode_override,
+            orientation_deg=req.orientation_deg
+        )
+        return response
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Site vision analysis error: {str(e)}")
+

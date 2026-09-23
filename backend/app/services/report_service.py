@@ -530,6 +530,69 @@ def generate_pdf_report(data: Dict[str, Any]) -> io.BytesIO:
             story.append(Paragraph(f"<b>{idx}.</b> {rec}", body_text))
             story.append(Spacer(1, 2))
 
+    # 9. Ecological Site Vision & Tree Preservation (Sentinel-2 Remote Sensing)
+    vision = data.get("site_vision")
+    if hasattr(vision, "model_dump"):
+        vision = vision.model_dump()
+
+    if vision and isinstance(vision, dict) and vision.get("mode") != "unavailable":
+        story.append(Paragraph("9. Ecological Site Vision & Tree Preservation Plan", section_h1))
+
+        green_pct = float(vision.get("green_cover_pct", 0.0))
+        water_pct = float(vision.get("water_cover_pct", 0.0))
+        built_pct = float(vision.get("built_up_pct", 0.0))
+        clusters = vision.get("tree_clusters", {}).get("features", [])
+        cluster_count = len(clusters) if isinstance(clusters, list) else 0
+        scene_meta = vision.get("scene_metadata") or {}
+        img_date = scene_meta.get("datetime", "Recent")[:10] if scene_meta.get("datetime") else "N/A"
+        mode_label = vision.get("mode", "index-only").upper()
+
+        summary_text = (
+            f"<b>Spectral Green Cover:</b> {green_pct:.1f}% | "
+            f"<b>Tree Canopy Clusters:</b> {cluster_count} | "
+            f"<b>Water Cover:</b> {water_pct:.1f}% | "
+            f"<b>Built-up Ratio:</b> {built_pct:.1f}% | "
+            f"<b>Acquisition:</b> {img_date} (Copernicus Sentinel-2, Mode: {mode_label})"
+        )
+        story.append(Paragraph(summary_text, body_text))
+        story.append(Spacer(1, 4))
+
+        plan = vision.get("preservation_plan", [])
+        if plan:
+            top_items = [p.model_dump() if hasattr(p, "model_dump") else p for p in plan[:3]]
+            plan_headers = [
+                Paragraph("Cluster ID", table_header),
+                Paragraph("Canopy Area", table_header),
+                Paragraph("Action Rank", table_header),
+                Paragraph("Prescribed Civil / Ecological Measure", table_header)
+            ]
+            plan_rows = [plan_headers]
+            for p in top_items:
+                cid = p.get("cluster_id", "cluster")
+                area = f"{p.get('area_sqm', 0):.0f} m²"
+                rank = p.get("rank", "context").upper()
+                action = p.get("action", "")
+                plan_rows.append([
+                    Paragraph(f"<b>{cid}</b>", table_text),
+                    Paragraph(area, table_text),
+                    Paragraph(f"<b>{rank}</b>", table_text),
+                    Paragraph(action, table_text)
+                ])
+
+            plan_table = Table(plan_rows, colWidths=[90, 65, 80, 285])
+            plan_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1E293B")),
+                ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+                ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+                ('TOPPADDING', (0, 0), (-1, -1), 3),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+                ('LEFTPADDING', (0, 0), (-1, -1), 5),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+            ]))
+            story.append(plan_table)
+            story.append(Spacer(1, 6))
+
     # Formal Engineering Disclaimer
     story.append(Spacer(1, 10))
     story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#94A3B8"), spaceAfter=5))
