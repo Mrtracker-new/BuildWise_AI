@@ -1,8 +1,99 @@
+import time
 import pytest
+from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 from app.main import app
 
 client = TestClient(app)
+
+def _mock_http_response(url: str, **kwargs):
+    resp = MagicMock()
+    resp.status_code = 200
+
+    if "nominatim" in url:
+        if "26.14" in url or "91.73" in url:
+            resp.json.return_value = {
+                "display_name": "GS Road, Guwahati, Kamrup Metropolitan, Assam, India",
+                "address": {"city": "Guwahati", "state": "Assam"}
+            }
+        elif "25.59" in url or "85.13" in url:
+            resp.json.return_value = {
+                "display_name": "Patna, Patna District, Bihar, India",
+                "address": {"city": "Patna", "state": "Bihar"}
+            }
+        else:
+            resp.json.return_value = {
+                "display_name": "Bengaluru Urban, Karnataka, India",
+                "address": {"city": "Bengaluru", "state": "Karnataka"}
+            }
+    elif "earthquake.usgs.gov" in url:
+        if "26.14" in url or "91.73" in url:
+            resp.json.return_value = {
+                "features": [
+                    {
+                        "properties": {"mag": 6.8, "time": 1600000000000, "place": "Assam Tectonic Belt"},
+                        "geometry": {"coordinates": [91.73, 26.14, 10.0]}
+                    },
+                    {
+                        "properties": {"mag": 5.4, "time": 1500000000000, "place": "Kamrup District"},
+                        "geometry": {"coordinates": [91.75, 26.12, 15.0]}
+                    }
+                ]
+            }
+        else:
+            resp.json.return_value = {"features": []}
+    elif "flood-api.open-meteo.com" in url:
+        if "25.59" in url or "85.13" in url:
+            resp.json.return_value = {
+                "daily": {"river_discharge": [20.0, 25.0, 30.0, 180.0, 25.0, 20.0, 22.0, 24.0, 20.0, 25.0]}
+            }
+        else:
+            resp.json.return_value = {
+                "daily": {"river_discharge": [0.02, 0.04, 0.01, 0.03, 0.01, 0.02, 0.01, 0.02, 0.01, 0.02]}
+            }
+    elif "archive-api.open-meteo.com" in url:
+        times = [f"{y}-06-15" for y in range(2015, 2025)]
+        gusts = [55.0] * 10
+        precips = [15.0] * 10
+        resp.json.return_value = {
+            "daily": {"time": times, "wind_gusts_10m_max": gusts, "precipitation_sum": precips}
+        }
+    elif "api.open-elevation.com" in url:
+        if "25.59" in url:
+            resp.json.return_value = {"results": [{"elevation": 53.0}]}
+        elif "26.14" in url:
+            resp.json.return_value = {"results": [{"elevation": 55.0}]}
+        else:
+            resp.json.return_value = {"results": [{"elevation": 920.0}]}
+    else:
+        resp.json.return_value = {}
+
+    return resp
+
+def _mock_http_post(url: str, **kwargs):
+    resp = MagicMock()
+    resp.status_code = 200
+    if "overpass-api.de" in url:
+        resp.json.return_value = {
+            "elements": [
+                {
+                    "geometry": [
+                        {"lat": 12.972, "lon": 77.595},
+                        {"lat": 12.973, "lon": 77.596}
+                    ]
+                }
+            ]
+        }
+    else:
+        resp.json.return_value = {}
+    return resp
+
+@pytest.fixture
+def mock_external_http():
+    with patch("httpx.AsyncClient.get", side_effect=_mock_http_response), \
+         patch("httpx.AsyncClient.post", side_effect=_mock_http_post):
+        yield
+
 
 def test_health_endpoint():
     response = client.get("/api/health")
@@ -12,7 +103,8 @@ def test_health_endpoint():
     assert "mock" in data["ai_adapters_available"]
     assert data["active_default_ai"] == "mock"
 
-def test_analyze_endpoint():
+
+def test_analyze_endpoint(mock_external_http):
     payload = {
         "latitude": 12.9716,
         "longitude": 77.5946,
@@ -33,12 +125,95 @@ def test_analyze_endpoint():
     assert len(data["detailed_recommendations"]) > 0
     assert data["ai_metadata"]["provider_used"] == "mock"
 
-def test_pdf_report_endpoint():
-    # Run analysis first
+    # New modules verification
+    assert "hazard_profile" in data
+    assert data["hazard_profile"]["seismic"]["zone"] in ["Zone II", "Zone III", "Zone IV", "Zone V"]
+    assert "land_value" in data
+    assert data["land_value"]["locality_multiplier"] >= 0.85
+    assert "vastu_advisory" in data
+    assert len(data["vastu_advisory"]["ranked_entrances"]) == 3
+    assert "recommendation_items" in data
+    assert len(data["recommendation_items"]) > 0
+
+
+def test_differential_bengaluru_vs_guwahati(mock_external_http):
+    """
+    Deterministic differential check (Amendment 11 fixture-backed):
+    Bengaluru site returns Zone II with low seismic history.
+    Guwahati site returns Zone V with non-empty event list / high seismic hazard.
+    """
+    # 1. Bengaluru site
+    blr_resp = client.post("/api/analyze", json={
+        "latitude": 12.9716,
+        "longitude": 77.5946,
+        "built_up_area_sqft": 2000.0,
+        "quality_grade": "standard",
+        "floors": 1,
+        "ai_provider": "mock"
+    })
+    assert blr_resp.status_code == 200
+    blr_data = blr_resp.json()
+    blr_seismic = blr_data["hazard_profile"]["seismic"]
+    assert blr_seismic["zone"] == "Zone II"
+    assert blr_seismic["zone_factor"] == 0.10
+
+    # 2. Guwahati site
+    gau_resp = client.post("/api/analyze", json={
+        "latitude": 26.1445,
+        "longitude": 91.7362,
+        "built_up_area_sqft": 2000.0,
+        "quality_grade": "standard",
+        "floors": 1,
+        "ai_provider": "mock"
+    })
+    assert gau_resp.status_code == 200
+    gau_data = gau_resp.json()
+    gau_seismic = gau_data["hazard_profile"]["seismic"]
+    assert gau_seismic["zone"] == "Zone V"
+    assert gau_seismic["zone_factor"] == 0.36
+    # Guwahati has significant tectonic history
+    assert gau_seismic["zone_factor"] > blr_seismic["zone_factor"]
+
+
+def test_differential_river_adjacent_vs_upland(mock_external_http):
+    """
+    Flood indicator check: river-adjacent site (Patna Ganga bank, ~50m AMSL)
+    exhibits higher flood pressure than upland Deccan plateau (Bengaluru, ~920m AMSL).
+    """
+    blr_resp = client.post("/api/analyze", json={
+        "latitude": 12.9716,
+        "longitude": 77.5946,
+        "built_up_area_sqft": 2000.0,
+        "quality_grade": "standard",
+        "floors": 1,
+        "ai_provider": "mock"
+    })
+    blr_flood = blr_resp.json()["hazard_profile"]["flood"]
+
+    patna_resp = client.post("/api/analyze", json={
+        "latitude": 25.5941,
+        "longitude": 85.1376,
+        "built_up_area_sqft": 2000.0,
+        "quality_grade": "standard",
+        "floors": 1,
+        "ai_provider": "mock"
+    })
+    patna_flood = patna_resp.json()["hazard_profile"]["flood"]
+
+    # Patna is flood-prone Gangetic lowlands; Bengaluru is Deccan upland
+    assert patna_flood["elevation_amsl_m"] < blr_flood["elevation_amsl_m"]
+    assert patna_flood["ndma_flood_prone"] is True
+    assert blr_flood["ndma_flood_prone"] is False
+
+
+def test_pdf_report_endpoint_and_timing(mock_external_http):
+    """
+    Tests vector PDF generation and asserts compilation remains strictly under 3.0 seconds.
+    """
     analyze_payload = {
         "latitude": 12.9716,
         "longitude": 77.5946,
-        "built_up_area_sqft": 1500.0,
+        "built_up_area_sqft": 2000.0,
         "quality_grade": "standard",
         "building_typology": "residential_single",
         "floors": 1,
@@ -48,9 +223,119 @@ def test_pdf_report_endpoint():
     assert analyze_resp.status_code == 200
     analysis_data = analyze_resp.json()
 
-    report_payload = {"analysis_data": analysis_data}
-    report_resp = client.post("/api/report", json=report_payload)
+    # Time report generation
+    t0 = time.time()
+    report_resp = client.post("/api/report", json={"analysis_data": analysis_data})
+    duration = time.time() - t0
+
     assert report_resp.status_code == 200
     assert report_resp.headers["content-type"] == "application/pdf"
     assert len(report_resp.content) > 1000
     assert report_resp.content.startswith(b"%PDF")
+    assert duration < 3.0  # Must be strictly under 3.0 seconds
+
+
+def test_pdf_report_with_unlisted_and_null_land_values(mock_external_http):
+    """
+    Verifies vector PDF compiles cleanly when land rates are unlisted, zero, or null.
+    Prevents regressions on unsupported format string passed to NoneType.__format__.
+    """
+    analyze_resp = client.post("/api/analyze", json={
+        "latitude": 12.9716,
+        "longitude": 77.5946,
+        "built_up_area_sqft": 2000.0,
+        "quality_grade": "standard",
+        "floors": 1,
+        "ai_provider": "mock"
+    })
+    base_data = analyze_resp.json()
+
+    # Case 1: Unlisted rate (rate is None, land_cost is None)
+    data_unlisted = dict(base_data)
+    data_unlisted["land_value"] = {
+        "indicative_rate_per_sqft": None,
+        "locality_multiplier": 1.05,
+        "land_cost_inr": None,
+        "plot_area_sqft": 3333.3,
+        "combined_project_total_inr": None,
+        "source_publication": "Unlisted Location",
+        "disclaimer": "Rate verification required.",
+        "is_user_override": False
+    }
+    resp1 = client.post("/api/report", json={"analysis_data": data_unlisted})
+    assert resp1.status_code == 200
+    assert resp1.content.startswith(b"%PDF")
+
+    # Case 2: Zero rate passed from client
+    data_zero = dict(base_data)
+    data_zero["land_value"] = {
+        "indicative_rate_per_sqft": 0,
+        "locality_multiplier": 1.0,
+        "land_cost_inr": None,
+        "plot_area_sqft": 3000.0,
+        "combined_project_total_inr": None,
+        "is_user_override": False
+    }
+    resp2 = client.post("/api/report", json={"analysis_data": data_zero})
+    assert resp2.status_code == 200
+    assert resp2.content.startswith(b"%PDF")
+
+    # Case 3: land_value is None entirely
+    data_no_land = dict(base_data)
+    data_no_land["land_value"] = None
+    resp3 = client.post("/api/report", json={"analysis_data": data_no_land})
+    assert resp3.status_code == 200
+    assert resp3.content.startswith(b"%PDF")
+
+    # Case 4: Hazard null fields
+    data_null_hazards = dict(base_data)
+    data_null_hazards["hazard_profile"]["flood"]["discharge_peak_to_mean_ratio"] = None
+    data_null_hazards["hazard_profile"]["seismic"]["zone_factor"] = None
+    data_null_hazards["hazard_profile"]["storm_cyclone"]["max_annual_gust_kmh"] = None
+    data_null_hazards["hazard_profile"]["storm_cyclone"]["extreme_rainfall_days"] = None
+    resp4 = client.post("/api/report", json={"analysis_data": data_null_hazards})
+    assert resp4.status_code == 200
+    assert resp4.content.startswith(b"%PDF")
+
+
+def test_offline_resilience():
+    """
+    Verifies that when all external network calls fail, the system completes
+    a full analysis with deterministic warnings and degraded_mode set to True.
+    """
+    with patch("httpx.AsyncClient.get", side_effect=Exception("Connection refused")), \
+         patch("httpx.AsyncClient.post", side_effect=Exception("Connection refused")):
+        resp = client.post("/api/analyze", json={
+            "latitude": 12.9716,
+            "longitude": 77.5946,
+            "built_up_area_sqft": 2000.0,
+            "quality_grade": "standard",
+            "floors": 1,
+            "ai_provider": "mock"
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["degraded_mode"] is True
+        assert len(data["warnings"]) > 0
+        assert data["overall_suitability_score"] > 0
+        assert data["hazard_profile"]["seismic"]["zone"] == "Zone II"
+
+
+@pytest.mark.skip_when_offline
+def test_live_api_integration():
+    """
+    Amendment 11: Exactly one live-API integration test marked skip-when-offline.
+    Tests live external network endpoints when online.
+    """
+    resp = client.post("/api/analyze", json={
+        "latitude": 12.9716,
+        "longitude": 77.5946,
+        "built_up_area_sqft": 1500.0,
+        "quality_grade": "standard",
+        "floors": 1,
+        "ai_provider": "mock"
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "hazard_profile" in data
+    assert data["hazard_profile"]["seismic"]["zone"] == "Zone II"
