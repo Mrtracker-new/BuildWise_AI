@@ -30,7 +30,10 @@ export type IconName =
   | 'layout-grid'
   | 'navigation'
   | 'arrow-up'
-  | 'tag';
+  | 'tag'
+  | 'tree'
+  | 'satellite'
+  | 'eye';
 
 interface IconProps {
   name: IconName;
@@ -291,6 +294,30 @@ export const Icon: React.FC<IconProps> = ({
       return (
         <svg {...commonProps}>
           <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" />
+        </svg>
+      );
+    case 'tree':
+      return (
+        <svg {...commonProps}>
+          <path d="M12 22v-6" />
+          <path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V16h8v-1.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z" />
+        </svg>
+      );
+    case 'satellite':
+      return (
+        <svg {...commonProps}>
+          <path d="M13 7 9 3 5 7l4 4" />
+          <path d="m17 11 4 4-4 4-4-4" />
+          <path d="m8 12 4 4" />
+          <path d="m16 8-4-4" />
+          <path d="M12 20a8 8 0 1 0-8-8" />
+        </svg>
+      );
+    case 'eye':
+      return (
+        <svg {...commonProps}>
+          <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+          <circle cx="12" cy="12" r="3" />
         </svg>
       );
     default:

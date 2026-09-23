@@ -222,6 +222,7 @@ export interface AnalysisResponse {
   land_value?: LandValueEstimate;
   vastu_advisory?: VastuAdvisory;
   recommendation_items?: RecommendationItem[];
+  site_vision?: SiteVisionResponse;
   ai_metadata: {
     provider_requested?: string;
     provider_used?: string;
@@ -238,3 +239,69 @@ export interface HealthResponse {
   ai_adapters_available: string[];
   active_default_ai: string;
 }
+
+// ----------------------------------------------------
+// Satellite Vision & Tree Preservation Module
+// ----------------------------------------------------
+
+export type SiteVisionMode = 'segformer' | 'index-only' | 'unavailable';
+export type PreservationRank = 'preserve' | 'compensate' | 'removable' | 'context';
+
+export interface SiteVisionRequest {
+  latitude: number;
+  longitude: number;
+  plot_area_sqft?: number;
+  mode_override?: 'segformer' | 'index-only';
+  orientation_deg?: number;
+}
+
+export interface SceneMetadata {
+  id: string;
+  datetime: string;
+  cloud_cover_pct: number;
+  source: string;
+}
+
+export interface PreservationItem {
+  cluster_id: string;
+  area_sqm: number;
+  centroid: [number, number];
+  mean_ndvi: number;
+  overlap_footprint: boolean;
+  rank: PreservationRank;
+  action: string;
+}
+
+export interface GeoJsonFeature {
+  type: 'Feature';
+  geometry: {
+    type: 'Polygon' | 'MultiPolygon';
+    coordinates: number[][][] | number[][][][];
+  };
+  properties: {
+    cluster_id: string;
+    area_sqm: number;
+    mean_ndvi?: number;
+    rank?: PreservationRank;
+    [key: string]: any;
+  };
+}
+
+export interface GeoJsonFeatureCollection {
+  type: 'FeatureCollection';
+  features: GeoJsonFeature[];
+}
+
+export interface SiteVisionResponse {
+  mode: SiteVisionMode;
+  scene_metadata?: SceneMetadata | null;
+  green_cover_pct: number;
+  water_cover_pct: number;
+  built_up_pct: number;
+  tree_clusters: GeoJsonFeatureCollection;
+  water_bodies: GeoJsonFeatureCollection;
+  preservation_plan: PreservationItem[];
+  warnings: string[];
+  timing_ms: Record<string, number>;
+}
+
