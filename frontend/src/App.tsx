@@ -6,7 +6,8 @@ import type {
   FloorPlanResponse,
   ReportRequestPayload,
 } from './services/types';
-import { fetchHealth, submitAnalysis, submitSiteVision } from './services/api';
+import { submitSiteVision } from './services/api';
+import { generateFeasibilityReport, fetchBackendStatus } from './services/aiService';
 import { AppHeader } from './components/AppHeader';
 import { MapCanvas } from './components/MapCanvas';
 import { CoordinatesInput } from './components/CoordinatesInput';
@@ -41,7 +42,7 @@ export const App: React.FC = () => {
     quality_grade: 'standard',
     building_typology: 'residential_single',
     floors: 1,
-    ai_provider: 'mock',
+    ai_provider: 'groq',
     ground_coverage_ratio: 0.6,
   });
 
@@ -54,8 +55,9 @@ export const App: React.FC = () => {
   const [isSiteVisionLoading, setIsSiteVisionLoading] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [fallbackToast, setFallbackToast] = useState<string | null>(null);
   const [backendConnected, setBackendConnected] = useState<boolean>(false);
-  const [activeAiProvider, setActiveAiProvider] = useState<string>('mock');
+  const [serverStatus, setServerStatus] = useState<{ groq: boolean; gemini: boolean } | null>(null);
   const [isMethodologyOpen, setIsMethodologyOpen] = useState<boolean>(false);
 
   // Mobile Panels State (<1024px)
@@ -97,15 +99,21 @@ export const App: React.FC = () => {
     setLeafletResizeTrigger((prev) => prev + 1);
   }, []);
 
-  // Initial Health Check
+  // Initial Backend Status & LLM Key Verification
   useEffect(() => {
-    fetchHealth()
+    fetchBackendStatus()
       .then((res) => {
-        setBackendConnected(res.status === 'healthy');
-        setActiveAiProvider(res.active_default_ai);
+        setBackendConnected(res.status === 'online');
+        setServerStatus({ groq: res.groq, gemini: res.gemini });
+        if (res.groq) {
+          setRequest((prev) => ({ ...prev, ai_provider: 'groq' }));
+        } else if (res.gemini) {
+          setRequest((prev) => ({ ...prev, ai_provider: 'gemini' }));
+        }
       })
       .catch(() => {
         setBackendConnected(false);
+        setServerStatus(null);
       });
   }, []);
 
@@ -206,6 +214,7 @@ export const App: React.FC = () => {
 
     setIsLoading(true);
     setErrorMessage(null);
+    setFallbackToast(null);
     setIsWarningDismissed(false);
 
     // Open results on desktop drawer and mobile
@@ -219,8 +228,12 @@ export const App: React.FC = () => {
     try {
       const prevPlotArea = overridePlotArea ?? analysisData?.land_value?.plot_area_sqft;
 
-      const response = await submitAnalysis(request);
+      const { data: response, fallbackTriggered } = await generateFeasibilityReport(request);
       setAnalysisData(response);
+
+      if (fallbackTriggered) {
+        setFallbackToast('AI Engine unreachable, falling back to deterministic mock.');
+      }
 
       // STALE-STATE RULE: Retain floorPlanData only when plot dimensions are unchanged
       const newPlotArea = overridePlotArea ?? response.land_value?.plot_area_sqft;
@@ -462,7 +475,8 @@ export const App: React.FC = () => {
       {/* ========================================================================= */}
       <AppHeader
         backendConnected={backendConnected}
-        activeAiProvider={activeAiProvider}
+        activeAiProvider={request.ai_provider}
+        serverStatus={serverStatus}
         onOpenMethodology={() => setIsMethodologyOpen(true)}
         onReset={handleReset}
         warnings={warnings}
@@ -491,6 +505,35 @@ export const App: React.FC = () => {
             isDismissed={isWarningDismissed}
             onDismiss={handleDismissWarning}
           />
+        </div>
+      )}
+
+      {/* Floating AI Engine Fallback Toast */}
+      {fallbackToast && (
+        <div className="fixed top-[114px] left-3 right-3 lg:left-[364px] lg:right-[384px] z-[1001] pointer-events-auto animate-fade-in">
+          <div
+            role="alert"
+            className="vibrancy-panel rounded-[12px] border border-[var(--semantic-amber)]/50 bg-[var(--surface)] text-[var(--semantic-amber)] px-3.5 py-2.5 text-[12px] flex items-center justify-between gap-3 shadow-lg"
+          >
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <Icon name="alert-triangle" size={14} className="text-[var(--semantic-amber)] shrink-0" />
+              <span className="font-semibold shrink-0 uppercase tracking-[0.08em] text-[11px]">
+                Notice:
+              </span>
+              <span className="text-[var(--text-1)] font-medium text-[12px]">
+                {fallbackToast}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setFallbackToast(null)}
+              className="text-[var(--text-3)] hover:text-[var(--text-1)] p-1 rounded-[6px] transition-colors shrink-0 cursor-pointer"
+              title="Dismiss notice"
+              aria-label="Dismiss notice"
+            >
+              <Icon name="x" size={13} />
+            </button>
+          </div>
         </div>
       )}
 

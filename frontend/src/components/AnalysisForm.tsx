@@ -42,9 +42,9 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
   ];
 
   const aiProviders = [
+    { id: 'groq', label: 'Groq Cloud LLM (Llama 3.3 70B)' },
+    { id: 'gemini', label: 'Google Gemini (Gemini 1.5 Flash)' },
     { id: 'mock', label: 'Deterministic Engine (Default, Zero-Config)' },
-    { id: 'groq', label: 'Groq Cloud LLM (Optional Key)' },
-    { id: 'gemini', label: 'Google Gemini (Optional Key)' },
     { id: 'ollama', label: 'Ollama Local (Offline LLM)' },
   ];
 

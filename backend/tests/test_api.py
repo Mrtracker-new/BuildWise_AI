@@ -104,6 +104,34 @@ def test_health_endpoint():
     assert data["active_default_ai"] == "mock"
 
 
+def test_status_endpoint():
+    response = client.get("/api/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "online"
+    assert "groq" in data
+    assert "gemini" in data
+    assert "default_provider" in data
+
+
+def test_rate_limiter():
+    from app.main import check_rate_limit, _client_request_history
+    from fastapi import HTTPException
+
+    ip = "99.99.99.99"
+    _client_request_history[ip] = []
+    
+    # 30 requests should succeed
+    for _ in range(30):
+        check_rate_limit(ip)
+    
+    # 31st request should trigger 429
+    with pytest.raises(HTTPException) as exc_info:
+        check_rate_limit(ip)
+    assert exc_info.value.status_code == 429
+
+
+
 def test_analyze_endpoint(mock_external_http):
     payload = {
         "latitude": 12.9716,

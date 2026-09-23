@@ -1,10 +1,16 @@
 import uuid
+import time
+import logging
+from collections import defaultdict
 from datetime import datetime, timezone
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 from app.schemas.request import AnalysisRequest, ReportRequest
 from app.schemas.response import (
     AnalysisResponse,
@@ -44,14 +50,61 @@ app = FastAPI(
     version="1.1.0"
 )
 
-# CORS configuration
+# CORS configuration with exact origin matching for Vite dev server (Crucial for Local Dev)
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+for origin in settings.CORS_ORIGINS:
+    if origin and origin != "*" and origin not in ALLOWED_ORIGINS:
+        ALLOWED_ORIGINS.append(origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS if settings.CORS_ORIGINS else ["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Sliding window in-memory rate limiter: 30 requests per 60 seconds per IP
+RATE_LIMIT_WINDOW_SEC = 60.0
+RATE_LIMIT_MAX_REQUESTS = 30
+_client_request_history = defaultdict(list)
+
+def check_rate_limit(client_ip: str):
+    now = time.time()
+    timestamps = _client_request_history[client_ip]
+    # Prune timestamps older than window
+    _client_request_history[client_ip] = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW_SEC]
+    if len(_client_request_history[client_ip]) >= RATE_LIMIT_MAX_REQUESTS:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded (maximum 30 requests per minute). Please wait before running another analysis."
+        )
+    _client_request_history[client_ip].append(now)
+
+@app.get("/api/status")
+async def api_status():
+    """
+    Lightweight status endpoint indicating configured LLM keys and engine availability.
+    """
+    has_groq = bool(
+        settings.GROQ_API_KEY
+        and settings.GROQ_API_KEY.strip()
+        and not settings.GROQ_API_KEY.startswith("your_")
+    )
+    has_gemini = bool(
+        settings.GEMINI_API_KEY
+        and settings.GEMINI_API_KEY.strip()
+        and not settings.GEMINI_API_KEY.startswith("your_")
+    )
+    return {
+        "status": "online",
+        "groq": has_groq,
+        "gemini": has_gemini,
+        "default_provider": settings.DEFAULT_AI_PROVIDER
+    }
 
 @app.get("/api/health", response_model=HealthResponse)
 async def health_check():
@@ -66,12 +119,14 @@ async def health_check():
     )
 
 @app.post("/api/analyze", response_model=AnalysisResponse)
-async def analyze_site(req: AnalysisRequest):
+async def analyze_site(req: AnalysisRequest, request: Request):
     """
     Executes full multi-criteria site feasibility, orientation optimization,
     CPWD construction cost estimation, risk synthesis, hazard profiling,
     indicative circle rate land valuation, Vastu advisory, and traceable engineering recommendations.
     """
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    check_rate_limit(client_ip)
     request_id = f"BW-{uuid.uuid4().hex[:8].upper()}"
     timestamp = datetime.now(timezone.utc).isoformat()
     warnings = []
@@ -213,27 +268,58 @@ async def analyze_site(req: AnalysisRequest):
     if ai_meta.get("fallback_reason"):
         warnings.append(f"AI Provider note: {ai_meta.get('fallback_reason')}")
 
-    return AnalysisResponse(
-        request_id=request_id,
-        timestamp=timestamp,
-        coordinates={"latitude": req.latitude, "longitude": req.longitude},
-        formatted_address=address,
-        overall_suitability_score=overall_score,
-        suitability_verdict=verdict,
-        factors=factors,
-        orientation=orientation,
-        cost_estimate=cost_estimate,
-        risks=risks,
-        hazard_profile=hazard_profile,
-        land_value=land_value,
-        vastu_advisory=vastu_advisory,
-        recommendation_items=recommendation_items,
-        detailed_recommendations=detailed_recs,
-        engineering_summary=summary,
-        ai_metadata=ai_meta,
-        degraded_mode=is_degraded,
-        warnings=warnings
-    )
+    try:
+        return AnalysisResponse(
+            request_id=request_id,
+            timestamp=timestamp,
+            coordinates={"latitude": req.latitude, "longitude": req.longitude},
+            formatted_address=address,
+            overall_suitability_score=overall_score,
+            suitability_verdict=verdict,
+            factors=factors,
+            orientation=orientation,
+            cost_estimate=cost_estimate,
+            risks=risks,
+            hazard_profile=hazard_profile,
+            land_value=land_value,
+            vastu_advisory=vastu_advisory,
+            recommendation_items=recommendation_items,
+            detailed_recommendations=detailed_recs,
+            engineering_summary=summary,
+            ai_metadata=ai_meta,
+            degraded_mode=is_degraded,
+            warnings=warnings
+        )
+    except ValidationError as val_err:
+        logger.warning(f"Pydantic validation error constructing AnalysisResponse: {val_err}")
+        # Discard LLM output, return deterministic mock data with provider_used='mock_fallback_validation_error'
+        mock_adapter = get_ai_adapter("mock")
+        mock_summary, mock_recs, mock_meta = await mock_adapter.generate_explanation(intermediate_data)
+        mock_meta["provider_requested"] = provider_name
+        mock_meta["provider_used"] = "mock_fallback_validation_error"
+        mock_meta["fallback_reason"] = f"Pydantic ValidationError: {str(val_err)[:100]}"
+        warnings.append("AI response validation error. Applied deterministic mock calculations.")
+        return AnalysisResponse(
+            request_id=request_id,
+            timestamp=timestamp,
+            coordinates={"latitude": req.latitude, "longitude": req.longitude},
+            formatted_address=address,
+            overall_suitability_score=overall_score,
+            suitability_verdict=verdict,
+            factors=factors,
+            orientation=orientation,
+            cost_estimate=cost_estimate,
+            risks=risks,
+            hazard_profile=hazard_profile,
+            land_value=land_value,
+            vastu_advisory=vastu_advisory,
+            recommendation_items=recommendation_items,
+            detailed_recommendations=detailed_recs,
+            engineering_summary=mock_summary,
+            ai_metadata=mock_meta,
+            degraded_mode=True,
+            warnings=warnings
+        )
 
 @app.post("/api/report")
 async def create_pdf_report(req: ReportRequest):

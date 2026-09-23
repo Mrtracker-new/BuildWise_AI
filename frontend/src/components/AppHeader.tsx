@@ -4,6 +4,7 @@ import { Icon } from './Icon';
 interface AppHeaderProps {
   backendConnected: boolean;
   activeAiProvider: string;
+  serverStatus?: { groq: boolean; gemini: boolean } | null;
   onOpenMethodology: () => void;
   onReset: () => void;
   warnings?: string[];
@@ -21,6 +22,7 @@ interface AppHeaderProps {
 export const AppHeader: React.FC<AppHeaderProps> = ({
   backendConnected,
   activeAiProvider,
+  serverStatus,
   onOpenMethodology,
   onReset,
   warnings = [],
@@ -236,17 +238,37 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           <span className="hidden sm:inline">Reset</span>
         </button>
 
-        {/* Engine Status pill: --fill bg, 6px green dot + "Engine Online" 12px/500 --text-2 */}
-        <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-[10px] bg-[var(--fill)] text-[12px] font-medium text-[var(--text-2)] shrink-0">
-          <span
-            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-              backendConnected ? 'bg-[var(--semantic-green)]' : 'bg-[var(--semantic-red)]'
-            }`}
-          />
-          <span className="whitespace-nowrap">
-            {backendConnected ? `Engine Online (${activeAiProvider})` : 'Engine Offline'}
-          </span>
-        </div>
+        {/* Dynamic Engine Status pill: green pulse dot when key active, amber when mock, red when disconnected */}
+        {(() => {
+          let statusLabel = 'Engine Offline';
+          let dotColorClass = 'bg-[var(--semantic-red)]';
+
+          if (backendConnected) {
+            const isGroq = activeAiProvider === 'groq';
+            const isGemini = activeAiProvider === 'gemini';
+
+            if (isGroq && serverStatus?.groq) {
+              statusLabel = 'Engine Online (Groq)';
+              dotColorClass = 'bg-[var(--semantic-green)] animate-pulse';
+            } else if (isGemini && serverStatus?.gemini) {
+              statusLabel = 'Engine Online (Gemini)';
+              dotColorClass = 'bg-[var(--semantic-green)] animate-pulse';
+            } else {
+              statusLabel = 'Engine Offline (Local Mock)';
+              dotColorClass = 'bg-[var(--semantic-amber)]';
+            }
+          }
+
+          return (
+            <div
+              className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-[10px] bg-[var(--fill)] text-[12px] font-medium text-[var(--text-2)] shrink-0"
+              title={`AI Engine Status: ${statusLabel}`}
+            >
+              <span className={`w-2 h-2 rounded-full shrink-0 ${dotColorClass}`} />
+              <span className="whitespace-nowrap">{statusLabel}</span>
+            </div>
+          );
+        })()}
       </div>
     </header>
   );
