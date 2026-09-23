@@ -9,47 +9,19 @@ interface HazardProfileCardProps {
 export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard }) => {
   const { seismic, flood, storm_cyclone: storm, overall_hazard_level } = hazard;
 
-  const getOverallBadge = (level: string) => {
+  const getOverallColor = (level: string) => {
     switch (level) {
       case 'critical':
-        return {
-          bg: 'bg-rose-100 text-rose-900 border-rose-300',
-          dot: 'bg-rose-600',
-          label: 'Critical Hazard Exposure',
-        };
       case 'high':
-        return {
-          bg: 'bg-rose-50 text-rose-800 border-rose-200',
-          dot: 'bg-rose-500',
-          label: 'High Hazard Exposure',
-        };
+        return 'var(--semantic-red)';
       case 'moderate':
-        return {
-          bg: 'bg-amber-50 text-amber-800 border-amber-200',
-          dot: 'bg-amber-500',
-          label: 'Moderate Hazard Exposure',
-        };
+        return 'var(--semantic-amber)';
       default:
-        return {
-          bg: 'bg-emerald-50 text-emerald-800 border-emerald-200',
-          dot: 'bg-emerald-500',
-          label: 'Low Hazard Exposure',
-        };
+        return 'var(--semantic-green)';
     }
   };
 
-  const getLevelBadge = (level: string) => {
-    switch (level) {
-      case 'high':
-        return 'bg-rose-50 text-rose-700 border-rose-200';
-      case 'moderate':
-        return 'bg-amber-50 text-amber-700 border-amber-200';
-      default:
-        return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-    }
-  };
-
-  const overallBadge = getOverallBadge(overall_hazard_level);
+  const overallColor = getOverallColor(overall_hazard_level);
   const allWarnings = [
     seismic.confidence_warning,
     flood.confidence_warning,
@@ -58,175 +30,146 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard }) 
   ].filter((w): w is string => Boolean(w));
 
   return (
-    <div className="@container bg-white rounded-lg border border-slate-200 p-4 @sm:p-5 shadow-sm space-y-4 min-w-0 w-full">
+    <div className="space-y-4 w-full min-w-0">
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between border-b border-slate-100 pb-3 gap-2 min-w-0">
+      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2.5 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
-          <Icon name="activity" size={16} className="text-slate-700 shrink-0" />
-          <h2 className="text-[15px] font-semibold text-slate-900 tracking-tight whitespace-normal break-words">
+          <Icon name="activity" size={15} className="text-[var(--text-2)] shrink-0" />
+          <h2 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight">
             Hazard History & Climate Stress Profile
           </h2>
         </div>
-        <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${overallBadge.bg} shrink-0`}>
-          <span className={`w-1.5 h-1.5 rounded-full ${overallBadge.dot}`} />
-          <span>{overallBadge.label}</span>
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--fill)] text-[12px] font-medium text-[var(--text-1)] shrink-0">
+          <span
+            className="w-1.5 h-1.5 rounded-full shrink-0"
+            style={{ backgroundColor: overallColor }}
+          />
+          <span className="capitalize">{overall_hazard_level} Hazard</span>
         </div>
       </div>
 
-      {/* 3-Column Telemetry Grid */}
-      <div className="grid grid-cols-1 @md:grid-cols-3 gap-3.5 min-w-0">
-        {/* 1. Seismic Column */}
-        <div className="rounded-md border border-slate-200 p-3.5 bg-slate-50/50 flex flex-col justify-between space-y-3 min-w-0">
-          <div>
-            <div className="flex items-center justify-between gap-1.5 mb-1.5">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Seismic Hazard</span>
-              <span className="text-xs font-mono font-medium text-slate-700 bg-white px-2 py-0.5 rounded border border-slate-200">
-                {seismic.zone} (Z={seismic.zone_factor.toFixed(2)})
+      {/* Grouped iOS Sections separated by hairlines */}
+      <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
+        {/* 1. Seismic Row */}
+        <div className="py-3 space-y-2 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[13px] font-semibold text-[var(--text-1)]">
+              Seismic Vulnerability
+            </span>
+            <span className="text-[11px] font-medium text-[var(--text-2)] bg-[var(--fill)] px-2 py-0.5 rounded-[6px]">
+              {seismic.zone} (Z={seismic.zone_factor.toFixed(2)})
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-[12px]">
+            <div className="bg-[var(--fill)] p-2 rounded-[8px]">
+              <span className="text-[10px] text-[var(--text-3)] block uppercase tracking-wider">50-Yr Quakes</span>
+              <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums">{seismic.event_count_display}</span>
+            </div>
+            <div className="bg-[var(--fill)] p-2 rounded-[8px]">
+              <span className="text-[10px] text-[var(--text-3)] block uppercase tracking-wider">Peak Mag</span>
+              <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums">
+                {seismic.max_magnitude ? `M ${seismic.max_magnitude.toFixed(1)}` : 'None'}
               </span>
             </div>
-            <p className="text-xs text-slate-600 mb-2">
-              Standard: <span className="font-medium text-slate-800">{seismic.standard}</span>
-              {seismic.district ? ` • ${seismic.district}` : ''}
-            </p>
-
-            <div className="space-y-1.5 text-xs text-slate-700 pt-2 border-t border-slate-200/60">
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500">50-Yr Quakes (M≥4.5):</span>
-                <span className="font-semibold font-mono text-slate-900">{seismic.event_count_display}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500">Peak Magnitude:</span>
-                <span className="font-semibold font-mono text-slate-900">
-                  {seismic.max_magnitude ? `M ${seismic.max_magnitude.toFixed(1)}` : 'None'}
-                </span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500">Recency:</span>
-                <span className="font-medium text-slate-800">
-                  {seismic.years_since_last_event !== null && seismic.years_since_last_event !== undefined
-                    ? `${seismic.years_since_last_event} yrs ago`
-                    : 'No record'}
-                </span>
-              </div>
+            <div className="bg-[var(--fill)] p-2 rounded-[8px]">
+              <span className="text-[10px] text-[var(--text-3)] block uppercase tracking-wider">Recency</span>
+              <span className="text-[13px] font-semibold text-[var(--text-1)] truncate">
+                {seismic.years_since_last_event !== null && seismic.years_since_last_event !== undefined
+                  ? `${seismic.years_since_last_event}y ago`
+                  : 'None'}
+              </span>
             </div>
-
-            {seismic.recent_major_events && seismic.recent_major_events.length > 0 && (
-              <div className="mt-2.5 pt-2 border-t border-slate-200/60">
-                <span className="text-[11px] font-medium text-slate-500 block mb-1">Recent Major Events:</span>
-                <div className="space-y-1">
-                  {seismic.recent_major_events.slice(0, 3).map((ev, idx) => (
-                    <div key={idx} className="text-[11px] flex justify-between items-center text-slate-600 gap-1.5 min-w-0">
-                      <span className="whitespace-normal break-words leading-tight flex-1">{ev.place}</span>
-                      <span className="font-mono font-medium text-slate-800 shrink-0">M {ev.magnitude.toFixed(1)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
-          <div className="text-[10px] text-slate-400 pt-2 border-t border-slate-200/40">
-            Source: USGS FDSN (250km radius) & BIS IS 1893:2016
+          <div className="text-[11px] text-[var(--text-3)]">
+            Standard: {seismic.standard}{seismic.district ? ` • ${seismic.district}` : ''}
           </div>
         </div>
 
-        {/* 2. Hydrological Flood Column */}
-        <div className="rounded-md border border-slate-200 p-3.5 bg-slate-50/50 flex flex-col justify-between space-y-3 min-w-0">
-          <div>
-            <div className="flex items-center justify-between gap-1.5 mb-1.5">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Hydrological Flood</span>
-              <span className={`text-xs font-medium px-2 py-0.5 rounded border capitalize ${getLevelBadge(flood.pressure_level)}`}>
-                {flood.pressure_level} Pressure
+        {/* 2. Hydrological Flood Row */}
+        <div className="py-3 space-y-2 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[13px] font-semibold text-[var(--text-1)]">
+              Hydrological Flood Stress
+            </span>
+            <span className="text-[11px] font-medium text-[var(--text-2)] bg-[var(--fill)] px-2 py-0.5 rounded-[6px] capitalize">
+              {flood.pressure_level} Pressure
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-[12px]">
+            <div className="bg-[var(--fill)] p-2 rounded-[8px]">
+              <span className="text-[10px] text-[var(--text-3)] block uppercase tracking-wider">Discharge Peak</span>
+              <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums">
+                {flood.discharge_peak_to_mean_ratio !== null && flood.discharge_peak_to_mean_ratio !== undefined
+                  ? `${flood.discharge_peak_to_mean_ratio.toFixed(2)}x`
+                  : '—'}
               </span>
             </div>
-            <p className="text-xs text-slate-600 mb-2">
-              Terrain Elevation: <span className="font-mono font-medium text-slate-800">
-                {flood.elevation_amsl_m !== null && flood.elevation_amsl_m !== undefined ? `${flood.elevation_amsl_m.toFixed(0)}m AMSL` : 'Unknown'}
+            <div className="bg-[var(--fill)] p-2 rounded-[8px]">
+              <span className="text-[10px] text-[var(--text-3)] block uppercase tracking-wider">Elevation ASL</span>
+              <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums">
+                {flood.elevation_amsl_m !== null && flood.elevation_amsl_m !== undefined
+                  ? `${flood.elevation_amsl_m.toFixed(0)}m`
+                  : '—'}
               </span>
-            </p>
-
-            <div className="space-y-1.5 text-xs text-slate-700 pt-2 border-t border-slate-200/60">
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500">Discharge Peak/Mean:</span>
-                <span className="font-semibold font-mono text-slate-900">
-                  {flood.discharge_peak_to_mean_ratio !== null && flood.discharge_peak_to_mean_ratio !== undefined
-                    ? `${flood.discharge_peak_to_mean_ratio.toFixed(1)}x`
-                    : 'Dry / Ungauged (<0.1 m³/s)'}
-                </span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500">NDMA Basin Prone:</span>
-                <span className={`font-medium ${flood.ndma_flood_prone ? 'text-rose-700 font-semibold' : 'text-slate-800'}`}>
-                  {flood.ndma_flood_prone ? 'Designated Prone' : 'Standard Basin'}
-                </span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500">Confidence:</span>
-                <span className="capitalize text-slate-700 font-medium">{flood.confidence}</span>
-              </div>
+            </div>
+            <div className="bg-[var(--fill)] p-2 rounded-[8px]">
+              <span className="text-[10px] text-[var(--text-3)] block uppercase tracking-wider">NDMA Prone</span>
+              <span className="text-[13px] font-semibold text-[var(--text-1)]">
+                {flood.ndma_flood_prone ? 'Yes' : 'No'}
+              </span>
             </div>
           </div>
-          <div className="text-[10px] text-slate-400 pt-2 border-t border-slate-200/40">
-            Source: Open-Meteo GloFAS (365d) & NDMA Flood Atlas
+          <div className="text-[11px] text-[var(--text-3)]">
+            Open-Meteo GloFAS & ECMWF ERA5 Hydrological Monitoring
           </div>
         </div>
 
-        {/* 3. Climate & Storm Exposure Column */}
-        <div className="rounded-md border border-slate-200 p-3.5 bg-slate-50/50 flex flex-col justify-between space-y-3 min-w-0">
-          <div>
-            <div className="flex items-center justify-between gap-1.5 mb-1.5">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Climate & Storm</span>
-              <span className={`text-xs font-medium px-2 py-0.5 rounded border capitalize ${getLevelBadge(storm.exposure_level)}`}>
-                {storm.exposure_level} Exposure
-              </span>
-            </div>
-            <p className="text-xs text-slate-600 mb-2">
-              Coastal Belt:{' '}
-              <span className={`font-medium ${storm.ndma_cyclone_prone ? 'text-rose-700 font-semibold' : 'text-slate-800'}`}>
-                {storm.ndma_cyclone_prone ? 'Cyclone Belt' : 'Inland / Sheltered'}
-              </span>
-            </p>
-
-            <div className="space-y-1.5 text-xs text-slate-700 pt-2 border-t border-slate-200/60">
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500">10-Yr Mean Max Gust:</span>
-                <span className="font-semibold font-mono text-slate-900">
-                  {storm.max_annual_gust_kmh !== null && storm.max_annual_gust_kmh !== undefined
-                    ? `${storm.max_annual_gust_kmh.toFixed(1)} km/h`
-                    : 'N/A'}
-                </span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500">Heavy Rain Days (≥50mm):</span>
-                <span className="font-semibold font-mono text-slate-900">
-                  {storm.extreme_rainfall_days !== null && storm.extreme_rainfall_days !== undefined
-                    ? `${storm.extreme_rainfall_days.toFixed(1)} days/yr`
-                    : 'N/A'}
-                </span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500">Confidence:</span>
-                <span className="capitalize text-slate-700 font-medium">{storm.confidence}</span>
-              </div>
-            </div>
+        {/* 3. Storm Exposure Row */}
+        <div className="py-3 space-y-2 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[13px] font-semibold text-[var(--text-1)]">
+              Storm & Wind Exposure
+            </span>
+            <span className="text-[11px] font-medium text-[var(--text-2)] bg-[var(--fill)] px-2 py-0.5 rounded-[6px] capitalize">
+              {storm.exposure_level} Exposure
+            </span>
           </div>
-          <div className="text-[10px] text-slate-400 pt-2 border-t border-slate-200/40">
-            Source: ECMWF ERA5 Reanalysis (10-yr window)
+          <div className="grid grid-cols-3 gap-2 text-[12px]">
+            <div className="bg-[var(--fill)] p-2 rounded-[8px]">
+              <span className="text-[10px] text-[var(--text-3)] block uppercase tracking-wider">Annual Gust</span>
+              <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums">
+                {storm.max_annual_gust_kmh !== null && storm.max_annual_gust_kmh !== undefined
+                  ? `${storm.max_annual_gust_kmh.toFixed(0)} km/h`
+                  : '—'}
+              </span>
+            </div>
+            <div className="bg-[var(--fill)] p-2 rounded-[8px]">
+              <span className="text-[10px] text-[var(--text-3)] block uppercase tracking-wider">Extreme Rain Days</span>
+              <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums">
+                {storm.extreme_rainfall_days !== null && storm.extreme_rainfall_days !== undefined
+                  ? `${storm.extreme_rainfall_days} d/yr`
+                  : '—'}
+              </span>
+            </div>
+            <div className="bg-[var(--fill)] p-2 rounded-[8px]">
+              <span className="text-[10px] text-[var(--text-3)] block uppercase tracking-wider">NDMA Cyclone</span>
+              <span className="text-[13px] font-semibold text-[var(--text-1)]">
+                {storm.ndma_cyclone_prone ? 'Yes' : 'No'}
+              </span>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Confidence Warnings if any */}
       {allWarnings.length > 0 && (
-        <div className="rounded-md border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-800 space-y-1">
-          <div className="flex items-center gap-1.5 font-semibold text-amber-900">
-            <Icon name="alert-triangle" size={14} className="text-amber-700 shrink-0" />
-            <span>Telemetry Confidence & Boundary Notes:</span>
+        <div className="p-3 bg-[var(--fill)] rounded-[10px] text-[12px] text-[var(--text-2)] space-y-1">
+          <div className="flex items-center gap-1.5 text-[var(--semantic-amber)] font-medium">
+            <Icon name="alert-triangle" size={13} />
+            <span>Hazard Telemetry Notes</span>
           </div>
-          <ul className="list-disc pl-5 space-y-0.5 text-amber-800">
-            {allWarnings.map((warn, i) => (
-              <li key={i} className="break-words">{warn}</li>
-            ))}
-          </ul>
+          {allWarnings.map((w, idx) => (
+            <p key={idx} className="leading-normal">{w}</p>
+          ))}
         </div>
       )}
     </div>

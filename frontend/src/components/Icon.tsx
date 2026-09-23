@@ -38,7 +38,12 @@ export type IconName =
   | 'zoom-out'
   | 'maximize'
   | 'sliders'
-  | 'blueprint';
+  | 'blueprint'
+  | 'moon'
+  | 'plus'
+  | 'minus'
+  | 'badge-check'
+  | 'check';
 
 interface IconProps {
   name: IconName;
@@ -368,6 +373,38 @@ export const Icon: React.FC<IconProps> = ({
           <rect width="18" height="18" x="3" y="3" rx="2" />
           <path d="M3 9h18" />
           <path d="M9 21V9" />
+        </svg>
+      );
+    case 'moon':
+      return (
+        <svg {...commonProps}>
+          <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+        </svg>
+      );
+    case 'plus':
+      return (
+        <svg {...commonProps}>
+          <path d="M5 12h14" />
+          <path d="M12 5v14" />
+        </svg>
+      );
+    case 'minus':
+      return (
+        <svg {...commonProps}>
+          <path d="M5 12h14" />
+        </svg>
+      );
+    case 'badge-check':
+      return (
+        <svg {...commonProps}>
+          <path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z" />
+          <path d="m9 12 2 2 4-4" />
+        </svg>
+      );
+    case 'check':
+      return (
+        <svg {...commonProps}>
+          <polyline points="20 6 9 17 4 12" />
         </svg>
       );
     default:

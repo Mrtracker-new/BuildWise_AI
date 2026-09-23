@@ -33,45 +33,46 @@ export const OrientationCompass: React.FC<OrientationCompassProps> = ({ orientat
   const windHeadY = cy - (radius - 20) * Math.cos(windRad);
 
   return (
-    <div className="@container bg-white rounded-lg border border-slate-200 p-4 @sm:p-5 shadow-sm space-y-3.5 min-w-0 w-full">
-      <div className="flex flex-wrap items-center justify-between border-b border-slate-100 pb-3 gap-2 min-w-0">
+    <div className="space-y-3.5 w-full min-w-0">
+      {/* Section Header */}
+      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2.5 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
-          <Icon name="compass" size={16} className="text-slate-700 shrink-0" />
-          <h3 className="text-[15px] font-semibold text-slate-900 tracking-tight whitespace-normal break-words">
+          <Icon name="compass" size={15} className="text-[var(--text-2)] shrink-0" />
+          <h3 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight">
             Passive Solar & Wind Orientation
           </h3>
         </div>
-        <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 font-mono shrink-0">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] shrink-0">
           Bioclimatic Layout
         </span>
       </div>
 
-      <div className="grid grid-cols-1 @lg:grid-cols-2 gap-4 items-center min-w-0">
+      <div className="space-y-3 min-w-0">
         {/* SVG Engineering Compass */}
-        <div className="flex flex-col items-center justify-center p-3 bg-slate-50 rounded-lg border border-slate-100 min-w-0">
-          <svg viewBox="0 0 200 200" className="w-[180px] @sm:w-[200px] max-w-full h-auto select-none block" width="200" height="200">
+        <div className="flex flex-col items-center justify-center p-3 bg-[var(--fill)] rounded-[12px] min-w-0">
+          <svg viewBox="0 0 200 200" className="w-[180px] max-w-full h-auto select-none block" width="200" height="200">
             {/* Compass Outer Rings */}
-            <circle cx={cx} cy={cy} r={radius} fill="#FFFFFF" stroke="#CBD5E1" strokeWidth="1.5" />
-            <circle cx={cx} cy={cy} r={radius - 8} fill="none" stroke="#F1F5F9" strokeWidth="1" strokeDasharray="3 3" />
-            <circle cx={cx} cy={cy} r="2" fill="#0F172A" />
+            <circle cx={cx} cy={cy} r={radius} fill="none" stroke="var(--hairline)" strokeWidth="1.5" />
+            <circle cx={cx} cy={cy} r={radius - 8} fill="none" stroke="var(--hairline)" strokeWidth="1" strokeDasharray="3 3" />
+            <circle cx={cx} cy={cy} r="2.5" fill="var(--text-1)" />
 
             {/* Cardinal Marks */}
-            <line x1={cx} y1={cy - radius} x2={cx} y2={cy - radius + 8} stroke="#0F172A" strokeWidth="1.5" />
-            <line x1={cx} y1={cy + radius} x2={cx} y2={cy + radius - 8} stroke="#94A3B8" strokeWidth="1" />
-            <line x1={cx - radius} y1={cy} x2={cx - radius + 8} y2={cy} stroke="#94A3B8" strokeWidth="1" />
-            <line x1={cx + radius} y1={cy} x2={cx + radius - 8} y2={cy} stroke="#94A3B8" strokeWidth="1" />
+            <line x1={cx} y1={cy - radius} x2={cx} y2={cy - radius + 8} stroke="var(--text-1)" strokeWidth="1.5" />
+            <line x1={cx} y1={cy + radius} x2={cx} y2={cy + radius - 8} stroke="var(--text-3)" strokeWidth="1" />
+            <line x1={cx - radius} y1={cy} x2={cx - radius + 8} y2={cy} stroke="var(--text-3)" strokeWidth="1" />
+            <line x1={cx + radius} y1={cy} x2={cx + radius - 8} y2={cy} stroke="var(--text-3)" strokeWidth="1" />
 
             {/* Labels */}
-            <text x={cx} y={cy - radius - 5} textAnchor="middle" className="text-xs font-mono font-bold fill-slate-900">
+            <text x={cx} y={cy - radius - 5} textAnchor="middle" className="text-[11px] font-bold fill-[var(--text-1)]">
               N
             </text>
-            <text x={cx} y={cy + radius + 14} textAnchor="middle" className="text-[11px] font-mono fill-slate-400">
+            <text x={cx} y={cy + radius + 14} textAnchor="middle" className="text-[10px] font-medium fill-[var(--text-3)]">
               S
             </text>
-            <text x={cx + radius + 12} y={cy + 4} textAnchor="middle" className="text-[11px] font-mono fill-slate-400">
+            <text x={cx + radius + 12} y={cy + 4} textAnchor="middle" className="text-[10px] font-medium fill-[var(--text-3)]">
               E
             </text>
-            <text x={cx - radius - 12} y={cy + 4} textAnchor="middle" className="text-[11px] font-mono fill-slate-400">
+            <text x={cx - radius - 12} y={cy + 4} textAnchor="middle" className="text-[10px] font-medium fill-[var(--text-3)]">
               W
             </text>
 
@@ -81,8 +82,8 @@ export const OrientationCompass: React.FC<OrientationCompassProps> = ({ orientat
               y1={y1}
               x2={x2}
               y2={y2}
-              stroke="#0284C7"
-              strokeWidth="6"
+              stroke="var(--accent)"
+              strokeWidth="5"
               strokeLinecap="round"
             />
             {/* Building Axis Centerline */}
@@ -91,7 +92,7 @@ export const OrientationCompass: React.FC<OrientationCompassProps> = ({ orientat
               y1={y1}
               x2={x2}
               y2={y2}
-              stroke="#0F172A"
+              stroke="var(--text-1)"
               strokeWidth="1.5"
               strokeDasharray="2 2"
             />
@@ -102,60 +103,52 @@ export const OrientationCompass: React.FC<OrientationCompassProps> = ({ orientat
               y1={windTailY}
               x2={windHeadX}
               y2={windHeadY}
-              stroke="#10B981"
+              stroke="var(--semantic-green)"
               strokeWidth="2"
               strokeDasharray="4 2"
             />
-            <circle cx={windHeadX} cy={windHeadY} r="3" fill="#10B981" />
+            <circle cx={windHeadX} cy={windHeadY} r="3" fill="var(--semantic-green)" />
           </svg>
 
           {/* Legend */}
-          <div className="flex flex-wrap justify-center items-center gap-3 text-xs font-mono text-slate-500 mt-2.5 min-w-0">
-            <div className="flex items-center gap-1.5 shrink-0">
-              <span className="w-3 h-1 bg-sky-600 rounded"></span>
-              <span>Building Axis ({optimal_axis_degrees.toFixed(0)}°)</span>
+          <div className="flex items-center gap-3 text-[11px] text-[var(--text-2)] mt-2">
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-1 bg-[var(--accent)] rounded-full"></span>
+              <span>Long Axis ({optimal_axis_degrees.toFixed(0)}°)</span>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+            <div className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-[var(--semantic-green)]"></span>
               <span>Wind ({prevailing_wind_direction_degrees.toFixed(0)}°)</span>
             </div>
           </div>
         </div>
 
-        {/* Textual Rationale & Specifications */}
-        <div className="space-y-3 min-w-0">
-          <div className="bg-slate-50 p-3 rounded border border-slate-100 min-w-0">
-            <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 block mb-0.5 whitespace-normal break-words">
-              Principal Longitudinal Axis
+        {/* 2-Column Stat Tiles */}
+        <div className="grid grid-cols-2 gap-2.5">
+          <div className="bg-[var(--fill)] p-3 rounded-[12px]">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] block mb-1">
+              Principal Axis
             </span>
-            <span className="text-sm font-semibold text-slate-900 whitespace-normal break-words">
-              {axis_label} (<span className="font-mono">{optimal_axis_degrees.toFixed(1)}°</span>)
+            <span className="text-[13px] font-semibold text-[var(--text-1)] block leading-snug break-words">
+              {axis_label}
             </span>
+            <span className="text-[11px] text-[var(--text-3)] font-mono">{optimal_axis_degrees.toFixed(1)}°</span>
           </div>
 
-          <div className="grid grid-cols-1 @sm:grid-cols-2 gap-2.5 min-w-0">
-            <div className="bg-slate-50 p-2.5 rounded border border-slate-100 min-w-0">
-              <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 block mb-0.5 whitespace-normal break-words">
-                Prevailing Wind
-              </span>
-              <span className="text-xs font-semibold text-slate-800 whitespace-normal break-words">
-                <span className="font-mono">{prevailing_wind_direction_degrees.toFixed(0)}°</span> Azimuth
-              </span>
-            </div>
-            <div className="bg-slate-50 p-2.5 rounded border border-slate-100 min-w-0">
-              <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 block mb-0.5 whitespace-normal break-words">
-                Ventilation Rating
-              </span>
-              <span className="text-xs font-semibold text-emerald-700 whitespace-normal break-words">
-                {cross_ventilation_rating}
-              </span>
-            </div>
+          <div className="bg-[var(--fill)] p-3 rounded-[12px]">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] block mb-1">
+              Cross-Ventilation
+            </span>
+            <span className="text-[13px] font-semibold text-[var(--semantic-green)] block leading-snug break-words">
+              {cross_ventilation_rating}
+            </span>
+            <span className="text-[11px] text-[var(--text-3)]">{prevailing_wind_direction_degrees.toFixed(0)}° Azimuth</span>
           </div>
-
-          <p className="text-xs text-slate-600 leading-relaxed whitespace-normal break-words">
-            {passive_design_rationale}
-          </p>
         </div>
+
+        <p className="text-[12px] text-[var(--text-2)] leading-normal">
+          {passive_design_rationale}
+        </p>
       </div>
     </div>
   );

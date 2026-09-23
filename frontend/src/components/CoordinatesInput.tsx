@@ -47,25 +47,27 @@ export const CoordinatesInput: React.FC<CoordinatesInputProps> = ({
   };
 
   return (
-    <div className="@container bg-white rounded-lg border border-slate-200 p-4 @sm:p-5 shadow-sm space-y-3.5 min-w-0 w-full">
-      <div className="flex flex-wrap items-center justify-between border-b border-slate-100 pb-3 gap-2 min-w-0">
+    <div className="space-y-3.5 w-full min-w-0">
+      {/* Section Header */}
+      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2.5 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
-          <Icon name="map-pin" size={16} className="text-slate-700 shrink-0" />
-          <h2 className="text-[15px] font-semibold text-slate-900 tracking-tight whitespace-normal break-words">
+          <Icon name="map-pin" size={15} className="text-[var(--text-2)] shrink-0" />
+          <h2 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight">
             Site Coordinates
           </h2>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 font-mono">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)]">
             WGS84
           </span>
           {latitude !== null && longitude !== null && (
             <button
               type="button"
               onClick={onClear}
-              className="text-xs text-slate-500 hover:text-rose-600 flex items-center gap-1 transition-colors px-1.5 py-0.5 rounded"
+              className="text-[12px] text-[var(--text-2)] hover:text-[var(--semantic-red)] flex items-center gap-1 transition-colors px-1.5 py-0.5 rounded-[6px]"
+              title="Clear coordinates"
             >
-              <Icon name="x" size={13} />
+              <Icon name="x" size={12} />
               <span>Clear</span>
             </button>
           )}
@@ -73,9 +75,12 @@ export const CoordinatesInput: React.FC<CoordinatesInputProps> = ({
       </div>
 
       <form onSubmit={handleApply} className="space-y-3 min-w-0">
-        <div className="grid grid-cols-1 @xs:grid-cols-2 gap-3 min-w-0">
+        <div className="grid grid-cols-2 gap-2.5 min-w-0">
           <div className="min-w-0">
-            <label htmlFor="lat-input" className="block text-xs uppercase tracking-wider font-semibold text-slate-500 mb-1 whitespace-normal break-words">
+            <label
+              htmlFor="lat-input"
+              className="block text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] mb-1"
+            >
               Latitude
             </label>
             <input
@@ -84,11 +89,14 @@ export const CoordinatesInput: React.FC<CoordinatesInputProps> = ({
               value={latInput}
               onChange={(e) => setLatInput(e.target.value)}
               placeholder="e.g. 12.9716"
-              className="w-full h-10 text-sm font-mono px-3 bg-slate-50 border border-slate-200 rounded focus:bg-white focus:outline-none focus:border-slate-800 transition-colors"
+              className="w-full bg-[var(--fill)] border-0 rounded-[10px] px-3 py-2 text-[13px] font-medium text-[var(--text-1)] outline-none focus:ring-[3px] focus:ring-[var(--accent)]/25 transition-all placeholder:text-[var(--text-3)]"
             />
           </div>
           <div className="min-w-0">
-            <label htmlFor="lon-input" className="block text-xs uppercase tracking-wider font-semibold text-slate-500 mb-1 whitespace-normal break-words">
+            <label
+              htmlFor="lon-input"
+              className="block text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] mb-1"
+            >
               Longitude
             </label>
             <input
@@ -97,32 +105,28 @@ export const CoordinatesInput: React.FC<CoordinatesInputProps> = ({
               value={lonInput}
               onChange={(e) => setLonInput(e.target.value)}
               placeholder="e.g. 77.5946"
-              className="w-full h-10 text-sm font-mono px-3 bg-slate-50 border border-slate-200 rounded focus:bg-white focus:outline-none focus:border-slate-800 transition-colors"
+              className="w-full bg-[var(--fill)] border-0 rounded-[10px] px-3 py-2 text-[13px] font-medium text-[var(--text-1)] outline-none focus:ring-[3px] focus:ring-[var(--accent)]/25 transition-all placeholder:text-[var(--text-3)]"
             />
           </div>
         </div>
 
         {inputError && (
-          <p className="text-xs text-rose-600 font-medium whitespace-normal break-words">{inputError}</p>
+          <p className="text-[12px] text-[var(--semantic-red)] font-medium leading-snug">{inputError}</p>
         )}
 
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 min-w-0">
-          <span className="text-xs text-slate-400 whitespace-normal break-words">
-            Click map or enter manually
-          </span>
-          <button
-            type="submit"
-            className="h-10 px-4 text-sm font-medium bg-slate-100 hover:bg-slate-200 text-slate-800 rounded transition-colors shrink-0"
-          >
-            Update Pin
-          </button>
-        </div>
+        {/* Update Pin Action: flat --accent, white 13px/600, radius 12, height 36, full width; press = brightness(0.95) */}
+        <button
+          type="submit"
+          className="w-full h-9 bg-[var(--accent)] text-white text-[13px] font-semibold rounded-[12px] transition-all duration-200 hover:brightness-[0.98] active:brightness-95 flex items-center justify-center gap-1.5 shadow-sm"
+        >
+          <span>Update Pin</span>
+        </button>
       </form>
 
       {formattedAddress && (
-        <div className="pt-2.5 border-t border-slate-100 flex items-start gap-2 min-w-0">
-          <Icon name="crosshair" size={14} className="text-slate-400 mt-0.5 shrink-0" />
-          <p className="text-xs text-slate-600 leading-snug whitespace-normal break-words min-w-0 flex-1">
+        <div className="pt-2 border-t border-[var(--hairline)] flex items-start gap-2 min-w-0">
+          <Icon name="crosshair" size={14} className="text-[var(--text-3)] mt-0.5 shrink-0" />
+          <p className="text-[13px] text-[var(--text-2)] leading-[1.5] min-w-0 flex-1">
             {formattedAddress}
           </p>
         </div>

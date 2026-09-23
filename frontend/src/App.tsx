@@ -1,5 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import type { AnalysisRequest, AnalysisResponse, SiteVisionResponse, FloorPlanResponse, ReportRequestPayload } from './services/types';
+import type {
+  AnalysisRequest,
+  AnalysisResponse,
+  SiteVisionResponse,
+  FloorPlanResponse,
+  ReportRequestPayload,
+} from './services/types';
 import { fetchHealth, submitAnalysis, submitSiteVision } from './services/api';
 import { AppHeader } from './components/AppHeader';
 import { MapCanvas } from './components/MapCanvas';
@@ -24,6 +30,9 @@ import { MethodologyModal } from './components/MethodologyModal';
 import { Icon } from './components/Icon';
 
 export const App: React.FC = () => {
+  // Theme State: 'light' | 'dark'
+  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+
   // Application Parameters State
   const [request, setRequest] = useState<AnalysisRequest>({
     latitude: 12.9716, // Default to Bengaluru Urban, India
@@ -33,7 +42,7 @@ export const App: React.FC = () => {
     building_typology: 'residential_single',
     floors: 1,
     ai_provider: 'mock',
-    ground_coverage_ratio: 0.60,
+    ground_coverage_ratio: 0.6,
   });
 
   const [hasLocation, setHasLocation] = useState<boolean>(true);
@@ -49,9 +58,31 @@ export const App: React.FC = () => {
   const [activeAiProvider, setActiveAiProvider] = useState<string>('mock');
   const [isMethodologyOpen, setIsMethodologyOpen] = useState<boolean>(false);
 
+  // Mobile Panels State (<1024px)
+  const [isMobileControlOpen, setIsMobileControlOpen] = useState<boolean>(false);
+  const [isMobileResultsOpen, setIsMobileResultsOpen] = useState<boolean>(false);
+
+  // Responsive Drawer State: persistent on desktop (>=1024px)
+  const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(true);
+  const [leafletResizeTrigger, setLeafletResizeTrigger] = useState<number>(0);
+
   // Telemetry Warnings State
   const [isWarningDismissed, setIsWarningDismissed] = useState<boolean>(false);
   const [testWarnings, setTestWarnings] = useState<string[] | null>(null);
+
+  // Accessibility Refs for Drawer Focus Trap/Return
+  const drawerToggleBtnRef = useRef<HTMLButtonElement>(null);
+  const drawerCloseBtnRef = useRef<HTMLButtonElement>(null);
+  const prevDrawerOpenRef = useRef<boolean>(false);
+
+  // Synchronize document theme attribute
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
+  const handleToggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -59,16 +90,7 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  // Responsive Drawer State (for viewports between 1024px and 1535px)
-  const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
-  const [leafletResizeTrigger, setLeafletResizeTrigger] = useState<number>(0);
-
-  // Accessibility Refs for Drawer Focus Trap/Return
-  const drawerToggleBtnRef = useRef<HTMLButtonElement>(null);
-  const drawerCloseBtnRef = useRef<HTMLButtonElement>(null);
-  const prevDrawerOpenRef = useRef<boolean>(false);
-
-  const warnings = testWarnings !== null ? testWarnings : (analysisData?.warnings || []);
+  const warnings = testWarnings !== null ? testWarnings : analysisData?.warnings || [];
 
   // Invalidate Leaflet helper
   const triggerMapResize = useCallback(() => {
@@ -90,14 +112,12 @@ export const App: React.FC = () => {
   // Focus management for Responsive Drawer
   useEffect(() => {
     if (isDrawerOpen && !prevDrawerOpenRef.current) {
-      // Drawer opened: move focus to close button
       const timer = setTimeout(() => {
         drawerCloseBtnRef.current?.focus();
         triggerMapResize();
       }, 50);
       return () => clearTimeout(timer);
     } else if (!isDrawerOpen && prevDrawerOpenRef.current) {
-      // Drawer closed: return focus to toggle button
       drawerToggleBtnRef.current?.focus();
       const timer = setTimeout(() => {
         triggerMapResize();
@@ -107,16 +127,18 @@ export const App: React.FC = () => {
     prevDrawerOpenRef.current = isDrawerOpen;
   }, [isDrawerOpen, triggerMapResize]);
 
-  // Keyboard navigation: Escape key closes drawer
+  // Keyboard navigation: Escape key closes drawer and mobile sheets
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isDrawerOpen) {
-        setIsDrawerOpen(false);
+      if (e.key === 'Escape') {
+        if (isDrawerOpen) setIsDrawerOpen(false);
+        if (isMobileControlOpen) setIsMobileControlOpen(false);
+        if (isMobileResultsOpen) setIsMobileResultsOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isDrawerOpen]);
+  }, [isDrawerOpen, isMobileControlOpen, isMobileResultsOpen]);
 
   // Coordinate changes from map click or input
   // STALE-STATE RULE: Changing selected coordinates clears siteVisionData
@@ -137,6 +159,7 @@ export const App: React.FC = () => {
     setFloorPlanData(null);
     setErrorMessage(null);
     setIsDrawerOpen(false);
+    setIsMobileResultsOpen(false);
   };
 
   const handleRequestChange = (updated: Partial<AnalysisRequest>) => {
@@ -185,22 +208,21 @@ export const App: React.FC = () => {
     setErrorMessage(null);
     setIsWarningDismissed(false);
 
-    // On 1024px - 1535px, open the drawer so results/skeleton are immediately visible
+    // Open results on desktop drawer and mobile
     setIsDrawerOpen(true);
+    setIsMobileResultsOpen(true);
+    setIsMobileControlOpen(false);
 
     // Concurrently trigger site vision scan
     handleRunSiteVision();
 
     try {
-      // Capture plot dimensions before new analysis executes
       const prevPlotArea = overridePlotArea ?? analysisData?.land_value?.plot_area_sqft;
 
       const response = await submitAnalysis(request);
       setAnalysisData(response);
 
-      // STALE-STATE RULE:
-      // A new analysis retains floorPlanData only when plot dimensions are unchanged;
-      // otherwise clear it to prevent displaying a blueprint mismatched with the new site boundaries.
+      // STALE-STATE RULE: Retain floorPlanData only when plot dimensions are unchanged
       const newPlotArea = overridePlotArea ?? response.land_value?.plot_area_sqft;
       if (
         prevPlotArea != null &&
@@ -222,7 +244,6 @@ export const App: React.FC = () => {
   };
 
   // Reset entire application
-  // STALE-STATE RULE: Pressing Reset clears siteVisionData, floorPlanData, and all active overrides
   const handleReset = () => {
     setRequest({
       latitude: 12.9716,
@@ -240,7 +261,9 @@ export const App: React.FC = () => {
     setOverrideLandRate(null);
     setOverridePlotArea(null);
     setErrorMessage(null);
-    setIsDrawerOpen(false);
+    setIsDrawerOpen(true);
+    setIsMobileControlOpen(false);
+    setIsMobileResultsOpen(false);
     setIsWarningDismissed(false);
     triggerMapResize();
   };
@@ -264,21 +287,25 @@ export const App: React.FC = () => {
     }
 
     if (analysisData) {
-      const currentEffectiveRate = overrideLandRate !== null
-        ? overrideLandRate
-        : (analysisData.land_value?.indicative_rate_per_sqft ?? null);
+      const currentEffectiveRate =
+        overrideLandRate !== null
+          ? overrideLandRate
+          : analysisData.land_value?.indicative_rate_per_sqft ?? null;
 
-      const currentPlotArea = overridePlotArea !== null
-        ? overridePlotArea
-        : (analysisData.land_value?.plot_area_sqft ?? 0);
+      const currentPlotArea =
+        overridePlotArea !== null
+          ? overridePlotArea
+          : analysisData.land_value?.plot_area_sqft ?? 0;
 
-      const currentLandCost = currentEffectiveRate !== null && currentEffectiveRate > 0 && currentPlotArea > 0
-        ? Math.round(currentEffectiveRate * currentPlotArea)
-        : (analysisData.land_value?.land_cost_inr ?? null);
+      const currentLandCost =
+        currentEffectiveRate !== null && currentEffectiveRate > 0 && currentPlotArea > 0
+          ? Math.round(currentEffectiveRate * currentPlotArea)
+          : analysisData.land_value?.land_cost_inr ?? null;
 
-      const currentCombinedTotal = currentLandCost !== null
-        ? analysisData.cost_estimate.total_estimated_cost_inr + currentLandCost
-        : null;
+      const currentCombinedTotal =
+        currentLandCost !== null
+          ? analysisData.cost_estimate.total_estimated_cost_inr + currentLandCost
+          : null;
 
       const reportPayload: ReportRequestPayload = {
         analysis_data: {
@@ -290,7 +317,10 @@ export const App: React.FC = () => {
                 plot_area_sqft: currentPlotArea,
                 land_cost_inr: currentLandCost,
                 combined_project_total_inr: currentCombinedTotal,
-                is_user_override: overrideLandRate !== null || overridePlotArea !== null || analysisData.land_value.is_user_override,
+                is_user_override:
+                  overrideLandRate !== null ||
+                  overridePlotArea !== null ||
+                  analysisData.land_value.is_user_override,
               }
             : undefined,
         },
@@ -327,16 +357,34 @@ export const App: React.FC = () => {
             <VastuAdvisoryCard advisory={analysisData.vastu_advisory} />
           )}
 
-          {/* 5.5 Generative Floor Plan Engine (CSP & Vastu Blueprints) */}
+          {/* 5.5 Generative Floor Plan Engine */}
           <FloorPlanGeneratorCard
             defaultWidthM={
               analysisData.land_value?.plot_area_sqft
-                ? Math.max(6.0, Math.min(60.0, +(Math.sqrt((analysisData.land_value.plot_area_sqft * 0.092903) / 1.2)).toFixed(1)))
+                ? Math.max(
+                    6.0,
+                    Math.min(
+                      60.0,
+                      +Math.sqrt(
+                        (analysisData.land_value.plot_area_sqft * 0.092903) / 1.2
+                      ).toFixed(1)
+                    )
+                  )
                 : 10.0
             }
             defaultDepthM={
               analysisData.land_value?.plot_area_sqft
-                ? Math.max(6.0, Math.min(60.0, +(Math.sqrt((analysisData.land_value.plot_area_sqft * 0.092903) / 1.2) * 1.2).toFixed(1)))
+                ? Math.max(
+                    6.0,
+                    Math.min(
+                      60.0,
+                      +(
+                        Math.sqrt(
+                          (analysisData.land_value.plot_area_sqft * 0.092903) / 1.2
+                        ) * 1.2
+                      ).toFixed(1)
+                    )
+                  )
                 : 12.0
             }
             activeFloorPlan={floorPlanData}
@@ -383,8 +431,35 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen lg:h-screen flex flex-col bg-slate-50 text-slate-800 antialiased overflow-x-clip overflow-y-auto lg:overflow-hidden select-text w-full max-w-full min-w-0">
-      {/* 64px Header */}
+    <div
+      className="h-screen w-screen relative overflow-hidden select-text text-[var(--text-1)] antialiased font-sans"
+      style={{ '--map-controls-right': isDrawerOpen ? '384px' : '16px' } as React.CSSProperties}
+    >
+      {/* ========================================================================= */}
+      {/* LAYER 0: FULL-BLEED MAP CANVAS (Edge-to-edge background, no inset/frame)  */}
+      {/* ========================================================================= */}
+      <section
+        id="center-map-section"
+        className="fixed inset-0 w-full h-full overflow-hidden z-0 pointer-events-auto"
+      >
+        <MapCanvas
+          latitude={hasLocation ? request.latitude : null}
+          longitude={hasLocation ? request.longitude : null}
+          orientationDegrees={analysisData?.orientation.optimal_axis_degrees}
+          plinthAreaSqFt={request.built_up_area_sqft}
+          onLocationSelect={handleLocationSelect}
+          invalidateTrigger={leafletResizeTrigger}
+          entranceDirection={analysisData?.vastu_advisory?.ranked_entrances?.[0]?.direction}
+          treeClusters={siteVisionData?.tree_clusters}
+          waterBodies={siteVisionData?.water_bodies}
+          theme={theme}
+          className="w-full h-full"
+        />
+      </section>
+
+      {/* ========================================================================= */}
+      {/* LAYER 1: FLOATING TOP TOOLBAR (Vibrancy, 12px insets, 52px tall, r-16)    */}
+      {/* ========================================================================= */}
       <AppHeader
         backendConnected={backendConnected}
         activeAiProvider={activeAiProvider}
@@ -393,136 +468,60 @@ export const App: React.FC = () => {
         warnings={warnings}
         isWarningDismissed={isWarningDismissed}
         onRestoreWarning={handleRestoreWarning}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
+        isMobileControlOpen={isMobileControlOpen}
+        onToggleMobileControl={() => {
+          setIsMobileControlOpen((prev) => !prev);
+          if (!isMobileControlOpen) setIsMobileResultsOpen(false);
+        }}
+        isMobileResultsOpen={isMobileResultsOpen}
+        onToggleMobileResults={() => {
+          setIsMobileResultsOpen((prev) => !prev);
+          if (!isMobileResultsOpen) setIsMobileControlOpen(false);
+        }}
+        hasResults={Boolean(analysisData)}
       />
 
-      {/* Single-Line Dismissible Telemetry Notice Strip */}
-      <TelemetryStrip
-        warnings={warnings}
-        isDismissed={isWarningDismissed}
-        onDismiss={handleDismissWarning}
-      />
+      {/* Floating Single-Line Dismissible Telemetry Notice */}
+      {warnings.length > 0 && !isWarningDismissed && (
+        <div className="fixed top-[72px] left-3 right-3 lg:left-[364px] lg:right-[384px] z-[1001] pointer-events-auto">
+          <TelemetryStrip
+            warnings={warnings}
+            isDismissed={isWarningDismissed}
+            onDismiss={handleDismissWarning}
+          />
+        </div>
+      )}
 
       {/* ========================================================================= */}
-      {/* DESKTOP WORKSPACE (lg: and 2xl:) - Independent Scroll Rails, Full Bleed    */}
+      {/* LAYER 2: LEFT FLOATING CONTROL PANEL (340px, top 76px, bottom 12px, r-20) */}
       {/* ========================================================================= */}
-      <div className="hidden lg:grid grid-cols-[380px_minmax(0,1fr)] 2xl:grid-cols-[380px_minmax(0,1fr)_460px] flex-1 min-h-0 w-full overflow-hidden relative">
-        {/* Left Rail: Coordinates & Project Parameters ONLY (No Results) */}
-        <aside className="w-[380px] h-full min-h-0 overflow-y-auto overflow-x-clip overscroll-contain p-4 space-y-4 border-r border-slate-200 bg-slate-50/70 shrink-0 @container">
-          {/* System Error Banner */}
-          <ErrorBanner
-            errorMessage={errorMessage}
-            onDismiss={() => setErrorMessage(null)}
-          />
-
-          {/* Coordinates Input Card */}
-          <CoordinatesInput
-            latitude={hasLocation ? request.latitude : null}
-            longitude={hasLocation ? request.longitude : null}
-            formattedAddress={analysisData?.formatted_address}
-            onCoordinatesChange={handleLocationSelect}
-            onClear={handleClearLocation}
-          />
-
-          {/* Parameters Form with Submit Action */}
-          <AnalysisForm
-            request={request}
-            isLoading={isLoading}
-            hasCoordinates={hasLocation}
-            onChange={handleRequestChange}
-            onSubmit={handleRunAnalysis}
-          />
-        </aside>
-
-        {/* Center Fluid: Full-bleed Leaflet Map */}
-        <section id="center-map-section" className="min-w-0 h-full relative z-0 overflow-hidden flex flex-col flex-1">
-          <MapCanvas
-            latitude={hasLocation ? request.latitude : null}
-            longitude={hasLocation ? request.longitude : null}
-            orientationDegrees={analysisData?.orientation.optimal_axis_degrees}
-            plinthAreaSqFt={request.built_up_area_sqft}
-            onLocationSelect={handleLocationSelect}
-            invalidateTrigger={leafletResizeTrigger}
-            entranceDirection={analysisData?.vastu_advisory?.ranked_entrances?.[0]?.direction}
-            treeClusters={siteVisionData?.tree_clusters}
-            waterBodies={siteVisionData?.water_bodies}
-            className="w-full h-full"
-          />
-
-          {/* Toggle Button for Results Drawer (Active between 1024px and 1535px) */}
-          <div className="2xl:hidden absolute top-3 left-3 z-30">
-            <button
-              ref={drawerToggleBtnRef}
-              type="button"
-              onClick={() => setIsDrawerOpen(!isDrawerOpen)}
-              aria-expanded={isDrawerOpen}
-              aria-controls="results-drawer"
-              aria-label={isDrawerOpen ? 'Close analysis results' : 'Open analysis results'}
-              className="flex items-center gap-2 px-3.5 py-2 bg-slate-900/90 hover:bg-slate-900 text-white rounded-md shadow-md text-xs font-medium backdrop-blur-sm transition-all border border-slate-800"
-            >
-              <Icon name="layers" size={15} className="text-sky-400" />
-              <span>{isDrawerOpen ? 'Hide Results' : 'View Results'}</span>
-              {analysisData && (
-                <span className="font-mono font-semibold bg-sky-500/30 text-sky-200 border border-sky-400/40 px-1.5 py-0.5 rounded text-[11px] ml-0.5">
-                  {analysisData.overall_suitability_score.toFixed(1)}
-                </span>
-              )}
-            </button>
+      <aside
+        className={`fixed left-3 top-[76px] w-[340px] max-w-[calc(100vw-24px)] h-fit max-h-[calc(100vh-88px)] rounded-[20px] vibrancy-panel z-[1000] overflow-y-auto overflow-x-clip scrollbar-apple p-4 space-y-4 pointer-events-auto border border-[var(--panel-border-color)] shadow-xl @container transition-transform duration-300 ease-in-out ${
+          isMobileControlOpen ? 'max-lg:translate-x-0' : 'max-lg:hidden'
+        }`}
+      >
+        {/* Mobile Header with Close action */}
+        <div className="flex lg:hidden items-center justify-between border-b border-[var(--hairline)] pb-2 mb-1">
+          <div className="flex items-center gap-1.5 text-[13px] font-semibold text-[var(--text-1)]">
+            <Icon name="sliders" size={14} className="text-[var(--accent)]" />
+            <span>Site Parameters</span>
           </div>
-
-          {/* Slide-over Results Drawer for 1024px - 1535px */}
-          <div
-            id="results-drawer"
-            role="region"
-            aria-label="Analysis Results"
-            onTransitionEnd={triggerMapResize}
-            className={`2xl:hidden absolute top-0 right-0 bottom-0 w-[460px] max-w-[85vw] bg-slate-50 border-l border-slate-200 z-40 flex flex-col shadow-2xl transition-transform duration-300 ease-in-out ${
-              isDrawerOpen ? 'translate-x-0' : 'translate-x-full'
-            }`}
+          <button
+            type="button"
+            onClick={() => setIsMobileControlOpen(false)}
+            className="w-7 h-7 rounded-[8px] bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)] flex items-center justify-center transition-colors cursor-pointer"
+            aria-label="Close parameters panel"
           >
-            {/* Drawer Header */}
-            <div className="px-5 py-3.5 border-b border-slate-200 bg-white flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-2">
-                <Icon name="layers" size={16} className="text-slate-800" />
-                <h3 className="text-sm font-semibold text-slate-900 tracking-tight">
-                  Analysis Results
-                </h3>
-              </div>
-              <button
-                ref={drawerCloseBtnRef}
-                type="button"
-                onClick={() => setIsDrawerOpen(false)}
-                className="text-slate-400 hover:text-slate-700 p-1.5 rounded hover:bg-slate-100 transition-colors focus:outline-none focus:ring-1 focus:ring-slate-400"
-                title="Close results drawer (Esc)"
-                aria-label="Close results drawer"
-              >
-                <Icon name="x" size={16} />
-              </button>
-            </div>
+            <Icon name="x" size={14} />
+          </button>
+        </div>
 
-            {/* Drawer Body (Independently Scrollable) */}
-            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain p-4 space-y-4 @container">
-              {renderResultsContent()}
-            </div>
-          </div>
-        </section>
+        {/* System Error Banner */}
+        <ErrorBanner errorMessage={errorMessage} onDismiss={() => setErrorMessage(null)} />
 
-        {/* Right Rail: Results Display on 2xl (1536px and wider) */}
-        <aside className="hidden 2xl:block w-[460px] h-full min-h-0 overflow-y-auto overflow-x-clip overscroll-contain p-4 space-y-4 border-l border-slate-200 bg-slate-50/70 shrink-0 @container">
-          {renderResultsContent()}
-        </aside>
-      </div>
-
-      {/* ========================================================================= */}
-      {/* MOBILE / TABLET STACKED VIEW (< 1024px) - Document Scrolls Vertically    */}
-      {/* ========================================================================= */}
-      <div className="lg:hidden flex flex-col p-3 sm:p-4 gap-4 w-full min-w-0 @container">
-        {/* Error Banner */}
-        <ErrorBanner
-          errorMessage={errorMessage}
-          onDismiss={() => setErrorMessage(null)}
-        />
-
-        {/* 1. Controls: Coordinates & Form */}
+        {/* Coordinates Input Card */}
         <CoordinatesInput
           latitude={hasLocation ? request.latitude : null}
           longitude={hasLocation ? request.longitude : null}
@@ -531,6 +530,7 @@ export const App: React.FC = () => {
           onClear={handleClearLocation}
         />
 
+        {/* Parameters Form with Submit Action */}
         <AnalysisForm
           request={request}
           isLoading={isLoading}
@@ -538,30 +538,81 @@ export const App: React.FC = () => {
           onChange={handleRequestChange}
           onSubmit={handleRunAnalysis}
         />
+      </aside>
 
-        {/* 2. Interactive Map (Explicit height h-[60vh] in stacked mode) */}
-        <section className="h-[60vh] min-h-[380px] rounded-lg border border-slate-200 overflow-hidden shadow-sm">
-          <MapCanvas
-            latitude={hasLocation ? request.latitude : null}
-            longitude={hasLocation ? request.longitude : null}
-            orientationDegrees={analysisData?.orientation.optimal_axis_degrees}
-            plinthAreaSqFt={request.built_up_area_sqft}
-            onLocationSelect={handleLocationSelect}
-            invalidateTrigger={leafletResizeTrigger}
-            entranceDirection={analysisData?.vastu_advisory?.ranked_entrances?.[0]?.direction}
-            treeClusters={siteVisionData?.tree_clusters}
-            waterBodies={siteVisionData?.water_bodies}
-            className="w-full h-full"
-          />
-        </section>
-
-        {/* 3. Results Section */}
-        <section className="space-y-4 w-full min-w-0 @container">
-          {renderResultsContent()}
-        </section>
+      {/* ========================================================================= */}
+      {/* LAYER 3: DESKTOP DRAWER TOGGLE BUTTON                                      */}
+      {/* ========================================================================= */}
+      <div
+        className="hidden lg:block fixed top-[76px] map-controls-anchor z-[1000] pointer-events-auto"
+      >
+        <button
+          ref={drawerToggleBtnRef}
+          type="button"
+          onClick={() => {
+            const next = !isDrawerOpen;
+            setIsDrawerOpen(next);
+            setIsMobileResultsOpen(next);
+            triggerMapResize();
+          }}
+          aria-expanded={isDrawerOpen}
+          aria-controls="results-drawer"
+          aria-label={isDrawerOpen ? 'Close analysis panel' : 'Open analysis panel'}
+          className="h-8 flex items-center gap-2 px-3 rounded-[12px] vibrancy-panel text-[12px] font-medium text-[var(--text-1)] border border-[var(--panel-border-color)] shadow-md hover:bg-[var(--fill)] transition-colors active:brightness-95 cursor-pointer select-none"
+        >
+          <Icon name="layers" size={14} className="text-[var(--accent)]" />
+          <span>{isDrawerOpen ? (analysisData ? 'Hide Results' : 'Hide Panel') : (analysisData ? 'View Results' : 'View Panel')}</span>
+          {analysisData && (
+            <span className="font-mono font-semibold bg-[var(--accent-tint)] text-[var(--accent)] px-1.5 py-0.5 rounded-[6px] text-[11px] ml-0.5">
+              {analysisData.overall_suitability_score.toFixed(1)}
+            </span>
+          )}
+        </button>
       </div>
 
-      {/* Engineering Methodology Reference Dialog */}
+      {/* ========================================================================= */}
+      {/* LAYER 4: RIGHT FLOATING RESULTS PANEL (360px, top 76px, h-fit, r-20)     */}
+      {/* ========================================================================= */}
+      <aside
+        id="results-drawer"
+        role="region"
+        aria-label="Analysis Results"
+        onTransitionEnd={triggerMapResize}
+        className={`fixed right-3 top-[76px] w-[360px] max-w-[calc(100vw-24px)] h-fit max-h-[calc(100vh-88px)] rounded-[20px] vibrancy-panel z-[1000] overflow-y-auto overflow-x-clip scrollbar-apple p-4 space-y-4 border border-[var(--panel-border-color)] shadow-xl @container transition-all duration-300 ease-in-out ${
+          isDrawerOpen
+            ? 'translate-x-0 opacity-100 pointer-events-auto'
+            : 'translate-x-full opacity-0 pointer-events-none'
+        } ${
+          isMobileResultsOpen
+            ? 'max-lg:translate-x-0 max-lg:opacity-100 max-lg:pointer-events-auto'
+            : 'max-lg:translate-x-full max-lg:opacity-0 max-lg:pointer-events-none max-lg:hidden'
+        }`}
+      >
+        {/* Mobile Header with Close action */}
+        <div className="flex lg:hidden items-center justify-between border-b border-[var(--hairline)] pb-2 mb-1">
+          <div className="flex items-center gap-1.5 text-[13px] font-semibold text-[var(--text-1)]">
+            <Icon name="layers" size={14} className="text-[var(--accent)]" />
+            <span>Feasibility Results</span>
+          </div>
+          <button
+            ref={drawerCloseBtnRef}
+            type="button"
+            onClick={() => {
+              setIsMobileResultsOpen(false);
+              setIsDrawerOpen(false);
+            }}
+            className="w-7 h-7 rounded-[8px] bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)] flex items-center justify-center transition-colors cursor-pointer"
+            aria-label="Close results panel"
+          >
+            <Icon name="x" size={14} />
+          </button>
+        </div>
+
+        {/* Results Body */}
+        {renderResultsContent()}
+      </aside>
+
+      {/* Engineering Methodology Reference Dialog (z-[2000]) */}
       <MethodologyModal
         isOpen={isMethodologyOpen}
         onClose={() => setIsMethodologyOpen(false)}

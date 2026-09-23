@@ -29,32 +29,32 @@ export const DownloadReportButton: React.FC<DownloadReportButtonProps> = ({ payl
   };
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 pt-2">
       <button
         type="button"
         onClick={handleDownload}
         disabled={isDownloading}
-        className={`w-full h-11 px-4 rounded-md font-medium text-sm flex items-center justify-center gap-2 border transition-all ${
+        className={`w-full h-10 px-4 rounded-[12px] font-semibold text-[13px] flex items-center justify-center gap-2 transition-all duration-200 select-none shadow-sm ${
           isDownloading
-            ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-            : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-300 shadow-sm hover:border-slate-400'
+            ? 'bg-[var(--fill)] text-[var(--text-3)] cursor-not-allowed'
+            : 'bg-[var(--accent)] text-white hover:brightness-[0.98] active:brightness-95 cursor-pointer'
         }`}
       >
         {isDownloading ? (
           <>
-            <Icon name="loader" size={16} />
+            <Icon name="loader" size={15} className="animate-spin" />
             <span>Compiling Technical Vector PDF...</span>
           </>
         ) : (
           <>
-            <Icon name="download" size={16} />
+            <Icon name="download" size={15} />
             <span>Download Engineering Feasibility Report (PDF)</span>
           </>
         )}
       </button>
 
       {downloadError && (
-        <p className="text-xs text-rose-600 font-medium text-center">
+        <p className="text-[12px] text-[var(--semantic-red)] font-medium text-center">
           {downloadError}
         </p>
       )}

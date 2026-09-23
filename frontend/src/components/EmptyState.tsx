@@ -4,60 +4,54 @@ import { Icon } from './Icon';
 export const EmptyState: React.FC = () => {
   const steps = [
     {
-      number: '01',
       title: 'Geographic Site Selection',
       desc: 'Click on the interactive map canvas to drop a pin or enter coordinates manually.',
       icon: 'map-pin' as const,
     },
     {
-      number: '02',
       title: 'Structural Specifications',
-      desc: 'Set the target built-up plinth area (500 to 50,000 sq ft), specification tier, and levels.',
-      icon: 'settings' as const,
+      desc: 'Set the target built-up plinth area, specification grade tier, and level storeys.',
+      icon: 'sliders' as const,
     },
     {
-      number: '03',
       title: 'Deterministic Engine Analysis',
-      desc: 'Computes multi-factor slope, drainage, orientation, and preliminary CPWD cost models.',
+      desc: 'Computes multi-factor terrain slope, drainage, bioclimatic orientation, and CPWD costs.',
       icon: 'layers' as const,
     },
     {
-      number: '04',
       title: 'Engineering Synthesis & PDF',
-      desc: 'Review bioclimatic solar-wind vectors, itemized budgets, and export official PDF reports.',
+      desc: 'Review solar-wind vectors, hazard telemetry, and export official vector PDF reports.',
       icon: 'file-text' as const,
     },
   ];
 
   return (
-    <div className="@container bg-white rounded-lg border border-slate-200 p-4 @sm:p-6 shadow-sm space-y-5 min-w-0 w-full">
-      <div className="text-center max-w-md mx-auto space-y-2.5">
-        <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center mx-auto border border-slate-200 shrink-0">
-          <Icon name="crosshair" size={22} />
+    <div className="space-y-6 w-full min-w-0 py-2">
+      {/* 40px circle --fill with Compass icon 20 --text-2 (no glow) */}
+      <div className="text-center space-y-2">
+        <div className="w-10 h-10 rounded-full bg-[var(--fill)] flex items-center justify-center mx-auto text-[var(--text-2)] mb-3">
+          <Icon name="compass" size={20} />
         </div>
-        <h3 className="text-base font-semibold text-slate-900">
-          Preliminary Construction Planning System
+        <h3 className="text-[17px] font-semibold text-[var(--text-1)] tracking-tight">
+          Site Feasibility & Planning
         </h3>
-        <p className="text-sm text-slate-500 leading-relaxed whitespace-normal break-words">
-          Select any geographic coordinates to evaluate terrain slope, microclimate solar paths,
-          hydrological drainage, and preliminary construction budgets.
+        <p className="text-[13px] text-[var(--text-2)] leading-[1.5] max-w-xs mx-auto">
+          Drop a pin anywhere on the map or input coordinates to evaluate terrain, passive orientation, and preliminary budgets.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 @sm:grid-cols-2 gap-3.5 pt-2 border-t border-slate-100 min-w-0">
-        {steps.map((step) => (
-          <div
-            key={step.number}
-            className="p-3.5 rounded-lg bg-slate-50 border border-slate-100 flex items-start gap-3 min-w-0"
-          >
-            <div className="text-xs font-mono font-bold text-slate-400 mt-0.5 shrink-0">
-              {step.number}
+      {/* Grouped list of 4 rows: 24px radius-6 accent-tint square with 14px --accent icon, title 13px/600, description 12px --text-2 */}
+      <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
+        {steps.map((step, idx) => (
+          <div key={idx} className="py-3 flex items-start gap-3 min-w-0">
+            <div className="w-6 h-6 rounded-[6px] bg-[var(--accent-tint)] flex items-center justify-center text-[var(--accent)] shrink-0 mt-0.5">
+              <Icon name={step.icon} size={14} />
             </div>
-            <div className="space-y-1 min-w-0">
-              <span className="text-sm font-semibold text-slate-800 block whitespace-normal break-words">
+            <div className="space-y-0.5 min-w-0 flex-1">
+              <span className="text-[13px] font-semibold text-[var(--text-1)] block leading-tight">
                 {step.title}
               </span>
-              <p className="text-xs text-slate-500 leading-normal whitespace-normal break-words">
+              <p className="text-[12px] text-[var(--text-2)] leading-normal">
                 {step.desc}
               </p>
             </div>
@@ -65,11 +59,16 @@ export const EmptyState: React.FC = () => {
         ))}
       </div>
 
-      <div className="bg-slate-50/80 p-3.5 rounded-lg text-xs text-slate-600 border border-slate-200/60 flex flex-col @sm:flex-row items-start @sm:items-center justify-between gap-2 min-w-0">
-        <span className="font-mono text-slate-500 whitespace-normal break-words">
-          Indian Standard (IS) & CPWD Benchmarks
-        </span>
-        <span className="font-semibold text-slate-700 shrink-0 whitespace-nowrap">Zero Paid APIs Required</span>
+      {/* Footer notes: 12px --text-3 with ShieldCheck/BadgeCheck 14px icons, hairline top border */}
+      <div className="pt-3 border-t border-[var(--hairline)] flex items-center justify-between gap-2 text-[12px] text-[var(--text-3)]">
+        <div className="flex items-center gap-1.5">
+          <Icon name="shield-check" size={14} className="text-[var(--text-3)] shrink-0" />
+          <span>CPWD & IS 1893 Benchmarks</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Icon name="badge-check" size={14} className="text-[var(--text-3)] shrink-0" />
+          <span>Zero Paid APIs</span>
+        </div>
       </div>
     </div>
   );

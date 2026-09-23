@@ -9,6 +9,13 @@ interface AppHeaderProps {
   warnings?: string[];
   isWarningDismissed?: boolean;
   onRestoreWarning?: () => void;
+  theme?: 'light' | 'dark';
+  onToggleTheme?: () => void;
+  isMobileControlOpen?: boolean;
+  onToggleMobileControl?: () => void;
+  isMobileResultsOpen?: boolean;
+  onToggleMobileResults?: () => void;
+  hasResults?: boolean;
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
@@ -19,6 +26,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   warnings = [],
   isWarningDismissed = false,
   onRestoreWarning,
+  theme = 'light',
+  onToggleTheme,
+  isMobileControlOpen = false,
+  onToggleMobileControl,
+  isMobileResultsOpen = false,
+  onToggleMobileResults,
+  hasResults = false,
 }) => {
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -34,8 +48,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       }
     };
     const handleClickOutside = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node) &&
-          triggerBtnRef.current && !triggerBtnRef.current.contains(e.target as Node)) {
+      if (
+        popoverRef.current &&
+        !popoverRef.current.contains(e.target as Node) &&
+        triggerBtnRef.current &&
+        !triggerBtnRef.current.contains(e.target as Node)
+      ) {
         setIsPopoverOpen(false);
       }
     };
@@ -48,29 +66,67 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   }, [isPopoverOpen]);
 
   return (
-    <header className="bg-white border-b border-slate-200 sticky top-0 z-30 px-3 sm:px-6 h-16 shrink-0 flex items-center justify-between shadow-sm min-w-0 w-full">
-      {/* Brand identity */}
-      <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-        <div className="w-8 h-8 sm:w-9 sm:h-9 rounded bg-slate-900 text-white flex items-center justify-center font-bold text-xs sm:text-sm tracking-wider shadow-sm shrink-0">
+    <header
+      className="fixed top-3 left-3 right-3 h-[52px] rounded-[16px] vibrancy-panel z-[1001] px-3 sm:px-4 flex items-center justify-between pointer-events-auto border border-[var(--panel-border-color)] shadow-md select-none"
+      style={{ top: '12px', left: '12px', right: '12px', height: '52px', borderRadius: '16px' }}
+    >
+      {/* Brand identity: 28px radius-8 flat --accent square with white "BW" 12px/700 */}
+      <div className="flex items-center gap-2.5 min-w-0">
+        <div className="w-7 h-7 rounded-[8px] bg-[var(--accent)] text-white flex items-center justify-center font-bold text-[12px] tracking-tight shrink-0 shadow-sm">
           BW
         </div>
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
-            <h1 className="text-sm sm:text-base font-semibold text-slate-900 tracking-tight whitespace-nowrap">
-              BuildWise AI
-            </h1>
-            <span className="text-[9px] sm:text-[10px] font-mono uppercase bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200 shrink-0">
-              v1.0
-            </span>
-          </div>
-          <p className="text-xs text-slate-500 hidden xl:block whitespace-nowrap">
-            Geo-Based Intelligent Site Feasibility & Construction Planning
-          </p>
+        <div className="min-w-0 flex items-center gap-2">
+          <h1 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight whitespace-nowrap">
+            BuildWise AI
+          </h1>
+          <span className="text-[11px] font-medium bg-[var(--fill)] text-[var(--text-2)] px-2 py-0.5 rounded-full shrink-0">
+            v1.0
+          </span>
+          <span className="text-[12px] text-[var(--text-2)] hidden xl:inline-block truncate max-w-xs">
+            Geo-Based Feasibility & Site Planning
+          </span>
         </div>
       </div>
 
-      {/* System telemetry & actions */}
-      <div className="flex items-center gap-1.5 sm:gap-3 shrink-0 relative">
+      {/* Right controls: Theme toggle, Telemetry notice, Methodology, Reset, Engine Status */}
+      <div className="flex items-center gap-2 shrink-0">
+        {/* Mobile Panel Toggles (hidden on desktop >=1024px) */}
+        <div className="flex lg:hidden items-center gap-1.5 mr-1">
+          {onToggleMobileControl && (
+            <button
+              type="button"
+              onClick={onToggleMobileControl}
+              className={`px-2.5 py-1 text-[12px] font-medium rounded-[10px] transition-colors flex items-center gap-1 ${
+                isMobileControlOpen
+                  ? 'bg-[var(--accent)] text-white'
+                  : 'bg-[var(--fill)] text-[var(--text-1)] hover:bg-[var(--fill-hover)]'
+              }`}
+              title="Toggle Parameters Panel"
+              aria-label="Toggle Parameters Panel"
+            >
+              <Icon name="sliders" size={13} />
+              <span className="hidden xs:inline">Controls</span>
+            </button>
+          )}
+
+          {onToggleMobileResults && (
+            <button
+              type="button"
+              onClick={onToggleMobileResults}
+              className={`px-2.5 py-1 text-[12px] font-medium rounded-[10px] transition-colors flex items-center gap-1 ${
+                isMobileResultsOpen
+                  ? 'bg-[var(--accent)] text-white'
+                  : 'bg-[var(--fill)] text-[var(--text-1)] hover:bg-[var(--fill-hover)]'
+              }`}
+              title="Toggle Results Panel"
+              aria-label="Toggle Results Panel"
+            >
+              <Icon name="layers" size={13} />
+              <span className="hidden xs:inline">{hasResults ? 'Results' : 'Overview'}</span>
+            </button>
+          )}
+        </div>
+
         {/* Warning Indicator Badge & Accessible Popover */}
         {warnings.length > 0 && (
           <div className="relative">
@@ -80,12 +136,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               onClick={() => setIsPopoverOpen(!isPopoverOpen)}
               aria-haspopup="dialog"
               aria-expanded={isPopoverOpen}
-              className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 text-xs font-medium text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500"
+              className="flex items-center gap-1.5 px-2.5 py-1 text-[12px] font-medium text-[var(--semantic-amber)] bg-[var(--fill)] hover:bg-[var(--fill-hover)] rounded-[10px] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--semantic-amber)]/30"
               title={`Telemetry Notices (${warnings.length}): Click or press Enter to view details`}
               aria-label={`View ${warnings.length} telemetry notices`}
             >
-              <Icon name="alert-triangle" size={13} className="text-amber-700 shrink-0" />
-              <span className="font-mono font-semibold">{warnings.length}</span>
+              <Icon name="alert-triangle" size={13} className="text-[var(--semantic-amber)] shrink-0" />
+              <span className="font-semibold">{warnings.length}</span>
               <span className="hidden sm:inline">Notice{warnings.length > 1 ? 's' : ''}</span>
             </button>
 
@@ -95,41 +151,46 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                 ref={popoverRef}
                 role="dialog"
                 aria-label="Telemetry Warning Details"
-                className="absolute right-0 top-full mt-2 w-80 sm:w-96 max-w-[calc(100vw-24px)] bg-white border border-slate-200 rounded-lg shadow-xl z-50 p-4 space-y-3 text-xs animate-fade-in"
+                className="absolute right-0 top-full mt-2 w-80 sm:w-96 max-w-[calc(100vw-32px)] vibrancy-panel rounded-[16px] shadow-2xl z-[1050] p-4 space-y-3 text-[12px] border border-[var(--panel-border-color)]"
               >
-                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                  <div className="flex items-center gap-1.5 text-amber-900 font-semibold">
-                    <Icon name="alert-triangle" size={14} className="text-amber-700" />
+                <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2.5">
+                  <div className="flex items-center gap-1.5 text-[var(--semantic-amber)] font-semibold">
+                    <Icon name="alert-triangle" size={14} />
                     <span>Active Telemetry Notices ({warnings.length})</span>
                   </div>
                   <button
                     type="button"
                     onClick={() => setIsPopoverOpen(false)}
-                    className="text-slate-400 hover:text-slate-700 p-1 rounded"
+                    className="text-[var(--text-3)] hover:text-[var(--text-1)] p-1 rounded transition-colors"
                     aria-label="Close telemetry details"
                   >
                     <Icon name="x" size={14} />
                   </button>
                 </div>
 
-                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                <div className="space-y-2 max-h-60 overflow-y-auto scrollbar-apple pr-1">
                   {warnings.map((w, idx) => (
-                    <div key={idx} className="bg-amber-50/70 border border-amber-200/60 p-2.5 rounded text-amber-900 leading-relaxed whitespace-normal break-words flex items-start gap-2">
-                      <span className="font-mono font-bold text-[10px] text-amber-700 mt-0.5 shrink-0">{idx + 1}.</span>
-                      <p className="flex-1">{w}</p>
+                    <div
+                      key={idx}
+                      className="bg-[var(--fill)] p-2.5 rounded-[10px] text-[var(--text-1)] leading-relaxed whitespace-normal break-words flex items-start gap-2"
+                    >
+                      <span className="font-bold text-[11px] text-[var(--semantic-amber)] mt-0.5 shrink-0">
+                        {idx + 1}.
+                      </span>
+                      <p className="flex-1 text-[12px]">{w}</p>
                     </div>
                   ))}
                 </div>
 
                 {isWarningDismissed && onRestoreWarning && (
-                  <div className="pt-2 border-t border-slate-100 flex justify-end">
+                  <div className="pt-2 border-t border-[var(--hairline)] flex justify-end">
                     <button
                       type="button"
                       onClick={() => {
                         onRestoreWarning();
                         setIsPopoverOpen(false);
                       }}
-                      className="px-3 py-1 bg-amber-100 hover:bg-amber-200 text-amber-900 font-medium rounded transition-colors text-xs"
+                      className="px-3 py-1 bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-1)] font-medium rounded-[8px] transition-colors text-[12px]"
                     >
                       Restore Banner to Top
                     </button>
@@ -140,39 +201,52 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           </div>
         )}
 
-        {/* Engine Health indicator */}
-        <div className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded bg-slate-50 border border-slate-200 text-xs shrink-0">
-          <span
-            className={`w-2 h-2 rounded-full shrink-0 ${
-              backendConnected ? 'bg-emerald-500' : 'bg-rose-500'
-            }`}
-          />
-          <span className="text-slate-600 font-mono text-[11px] hidden sm:inline whitespace-nowrap">
-            {backendConnected ? `Engine Online (${activeAiProvider})` : 'Engine Offline'}
-          </span>
-        </div>
+        {/* Theme toggle icon button */}
+        {onToggleTheme && (
+          <button
+            type="button"
+            onClick={onToggleTheme}
+            className="w-8 h-8 rounded-[10px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-1)] flex items-center justify-center transition-colors active:brightness-95"
+            title={theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
+            aria-label={theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
+          >
+            <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={15} />
+          </button>
+        )}
 
-        {/* Methodology modal trigger */}
+        {/* Secondary action: Methodology button */}
         <button
           type="button"
           onClick={onOpenMethodology}
-          className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 text-xs font-medium text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded transition-colors shrink-0"
+          className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-[var(--text-1)] bg-[var(--fill)] hover:bg-[var(--fill-hover)] rounded-[10px] transition-colors shrink-0 active:brightness-95"
           title="View engineering calculation methodology"
         >
-          <Icon name="info" size={14} className="text-slate-500 shrink-0" />
-          <span className="hidden sm:inline">Methodology</span>
+          <Icon name="info" size={14} className="text-[var(--text-2)] shrink-0" />
+          <span>Methodology</span>
         </button>
 
-        {/* Reset action */}
+        {/* Secondary action: Reset button */}
         <button
           type="button"
           onClick={onReset}
-          className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded transition-colors shrink-0"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-[var(--text-1)] bg-[var(--fill)] hover:bg-[var(--fill-hover)] rounded-[10px] transition-colors shrink-0 active:brightness-95"
           title="Reset site analysis"
         >
-          <Icon name="refresh" size={14} className="shrink-0" />
+          <Icon name="refresh" size={14} className="text-[var(--text-2)] shrink-0" />
           <span className="hidden sm:inline">Reset</span>
         </button>
+
+        {/* Engine Status pill: --fill bg, 6px green dot + "Engine Online" 12px/500 --text-2 */}
+        <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-[10px] bg-[var(--fill)] text-[12px] font-medium text-[var(--text-2)] shrink-0">
+          <span
+            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+              backendConnected ? 'bg-[var(--semantic-green)]' : 'bg-[var(--semantic-red)]'
+            }`}
+          />
+          <span className="whitespace-nowrap">
+            {backendConnected ? `Engine Online (${activeAiProvider})` : 'Engine Offline'}
+          </span>
+        </div>
       </div>
     </header>
   );

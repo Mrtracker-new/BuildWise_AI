@@ -22,15 +22,15 @@ export const TelemetryStrip: React.FC<TelemetryStripProps> = ({
   return (
     <div
       role="status"
-      className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2 text-xs flex items-center justify-between gap-3 shrink-0 z-30"
+      className="vibrancy-panel rounded-[12px] border border-[var(--panel-border-color)] text-[var(--semantic-amber)] px-3.5 py-2 text-[12px] flex items-center justify-between gap-3 shrink-0 z-[1000]"
     >
       <div className="flex items-center gap-2 min-w-0 flex-1">
-        <Icon name="alert-triangle" size={15} className="text-amber-700 shrink-0" />
-        <span className="font-semibold text-amber-900 shrink-0 uppercase tracking-wider text-[11px]">
-          Telemetry Notice:
+        <Icon name="alert-triangle" size={14} className="text-[var(--semantic-amber)] shrink-0" />
+        <span className="font-semibold shrink-0 uppercase tracking-[0.08em] text-[11px]">
+          Notice:
         </span>
         <span
-          className="text-amber-800 text-xs min-w-0 flex-1 whitespace-normal break-words lg:truncate"
+          className="text-[var(--text-1)] text-[12px] min-w-0 flex-1 whitespace-normal break-words lg:truncate"
           title={combinedText}
         >
           {combinedText}
@@ -39,11 +39,11 @@ export const TelemetryStrip: React.FC<TelemetryStripProps> = ({
       <button
         type="button"
         onClick={onDismiss}
-        className="text-amber-700 hover:text-amber-900 p-1 rounded transition-colors shrink-0 focus:outline-none focus:ring-1 focus:ring-amber-500"
+        className="text-[var(--text-3)] hover:text-[var(--text-1)] p-1 rounded-[6px] transition-colors shrink-0"
         title="Dismiss telemetry notice"
         aria-label="Dismiss telemetry notice"
       >
-        <Icon name="x" size={14} />
+        <Icon name="x" size={13} />
       </button>
     </div>
   );
@@ -60,24 +60,26 @@ export const ErrorBanner: React.FC<ErrorBannerProps> = ({ errorMessage, onDismis
   return (
     <div
       role="alert"
-      className="bg-rose-50 border border-rose-200 text-rose-800 p-3.5 rounded-lg text-xs flex items-start justify-between gap-3 shadow-sm"
+      className="bg-[var(--fill)] border border-[var(--hairline)] text-[var(--text-1)] p-3 rounded-[12px] text-[12px] flex items-start justify-between gap-3 shadow-sm"
     >
       <div className="flex items-start gap-2.5">
-        <Icon name="shield-alert" size={16} className="text-rose-600 mt-0.5 shrink-0" />
-        <div>
-          <span className="font-semibold block text-rose-900 text-xs">System Error</span>
-          <p className="mt-0.5 text-rose-700 leading-normal">{errorMessage}</p>
+        <Icon name="shield-alert" size={15} className="text-[var(--semantic-red)] mt-0.5 shrink-0" />
+        <div className="space-y-0.5">
+          <span className="font-semibold block text-[12px] text-[var(--semantic-red)]">
+            System Alert
+          </span>
+          <p className="text-[12px] text-[var(--text-2)] leading-normal">{errorMessage}</p>
         </div>
       </div>
       {onDismiss && (
         <button
           type="button"
           onClick={onDismiss}
-          className="text-rose-500 hover:text-rose-800 p-1 rounded transition-colors focus:outline-none"
+          className="text-[var(--text-3)] hover:text-[var(--text-1)] p-1 rounded-[6px] transition-colors focus:outline-none"
           title="Dismiss error"
           aria-label="Dismiss error"
         >
-          <Icon name="x" size={14} />
+          <Icon name="x" size={13} />
         </button>
       )}
     </div>

@@ -1,6 +1,7 @@
 import React from 'react';
 import type { AnalysisRequest } from '../services/types';
 import { Icon } from './Icon';
+import { IosSelect } from './IosSelect';
 
 interface AnalysisFormProps {
   request: AnalysisRequest;
@@ -21,9 +22,9 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
   const canSubmit = hasCoordinates && isAreaValid && !isLoading;
 
   const qualityGrades: { id: 'basic' | 'standard' | 'premium'; label: string; rate: string }[] = [
-    { id: 'basic', label: 'Basic', rate: '1,500 /sq ft' },
-    { id: 'standard', label: 'Standard', rate: '2,200 /sq ft' },
-    { id: 'premium', label: 'Premium', rate: '3,500 /sq ft' },
+    { id: 'basic', label: 'Basic', rate: '₹1,500/sq ft' },
+    { id: 'standard', label: 'Standard', rate: '₹2,200/sq ft' },
+    { id: 'premium', label: 'Premium', rate: '₹3,500/sq ft' },
   ];
 
   const typologies = [
@@ -33,194 +34,240 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
     { id: 'industrial', label: 'Light Industrial / Warehouse' },
   ];
 
+  const floorOptions = [
+    { id: 1, label: 'G (1 Level)' },
+    { id: 2, label: 'G + 1 (2 Levels)' },
+    { id: 3, label: 'G + 2 (3 Levels)' },
+    { id: 4, label: 'G + 3 (4 Levels)' },
+  ];
+
   const aiProviders = [
-    { id: 'mock', label: 'Mock Deterministic (Zero-Config, Default)' },
+    { id: 'mock', label: 'Deterministic Engine (Default, Zero-Config)' },
     { id: 'groq', label: 'Groq Cloud LLM (Optional Key)' },
     { id: 'gemini', label: 'Google Gemini (Optional Key)' },
     { id: 'ollama', label: 'Ollama Local (Offline LLM)' },
   ];
 
+  // Calculate track fill percentages for iOS sliders
+  const areaMin = 500;
+  const areaMax = 50000;
+  const areaPct = Math.min(100, Math.max(0, ((request.built_up_area_sqft - areaMin) / (areaMax - areaMin)) * 100));
+
+  const covMin = 0.40;
+  const covMax = 0.75;
+  const currentCoverage = request.ground_coverage_ratio ?? 0.60;
+  const covPct = Math.min(100, Math.max(0, ((currentCoverage - covMin) / (covMax - covMin)) * 100));
+
   return (
-    <div className="@container bg-white rounded-lg border border-slate-200 p-4 @sm:p-5 shadow-sm space-y-4 min-w-0 w-full">
-      <div className="flex flex-wrap items-center justify-between border-b border-slate-100 pb-3 gap-2 min-w-0">
+    <div className="space-y-4 w-full min-w-0">
+      {/* Section Header */}
+      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2.5 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
-          <Icon name="settings" size={16} className="text-slate-700 shrink-0" />
-          <h2 className="text-[15px] font-semibold text-slate-900 tracking-tight whitespace-normal break-words">
+          <Icon name="settings" size={15} className="text-[var(--text-2)] shrink-0" />
+          <h2 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight">
             Project Parameters
           </h2>
         </div>
-        <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 font-mono shrink-0">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] shrink-0">
           CPWD Standard
         </span>
       </div>
 
-      {/* Built-up Area Input */}
-      <div className="space-y-1.5 min-w-0">
-        <div className="flex justify-between items-center gap-2 min-w-0">
-          <label htmlFor="area-input" className="text-xs uppercase tracking-wider font-semibold text-slate-500 whitespace-normal break-words">
+      {/* Built-up Area Input with iOS Slider */}
+      <div className="space-y-1 min-w-0">
+        <div className="flex justify-between items-baseline gap-2 min-w-0">
+          <label
+            htmlFor="area-input"
+            className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)]"
+          >
             Built-up Plinth Area
           </label>
-          <span className="text-sm font-mono font-semibold text-slate-900 bg-slate-100 px-2.5 py-1 rounded shrink-0 tabular-nums">
+          <span className="text-[13px] font-medium text-[var(--text-1)] tabular-nums shrink-0">
             {request.built_up_area_sqft.toLocaleString()} sq ft
           </span>
         </div>
-        <input
-          id="area-input"
-          type="range"
-          min="500"
-          max="50000"
-          step="100"
-          value={request.built_up_area_sqft}
-          onChange={(e) => onChange({ built_up_area_sqft: parseFloat(e.target.value) || 500 })}
-          className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-slate-900"
-        />
-        <div className="flex justify-between text-xs font-mono text-slate-400 min-w-0">
-          <span>500 sq ft</span>
-          <span>25,000 sq ft</span>
-          <span>50,000 sq ft</span>
+
+        {/* 16px vertical padding prevents 22px thumb from clipping */}
+        <div className="py-4 min-w-0">
+          <input
+            id="area-input"
+            type="range"
+            min={areaMin}
+            max={areaMax}
+            step="100"
+            value={request.built_up_area_sqft}
+            onChange={(e) => onChange({ built_up_area_sqft: parseFloat(e.target.value) || 500 })}
+            className="ios-slider"
+            style={{
+              background: `linear-gradient(to right, var(--accent) 0%, var(--accent) ${areaPct}%, var(--fill) ${areaPct}%, var(--fill) 100%)`,
+            }}
+          />
+          {/* Strictly 3-column flex layout for labels, preventing overlap */}
+          <div className="flex justify-between items-center text-[11px] text-[var(--text-3)] font-medium pt-2">
+            <span className="w-1/3 text-left truncate">500 sq ft</span>
+            <span className="w-1/3 text-center truncate">25,000 sq ft</span>
+            <span className="w-1/3 text-right truncate">50,000 sq ft</span>
+          </div>
         </div>
+
         {!isAreaValid && (
-          <p className="text-xs text-rose-600 font-medium mt-1 whitespace-normal break-words">
+          <p className="text-[12px] text-[var(--semantic-red)] font-medium mt-1">
             Area must be between 500 and 50,000 sq ft.
           </p>
         )}
       </div>
 
-      {/* Construction Quality Grade */}
+      {/* Construction Quality Grade: iOS SEGMENTED CONTROL */}
       <div className="space-y-1.5 min-w-0">
-        <label className="block text-xs uppercase tracking-wider font-semibold text-slate-500 whitespace-normal break-words">
+        <label className="block text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)]">
           Specification Grade
         </label>
-        <div className="grid grid-cols-3 gap-2 min-w-0">
-          {qualityGrades.map((grade) => (
-            <button
-              key={grade.id}
-              type="button"
-              onClick={() => onChange({ quality_grade: grade.id })}
-              className={`p-2.5 rounded text-left border transition-all min-w-0 ${
-                request.quality_grade === grade.id
-                  ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                  : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700'
-              }`}
-            >
-              <div className="text-xs @sm:text-sm font-semibold whitespace-normal break-words">{grade.label}</div>
-              <div
-                className={`text-[11px] @sm:text-xs font-mono mt-0.5 whitespace-normal break-words ${
-                  request.quality_grade === grade.id ? 'text-slate-300' : 'text-slate-500'
+        <div className="bg-[var(--fill)] rounded-[10px] p-[2px] grid grid-cols-3 gap-1 min-w-0">
+          {qualityGrades.map((grade) => {
+            const isActive = request.quality_grade === grade.id;
+            return (
+              <button
+                key={grade.id}
+                type="button"
+                onClick={() => onChange({ quality_grade: grade.id })}
+                className={`py-2 px-1 rounded-[8px] text-center transition-all duration-200 select-none ${
+                  isActive
+                    ? 'bg-[var(--segmented-active-bg)] shadow-[var(--segmented-active-shadow)]'
+                    : 'hover:text-[var(--text-1)]'
                 }`}
               >
-                {grade.rate}
-              </div>
-            </button>
-          ))}
+                <span
+                  className="text-[13px] font-semibold block leading-tight"
+                  style={{
+                    color: isActive ? 'var(--segmented-active-label)' : 'var(--text-2)',
+                  }}
+                >
+                  {grade.label}
+                </span>
+                <span
+                  className="text-[11px] block mt-0.5 font-normal leading-tight"
+                  style={{
+                    color: isActive ? 'var(--segmented-active-sublabel)' : 'var(--text-3)',
+                  }}
+                >
+                  {grade.rate}
+                </span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* Building Typology & Floors */}
-      <div className="grid grid-cols-1 @sm:grid-cols-2 gap-3 min-w-0">
+      {/* Building Typology & Floors Selects */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 min-w-0">
         <div className="min-w-0">
-          <label htmlFor="typology-select" className="block text-xs uppercase tracking-wider font-semibold text-slate-500 mb-1 whitespace-normal break-words">
+          <label
+            htmlFor="typology-select"
+            className="block text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] mb-1"
+          >
             Building Typology
           </label>
-          <select
+          <IosSelect
             id="typology-select"
             value={request.building_typology}
-            onChange={(e) => onChange({ building_typology: e.target.value })}
-            className="w-full h-10 text-sm px-3 bg-slate-50 border border-slate-200 rounded focus:bg-white focus:outline-none focus:border-slate-800 transition-colors"
-          >
-            {typologies.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.label}
-              </option>
-            ))}
-          </select>
+            onChange={(val) => onChange({ building_typology: val })}
+            options={typologies}
+            ariaLabel="Building Typology"
+          />
         </div>
 
         <div className="min-w-0">
-          <label htmlFor="floors-select" className="block text-xs uppercase tracking-wider font-semibold text-slate-500 mb-1 whitespace-normal break-words">
+          <label
+            htmlFor="floors-select"
+            className="block text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] mb-1"
+          >
             Storeys (Levels)
           </label>
-          <select
+          <IosSelect
             id="floors-select"
             value={request.floors}
-            onChange={(e) => onChange({ floors: parseInt(e.target.value, 10) || 1 })}
-            className="w-full h-10 text-sm px-3 bg-slate-50 border border-slate-200 rounded focus:bg-white focus:outline-none focus:border-slate-800 transition-colors"
-          >
-            <option value={1}>G (1 Level)</option>
-            <option value={2}>G + 1 (2 Levels)</option>
-            <option value={3}>G + 2 (3 Levels)</option>
-            <option value={4}>G + 3 (4 Levels)</option>
-          </select>
+            onChange={(val) => onChange({ floors: parseInt(val, 10) || 1 })}
+            options={floorOptions}
+            ariaLabel="Storeys (Levels)"
+          />
         </div>
       </div>
 
       {/* Ground Coverage Ratio */}
-      <div className="space-y-1.5 min-w-0">
-        <div className="flex justify-between items-center gap-2 min-w-0">
-          <label htmlFor="coverage-input" className="text-xs uppercase tracking-wider font-semibold text-slate-500 whitespace-normal break-words">
+      <div className="space-y-1 min-w-0">
+        <div className="flex justify-between items-baseline gap-2 min-w-0">
+          <label
+            htmlFor="coverage-input"
+            className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)]"
+          >
             Ground Coverage Ratio
           </label>
-          <span className="text-sm font-mono font-semibold text-slate-900 bg-slate-100 px-2 py-0.5 rounded shrink-0 tabular-nums">
-            {Math.round(((request.ground_coverage_ratio ?? 0.60) * 100))}%
+          <span className="text-[13px] font-medium text-[var(--text-1)] tabular-nums shrink-0">
+            {Math.round(currentCoverage * 100)}%
           </span>
         </div>
-        <input
-          id="coverage-input"
-          type="range"
-          min="0.40"
-          max="0.75"
-          step="0.05"
-          value={request.ground_coverage_ratio ?? 0.60}
-          onChange={(e) => onChange({ ground_coverage_ratio: parseFloat(e.target.value) || 0.60 })}
-          className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-slate-900"
-        />
-        <div className="flex justify-between text-xs font-mono text-slate-400 min-w-0">
-          <span>40% (Spacious)</span>
-          <span>60% (Default)</span>
-          <span>75% (Dense Urban)</span>
+
+        {/* 16px vertical padding for thumb clearance */}
+        <div className="py-4 min-w-0">
+          <input
+            id="coverage-input"
+            type="range"
+            min={covMin}
+            max={covMax}
+            step="0.05"
+            value={currentCoverage}
+            onChange={(e) => onChange({ ground_coverage_ratio: parseFloat(e.target.value) || 0.60 })}
+            className="ios-slider"
+            style={{
+              background: `linear-gradient(to right, var(--accent) 0%, var(--accent) ${covPct}%, var(--fill) ${covPct}%, var(--fill) 100%)`,
+            }}
+          />
+          <div className="flex justify-between items-center text-[11px] text-[var(--text-3)] font-medium pt-2">
+            <span className="w-1/3 text-left truncate">40% (Spacious)</span>
+            <span className="w-1/3 text-center truncate">60% (Default)</span>
+            <span className="w-1/3 text-right truncate">75% (Dense Urban)</span>
+          </div>
         </div>
       </div>
 
-      {/* AI Explanation Provider */}
+      {/* Technical Explanation Generator */}
       <div className="min-w-0">
-        <label htmlFor="ai-provider-select" className="block text-xs uppercase tracking-wider font-semibold text-slate-500 mb-1 whitespace-normal break-words">
+        <label
+          htmlFor="ai-provider-select"
+          className="block text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] mb-1"
+        >
           Technical Explanation Generator
         </label>
-        <select
+        <IosSelect
           id="ai-provider-select"
           value={request.ai_provider}
-          onChange={(e) => onChange({ ai_provider: e.target.value })}
-          className="w-full h-10 text-sm px-3 bg-slate-50 border border-slate-200 rounded focus:bg-white focus:outline-none focus:border-slate-800 transition-colors"
-        >
-          {aiProviders.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.label}
-            </option>
-          ))}
-        </select>
+          onChange={(val) => onChange({ ai_provider: val })}
+          options={aiProviders}
+          ariaLabel="Technical Explanation Generator"
+        />
       </div>
 
-      {/* Submit Action (44px height, 14-15px text) */}
+      {/* Primary CTA Button: flat --accent, white 14px/600, radius 12, height 40, full width */}
       <div className="pt-2 min-w-0">
         <button
           type="button"
           onClick={onSubmit}
           disabled={!canSubmit}
-          className={`w-full min-h-[2.75rem] py-2 px-4 rounded-md font-medium text-sm flex items-center justify-center gap-2 transition-all min-w-0 ${
+          className={`w-full h-11 px-4 rounded-[12px] font-semibold text-[13px] sm:text-[14px] flex items-center justify-center gap-2 transition-all duration-200 select-none shadow-sm ${
             canSubmit
-              ? 'bg-slate-900 hover:bg-slate-800 text-white shadow'
-              : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+              ? 'bg-[var(--accent)] text-white hover:brightness-[0.98] active:brightness-95 cursor-pointer'
+              : 'bg-[var(--fill)] text-[var(--text-3)] cursor-not-allowed'
           }`}
         >
           {isLoading ? (
             <>
-              <Icon name="loader" size={16} className="shrink-0" />
-              <span className="whitespace-normal break-words leading-snug">Synthesizing Site Engineering Data...</span>
+              <Icon name="loader" size={16} className="shrink-0 animate-spin" />
+              <span>Synthesizing Site Engineering Data...</span>
             </>
           ) : (
             <>
               <Icon name="crosshair" size={16} className="shrink-0" />
-              <span className="whitespace-normal break-words leading-snug text-center">
+              <span>
                 {hasCoordinates ? 'Run Site Feasibility Analysis' : 'Select Location on Map to Begin'}
               </span>
             </>

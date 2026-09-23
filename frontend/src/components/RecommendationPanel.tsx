@@ -28,7 +28,7 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
     if (recommendationItems && recommendationItems.length > 0) {
       fullText += `Traceable Engineering Recommendations:\n` +
         recommendationItems
-          .map((r) => `[${r.rule_id || r.id}] (${r.severity.toUpperCase()}) ${r.category_label || r.title || r.category}: ${r.recommendation_text || r.description} [Trigger: ${r.trigger_condition || 'N/A'}] [Ref: ${r.source_data_ref || r.source_standard}]`)
+          .map((r) => `[${r.rule_id || r.id}] (${r.severity.toUpperCase()}) ${r.category_label || r.title || r.category}: ${r.recommendation_text || r.description}`)
           .join('\n\n');
     } else {
       fullText += `Key Engineering Recommendations:\n` +
@@ -39,16 +39,16 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const getSeverityBadge = (sev: string) => {
+  const getSeverityColor = (sev: string) => {
     switch (sev) {
       case 'critical':
-        return 'bg-rose-50 text-rose-800 border-rose-200';
+        return 'var(--semantic-red)';
       case 'advisory':
-        return 'bg-amber-50 text-amber-800 border-amber-200';
+        return 'var(--semantic-amber)';
       case 'optimal':
-        return 'bg-emerald-50 text-emerald-800 border-emerald-200';
+        return 'var(--semantic-green)';
       default:
-        return 'bg-slate-100 text-slate-700 border-slate-200';
+        return 'var(--text-3)';
     }
   };
 
@@ -58,131 +58,95 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
     : items.filter((it) => it.severity === filterSeverity);
 
   return (
-    <div className="@container bg-white rounded-lg border border-slate-200 p-4 @sm:p-5 shadow-sm space-y-4 min-w-0 w-full">
+    <div className="space-y-4 w-full min-w-0">
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between border-b border-slate-100 pb-3 gap-2.5 min-w-0">
+      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2.5 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
-          <Icon name="file-text" size={16} className="text-slate-700 shrink-0" />
-          <h3 className="text-[15px] font-semibold text-slate-900 tracking-tight whitespace-normal break-words">
-            Technical Engineering Commentary & Traceable Recommendations
+          <Icon name="file-text" size={15} className="text-[var(--text-2)] shrink-0" />
+          <h3 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight">
+            Engineering Commentary & Action Items
           </h3>
         </div>
-
-        <div className="flex flex-wrap items-center gap-2 min-w-0">
-          {aiMetadata.provider_used && (
-            <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 break-all shrink-0">
-              Provider: {aiMetadata.provider_used}
-              {aiMetadata.generation_time_ms && ` (${aiMetadata.generation_time_ms}ms)`}
-            </span>
-          )}
-
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="text-xs font-medium text-slate-600 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 px-2.5 py-1 rounded border border-slate-200 transition-colors shrink-0"
-          >
-            {copied ? 'Copied' : 'Copy Text'}
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-[12px] font-medium text-[var(--text-1)] bg-[var(--fill)] hover:bg-[var(--fill-hover)] rounded-[8px] transition-colors shrink-0"
+        >
+          <Icon name={copied ? 'check-circle' : 'file-text'} size={13} />
+          <span>{copied ? 'Copied' : 'Copy'}</span>
+        </button>
       </div>
 
-      {/* Summary Narrative */}
-      <div className="text-sm text-slate-700 leading-relaxed space-y-2.5 min-w-0">
-        {summary.split('\n\n').map((para, i) => (
-          <p key={i} className="whitespace-normal break-words leading-relaxed">{para}</p>
-        ))}
+      {/* Engineering Narrative Summary */}
+      <div className="p-3 bg-[var(--fill)] rounded-[12px] text-[13px] text-[var(--text-2)] leading-[1.5]">
+        {summary}
       </div>
 
-      {/* Traceable Recommendation Items Table / Cards */}
-      {items.length > 0 ? (
-        <div className="pt-3 border-t border-slate-100 space-y-3 min-w-0">
-          <div className="flex flex-wrap justify-between items-center gap-2">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-900 whitespace-normal break-words">
-              Traceable Civil Action Items ({items.length} Rules Fired)
-            </h4>
-            <div className="flex items-center gap-1">
-              {['all', 'critical', 'advisory', 'optimal'].map((sev) => (
-                <button
-                  key={sev}
-                  type="button"
-                  onClick={() => setFilterSeverity(sev)}
-                  className={`text-[11px] px-2 py-0.5 rounded font-medium capitalize transition-colors ${
-                    filterSeverity === sev
-                      ? 'bg-slate-800 text-white'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  {sev}
-                </button>
-              ))}
-            </div>
+      {/* Filter Segmented Control (if structured items exist) */}
+      {items.length > 0 && (
+        <div className="space-y-2">
+          <div className="bg-[var(--fill)] rounded-[10px] p-[2px] grid grid-cols-4 gap-1 text-[11px] font-medium">
+            {['all', 'critical', 'advisory', 'optimal'].map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setFilterSeverity(f)}
+                className={`py-1 rounded-[8px] text-center capitalize transition-all ${
+                  filterSeverity === f
+                    ? 'bg-[var(--segmented-active-bg)] shadow-[var(--segmented-active-shadow)] font-semibold'
+                    : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
+                }`}
+                style={{
+                  color: filterSeverity === f ? 'var(--segmented-active-label)' : 'var(--text-2)',
+                }}
+              >
+                {f}
+              </button>
+            ))}
           </div>
 
-          <div className="space-y-2.5 min-w-0">
+          {/* Grouped Recommendations List */}
+          <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
             {filteredItems.map((item, idx) => {
-              const ruleId = item.rule_id || item.id || `RULE-${idx + 1}`;
-              const label = item.category_label || item.title || item.category;
-              const text = item.recommendation_text || item.description;
-              const ref = item.source_data_ref || item.source_standard;
-
+              const color = getSeverityColor(item.severity);
               return (
-                <div
-                  key={`${ruleId}-${idx}`}
-                  className="rounded-md border border-slate-200 p-3 bg-slate-50/50 space-y-1.5 min-w-0"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-1.5">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="font-mono text-xs font-bold text-slate-900 bg-white px-1.5 py-0.5 rounded border border-slate-200 shrink-0">
-                        {ruleId}
-                      </span>
-                      <span className="font-semibold text-xs text-slate-900 whitespace-normal break-words">{label}</span>
-                    </div>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase border tracking-wider ${getSeverityBadge(item.severity)} shrink-0`}>
-                      {item.severity}
+                <div key={idx} className="py-2.5 space-y-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2 min-w-0">
+                    <span className="text-[13px] font-semibold text-[var(--text-1)] leading-snug break-words">
+                      {item.category_label || item.title || item.category}
+                    </span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-[var(--fill)] text-[var(--text-1)] uppercase tracking-wider shrink-0">
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} />
+                      <span>{item.severity}</span>
                     </span>
                   </div>
-
-                  {item.trigger_condition && (
-                    <div className="text-[11px] text-slate-500 font-medium">
-                      Trigger: <span className="text-slate-700">{item.trigger_condition}</span>
-                    </div>
-                  )}
-
-                  <p className="text-xs text-slate-700 whitespace-normal break-words leading-relaxed">
-                    {text}
+                  <p className="text-[12px] text-[var(--text-2)] leading-normal">
+                    {item.recommendation_text || item.description}
                   </p>
-
-                  <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-200/60 gap-1">
-                    <span>Category: <span className="font-medium text-slate-700 capitalize">{item.category}</span></span>
-                    {ref && (
-                      <span className="font-mono text-[10px] text-slate-600 bg-white px-1.5 py-0.5 rounded border border-slate-200 break-words">
-                        Ref: {ref}
-                      </span>
-                    )}
-                  </div>
                 </div>
               );
             })}
           </div>
         </div>
-      ) : (
-        /* Fallback to simple recommendations list */
-        <div className="pt-3 border-t border-slate-100 space-y-2.5 min-w-0">
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-900 whitespace-normal break-words">
-            Prescribed Action Items & Best Practices
-          </h4>
-          <ul className="space-y-2 text-sm text-slate-700 min-w-0">
-            {recommendations.map((rec, i) => (
-              <li key={i} className="flex items-start gap-2.5 min-w-0">
-                <span className="font-mono font-semibold text-slate-400 text-xs shrink-0 mt-0.5">
-                  {String(i + 1).padStart(2, '0')}.
-                </span>
-                <span className="leading-snug whitespace-normal break-words min-w-0 flex-1">{rec}</span>
-              </li>
-            ))}
-          </ul>
+      )}
+
+      {/* Fallback to simple list if no structured items */}
+      {items.length === 0 && recommendations.length > 0 && (
+        <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
+          {recommendations.map((rec, idx) => (
+            <div key={idx} className="py-2.5 text-[12px] text-[var(--text-2)] leading-normal flex items-start gap-2">
+              <span className="font-semibold text-[var(--text-1)] shrink-0">{idx + 1}.</span>
+              <p className="flex-1">{rec}</p>
+            </div>
+          ))}
         </div>
       )}
+
+      {/* Latency and provider metadata */}
+      <div className="flex items-center justify-between text-[11px] text-[var(--text-3)] pt-1">
+        <span>Engine: {aiMetadata.provider_used || 'deterministic'}</span>
+        <span>Latency: {aiMetadata.generation_time_ms ? `${parseFloat(aiMetadata.generation_time_ms).toFixed(0)}ms` : 'Instant'}</span>
+      </div>
     </div>
   );
 };

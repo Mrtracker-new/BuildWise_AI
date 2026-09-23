@@ -20,7 +20,7 @@ function getChromePath() {
   throw new Error('Chrome executable not found. Set CHROME_PATH environment variable.');
 }
 
-const ARTIFACT_DIR = 'C:\\Users\\rolan\\.gemini\\antigravity-ide\\brain\\a692c916-81f6-44e3-b1c3-ea28ff88c6bc';
+const ARTIFACT_DIR = 'C:\\Users\\rolan\\.gemini\\antigravity-ide\\brain\\9a5685d8-4e14-40bc-b8f8-2a4844b8ed62';
 
 (async () => {
   const browser = await puppeteer.launch({
@@ -45,29 +45,32 @@ const ARTIFACT_DIR = 'C:\\Users\\rolan\\.gemini\\antigravity-ide\\brain\\a692c91
     }
   }
 
-  // 1. Screenshot 1920x1080 loaded
-  console.log('Capturing 1920x1080 loaded...');
+  // 1. Screenshot 1920x1080 loaded with drawer open
+  console.log('Capturing 1920x1080 loaded (open)...');
   await page.setViewport({ width: 1920, height: 1080 });
   await page.goto('http://localhost:5173', { waitUntil: 'networkidle0' });
   await ensureAnalysisLoaded();
-  const path1 = path.join(ARTIFACT_DIR, 'screenshot_1920x1080_loaded.png');
+  const path1 = path.join(ARTIFACT_DIR, 'screenshot_1920x1080_loaded_open.png');
   await page.screenshot({ path: path1, fullPage: false });
   console.log(`Saved: ${path1}`);
 
-  // 2. Screenshot 1366x768 loaded with drawer open
-  console.log('Capturing 1366x768 drawer open...');
-  await page.setViewport({ width: 1366, height: 768 });
-  await new Promise(r => setTimeout(r, 500));
+  // 2. Screenshot 1920x1080 with drawer closed (testing toggle button and panel hiding)
+  console.log('Capturing 1920x1080 loaded (closed)...');
   await page.evaluate(() => {
     const toggleBtn = document.querySelector('button[aria-controls="results-drawer"]');
-    if (toggleBtn && toggleBtn.getAttribute('aria-expanded') !== 'true') {
-      toggleBtn.click();
-    }
+    if (toggleBtn) toggleBtn.click();
   });
-  await new Promise(r => setTimeout(r, 600)); // allow drawer slide transition to complete
-  const path2 = path.join(ARTIFACT_DIR, 'screenshot_1366x768_drawer_open.png');
+  await new Promise(r => setTimeout(r, 600)); // allow transition
+  const path2 = path.join(ARTIFACT_DIR, 'screenshot_1920x1080_loaded_closed.png');
   await page.screenshot({ path: path2, fullPage: false });
   console.log(`Saved: ${path2}`);
+
+  // Re-open drawer
+  await page.evaluate(() => {
+    const toggleBtn = document.querySelector('button[aria-controls="results-drawer"]');
+    if (toggleBtn) toggleBtn.click();
+  });
+  await new Promise(r => setTimeout(r, 500));
 
   // 3. Screenshot 390x844 loaded (mobile)
   console.log('Capturing 390x844 loaded...');

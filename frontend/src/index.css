@@ -2,48 +2,320 @@
 @tailwind components;
 @tailwind utilities;
 
+:root,
+[data-theme="light"] {
+  --panel: rgba(255, 255, 255, 0.72);
+  --panel-border-color: rgba(255, 255, 255, 0.6);
+  --panel-border: 1px solid var(--panel-border-color);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 12px 32px rgba(0, 0, 0, 0.12);
+  --fill: rgba(120, 120, 128, 0.12);
+  --fill-hover: rgba(120, 120, 128, 0.18);
+  --fill-active: rgba(120, 120, 128, 0.24);
+  --hairline: rgba(0, 0, 0, 0.08);
+  --text-1: #1D1D1F;
+  --text-2: #6E6E73;
+  --text-3: #86868B;
+  --accent: #0071E3;
+  --accent-tint: rgba(0, 113, 227, 0.12);
+  --accent-press: #0062C4;
+  --semantic-green: #34C759;
+  --semantic-amber: #FF9F0A;
+  --semantic-red: #FF3B30;
+  --bg-page: #F5F5F7;
+  --segmented-active-bg: #FFFFFF;
+  --segmented-active-label: #1D1D1F;
+  --segmented-active-sublabel: #6E6E73;
+  --segmented-active-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  --blueprint-bg: #F4F6F8;
+  --card-bg-subtle: #FFFFFF;
+  --map-controls-right: 16px;
+}
+
+[data-theme="dark"] {
+  --panel: rgba(28, 28, 30, 0.68);
+  --panel-border-color: rgba(255, 255, 255, 0.08);
+  --panel-border: 1px solid var(--panel-border-color);
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --fill: rgba(120, 120, 128, 0.24);
+  --fill-hover: rgba(120, 120, 128, 0.32);
+  --fill-active: rgba(120, 120, 128, 0.40);
+  --hairline: rgba(255, 255, 255, 0.08);
+  --text-1: #F5F5F7;
+  --text-2: #A1A1A6;
+  --text-3: #86868B;
+  --accent: #0A84FF;
+  --accent-tint: rgba(10, 132, 255, 0.15);
+  --accent-press: #0071E3;
+  --semantic-green: #34C759;
+  --semantic-amber: #FF9F0A;
+  --semantic-red: #FF453A;
+  --bg-page: #000000;
+  --segmented-active-bg: #636366;
+  --segmented-active-label: #FFFFFF;
+  --segmented-active-sublabel: rgba(255, 255, 255, 0.7);
+  --segmented-active-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  --blueprint-bg: #0E1726;
+  --card-bg-subtle: #2C2C2E;
+  --map-controls-right: 16px;
+}
+
 @layer base {
   body {
-    @apply bg-slate-50 text-slate-800 antialiased font-sans text-sm leading-relaxed selection:bg-slate-200 selection:text-slate-900;
+    background-color: var(--bg-page);
+    color: var(--text-1);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    letter-spacing: -0.01em;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     overflow-wrap: break-word;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    user-select: auto;
   }
 }
 
-/* Leaflet Container overrides */
-.leaflet-container {
-  width: 100%;
-  height: 100%;
-  font-family: inherit;
-  z-index: 10;
-  overflow: hidden;
+@media (max-width: 1023.98px) {
+  .map-controls-anchor {
+    right: 16px !important;
+  }
 }
 
-/* Thin scrollbar utility */
+/* Map Controls Dynamic Spatial Anchoring */
+.map-controls-anchor {
+  right: var(--map-controls-right, 16px);
+  transition: right 250ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+/* iOS Select Popover Animation */
+@keyframes popoverOpen {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animate-popover-open {
+  animation: popoverOpen 150ms cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+  transform-origin: top;
+}
+
+/* Floating Vibrancy Surfaces */
+.vibrancy-panel {
+  background-color: var(--panel);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: var(--panel-border);
+  box-shadow: var(--shadow);
+  transition: background-color 250ms cubic-bezier(0.25, 0.1, 0.25, 1),
+              border-color 250ms cubic-bezier(0.25, 0.1, 0.25, 1),
+              box-shadow 250ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.vibrancy-pill {
+  background-color: var(--panel);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: var(--panel-border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 16px rgba(0, 0, 0, 0.08);
+}
+
+/* iOS Grouped List Container & Rows */
+.ios-grouped-list {
+  background: transparent;
+}
+
+.ios-row {
+  border-bottom: 1px solid var(--hairline);
+  transition: background-color 200ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.ios-row:last-child {
+  border-bottom: none;
+}
+
+/* Apple Smooth Scrollbars (6px wide, thumb rgba(120,120,128,0.35) radius full, transparent track, panels only) */
+.scrollbar-apple::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scrollbar-apple::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-apple::-webkit-scrollbar-thumb {
+  background: rgba(120, 120, 128, 0.35);
+  border-radius: 9999px;
+}
+
+.scrollbar-apple::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 120, 128, 0.55);
+}
+
+.scrollbar-apple {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 120, 128, 0.35) transparent;
+}
+
+/* Keep backward-compatibility for scrollbar-thin in case child components reference it */
 .scrollbar-thin::-webkit-scrollbar {
   height: 4px;
   width: 4px;
 }
 .scrollbar-thin::-webkit-scrollbar-track {
-  background: #f1f5f9;
+  background: transparent;
 }
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 2px;
+  background: rgba(120, 120, 128, 0.35);
+  border-radius: 9999px;
 }
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: #cbd5e1 #f1f5f9;
+  scrollbar-color: rgba(120, 120, 128, 0.35) transparent;
+}
+
+/* iOS Range Sliders: 4px track, 22px thumb with shadow, min 16px vertical padding */
+.ios-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  background: var(--fill);
+  border-radius: 9999px;
+  outline: none;
+  cursor: pointer;
+  margin: 12px 0;
+  transition: opacity 200ms ease;
+}
+
+.ios-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  border: none;
+  transition: transform 200ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.ios-slider::-webkit-slider-thumb:active {
+  transform: scale(1.08);
+}
+
+.ios-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  border: none;
+  transition: transform 200ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.ios-slider::-moz-range-thumb:active {
+  transform: scale(1.08);
+}
+
+/* Custom Apple Map Pin Drop Bounce & Expanding Ring Animation */
+@keyframes applePinDrop {
+  0% {
+    transform: translateY(-26px) scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: translateY(3px) scale(1.05);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes appleRingExpand {
+  0% {
+    transform: translate(-50%, -50%) scale(0.2);
+    opacity: 0.9;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(2.4);
+    opacity: 0;
+  }
+}
+
+.apple-pin-container {
+  position: relative;
+  width: 34px;
+  height: 42px;
+  cursor: pointer;
+}
+
+.apple-pin-svg {
+  position: relative;
+  z-index: 2;
+  animation: applePinDrop 300ms cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.3));
+}
+
+.apple-pin-ring {
+  position: absolute;
+  left: 17px;
+  top: 36px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  pointer-events: none;
+  z-index: 1;
+  animation: appleRingExpand 650ms cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+}
+
+/* Full-bleed Leaflet Container Overrides */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  font-family: inherit;
+  z-index: 1;
+  background-color: var(--bg-page) !important;
+}
+
+/* Hide default leaflet control zoom */
+.leaflet-control-zoom {
+  display: none !important;
+}
+
+/* Hide default leaflet attribution to replace with custom vibrancy attribution pill */
+.leaflet-control-attribution {
+  display: none !important;
 }
 
 .leaflet-popup-content-wrapper {
-  border-radius: 6px;
-  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  background: var(--panel);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: var(--panel-border);
+  box-shadow: var(--shadow);
+  border-radius: 12px;
   padding: 4px;
+  color: var(--text-1);
 }
 
 .leaflet-popup-content {
   margin: 8px 12px;
   font-size: 12px;
   line-height: 1.4;
-  color: #0f172a;
+  color: var(--text-1);
+}
+
+.leaflet-popup-tip {
+  background: var(--panel);
 }

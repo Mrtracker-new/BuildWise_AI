@@ -16,105 +16,92 @@ export const CostBreakdownTable: React.FC<CostBreakdownTableProps> = ({ costEsti
   };
 
   return (
-    <div className="@container bg-white rounded-lg border border-slate-200 p-4 @sm:p-5 shadow-sm space-y-4 min-w-0 w-full">
-      {/* Card Header */}
-      <div className="flex flex-wrap items-center justify-between border-b border-slate-100 pb-3 gap-2 min-w-0">
+    <div className="space-y-4 w-full min-w-0">
+      {/* Section Header */}
+      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2.5 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
-          <Icon name="currency-rupee" size={16} className="text-slate-700 shrink-0" />
-          <h3 className="text-[15px] font-semibold text-slate-900 tracking-tight whitespace-normal break-words">
+          <Icon name="currency-rupee" size={15} className="text-[var(--text-2)] shrink-0" />
+          <h3 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight">
             Preliminary Construction Cost Estimation
           </h3>
         </div>
-        <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 font-mono shrink-0">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] shrink-0">
           CPWD PAR
         </span>
       </div>
 
-      {/* Restructured Summary Tiles */}
-      <div className="space-y-2.5 min-w-0">
-        {/* Row 1: Two Tiles (Plinth Area Base Rate & Topographic Modifier) */}
-        <div className="grid grid-cols-1 @sm:grid-cols-2 gap-2.5 min-w-0">
-          <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 min-w-0">
-            <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 block mb-1 whitespace-normal break-words">
-              Plinth Area Base Rate
-            </span>
-            <span className="text-sm font-bold font-mono text-slate-900 tabular-nums break-all block">
-              INR {costEstimate.base_rate_per_sqft.toLocaleString()} /sq ft
-            </span>
-          </div>
-
-          <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 min-w-0">
-            <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 block mb-1 whitespace-normal break-words">
-              Topographic Modifier
-            </span>
-            <span className="text-sm font-bold font-mono text-slate-900 tabular-nums break-all block">
-              {costEstimate.terrain_multiplier.toFixed(2)}x
-              {costEstimate.terrain_surcharge_inr > 0 && (
-                <span className="text-xs font-normal text-amber-700 ml-1">
-                  (+{formatINR(costEstimate.terrain_surcharge_inr)})
-                </span>
-              )}
-            </span>
-          </div>
+      {/* 2-Column Grid of Stat Tiles: --fill, radius 12, value 20px/600 --text-1, label 11px --text-3 */}
+      <div className="grid grid-cols-2 gap-2.5">
+        <div className="bg-[var(--fill)] p-3.5 rounded-[12px] min-w-0">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] block mb-1">
+            Plinth Area Base Rate
+          </span>
+          <span className="text-[20px] font-semibold text-[var(--text-1)] tabular-nums block leading-tight">
+            ₹{costEstimate.base_rate_per_sqft.toLocaleString()}
+          </span>
+          <span className="text-[12px] text-[var(--text-3)] block mt-0.5">per sq ft</span>
         </div>
 
-        {/* Row 2: Full-Width Dark Tile (Total Estimated Budget) */}
-        <div className="bg-slate-900 text-white p-4 rounded-lg shadow-sm min-w-0">
-          <div className="flex flex-col @sm:flex-row @sm:items-baseline justify-between gap-1 mb-1.5 min-w-0">
-            <span className="text-xs uppercase tracking-wider font-semibold text-slate-300 whitespace-normal break-words">
-              Total Estimated Budget
-            </span>
-            <span className="text-xs font-mono text-slate-400 break-all">
-              Range: {formatINR(costEstimate.cost_range_min_inr)} – {formatINR(costEstimate.cost_range_max_inr)}
-            </span>
-          </div>
-          <div className="text-2xl @sm:text-[26px] font-bold font-mono text-white tabular-nums leading-tight break-all">
-            {formatINR(costEstimate.total_estimated_cost_inr)}
-          </div>
+        <div className="bg-[var(--fill)] p-3.5 rounded-[12px] min-w-0">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] block mb-1">
+            Topographic Modifier
+          </span>
+          <span className="text-[20px] font-semibold text-[var(--text-1)] tabular-nums block leading-tight">
+            {costEstimate.terrain_multiplier.toFixed(2)}x
+          </span>
+          <span className="text-[12px] text-[var(--text-3)] block mt-0.5 truncate">
+            {costEstimate.terrain_surcharge_inr > 0 ? `+${formatINR(costEstimate.terrain_surcharge_inr)}` : 'Flat baseline'}
+          </span>
         </div>
       </div>
 
-      {/* Stacked Line-Item List (Designed for narrow rails, no horizontal scrollbar) */}
-      <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg bg-white overflow-hidden min-w-0">
+      {/* Total Estimated Budget Tile */}
+      <div className="bg-[var(--fill)] p-4 rounded-[12px] space-y-1">
+        <div className="flex items-center justify-between text-[11px] text-[var(--text-3)]">
+          <span className="font-semibold uppercase tracking-[0.08em]">
+            Total Estimated Civil Budget
+          </span>
+          <span>Range: {formatINR(costEstimate.cost_range_min_inr)} – {formatINR(costEstimate.cost_range_max_inr)}</span>
+        </div>
+        <div className="text-[24px] font-bold text-[var(--text-1)] tabular-nums tracking-tight">
+          {formatINR(costEstimate.total_estimated_cost_inr)}
+        </div>
+      </div>
+
+      {/* Itemized Table with Hairline Rows */}
+      <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
         {costEstimate.breakdown.map((item, idx) => (
-          <div key={idx} className="p-3.5 space-y-2 min-w-0">
-            {/* Line 1: Category Name on left, Amount on right */}
-            <div className="flex flex-wrap @sm:flex-nowrap items-baseline @sm:items-center justify-between gap-2 min-w-0">
-              <span className="text-sm font-semibold text-slate-900 min-w-0 break-words flex-1">
+          <div key={idx} className="py-2.5 space-y-1.5 min-w-0">
+            <div className="flex items-center justify-between gap-2 min-w-0">
+              <span className="text-[13px] font-semibold text-[var(--text-1)] truncate">
                 {item.category}
               </span>
-              <span className="text-sm font-mono font-semibold text-slate-900 tabular-nums shrink-0 text-right break-all">
+              <span className="text-[13px] font-medium text-[var(--text-1)] tabular-nums shrink-0">
                 {formatINR(item.amount_inr)}
               </span>
             </div>
 
-            {/* Line 2: Share micro-label + 4px horizontal progress bar */}
-            <div className="space-y-1 min-w-0">
-              <div className="flex items-center justify-between text-xs min-w-0">
-                <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 font-mono">
-                  {item.percentage.toFixed(1)}% of Budget
-                </span>
-              </div>
-              <div className="w-full bg-slate-100 rounded-full h-1 overflow-hidden">
+            {/* 4px Progress Bar */}
+            <div className="space-y-1">
+              <div className="w-full bg-[var(--fill)] rounded-full h-1 overflow-hidden">
                 <div
-                  className="bg-slate-700 h-full rounded-full transition-all duration-500"
+                  className="bg-[var(--accent)] h-full rounded-full transition-all duration-500"
                   style={{ width: `${Math.min(100, Math.max(0, item.percentage))}%` }}
                 />
               </div>
+              <div className="flex justify-between items-center text-[11px] text-[var(--text-3)]">
+                <span>{item.description}</span>
+                <span className="tabular-nums font-medium">{item.percentage.toFixed(1)}%</span>
+              </div>
             </div>
-
-            {/* Line 3: Engineering description as full-width prose wrapping naturally */}
-            <p className="text-xs @sm:text-[13px] text-slate-600 leading-relaxed whitespace-normal break-words">
-              {item.description}
-            </p>
           </div>
         ))}
       </div>
 
-      {/* Engineering Disclaimer */}
-      <div className="bg-amber-50/60 border border-amber-200/70 p-3 rounded-lg text-xs text-amber-900 leading-normal flex items-start gap-2.5 min-w-0">
-        <Icon name="info" size={15} className="text-amber-700 mt-0.5 shrink-0" />
-        <p className="whitespace-normal break-words leading-relaxed min-w-0 flex-1">{costEstimate.disclaimer}</p>
+      {/* Disclaimer */}
+      <div className="pt-1 flex items-start gap-2 text-[12px] text-[var(--text-3)] leading-relaxed">
+        <Icon name="info" size={14} className="shrink-0 mt-0.5" />
+        <p>{costEstimate.disclaimer}</p>
       </div>
     </div>
   );
