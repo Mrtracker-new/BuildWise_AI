@@ -339,3 +339,116 @@ def test_live_api_integration():
     data = resp.json()
     assert "hazard_profile" in data
     assert data["hazard_profile"]["seismic"]["zone"] == "Zone II"
+
+
+def test_full_user_journey_unified_report(mock_external_http):
+    """
+    Simulates the full user journey:
+    1. POST /api/analyze -> analysis_data
+    2. POST /api/site-vision -> site_vision
+    3. POST /api/generate-floorplan -> floor_plan
+    4. POST /api/report with baseline (no site_vision, no floor_plan) vs unified
+    Extracts text using pypdf to assert section presence and page count metrics.
+    """
+    import io
+    import pypdf
+
+    # a. Analyze
+    analyze_resp = client.post("/api/analyze", json={
+        "latitude": 12.9716,
+        "longitude": 77.5946,
+        "built_up_area_sqft": 2000.0,
+        "quality_grade": "standard",
+        "floors": 1,
+        "ai_provider": "mock"
+    })
+    assert analyze_resp.status_code == 200
+    analysis_data = analyze_resp.json()
+
+    # b. Site Vision
+    import numpy as np
+    mock_bands = {
+        "B02": np.full((24, 24), 1000, dtype=np.float32),
+        "B03": np.full((24, 24), 2000, dtype=np.float32),
+        "B04": np.full((24, 24), 1500, dtype=np.float32),
+        "B08": np.full((24, 24), 5000, dtype=np.float32),
+        "B11": np.full((24, 24), 2500, dtype=np.float32)
+    }
+    mock_imagery = {
+        "bands": mock_bands,
+        "valid_mask": np.ones((24, 24), dtype=bool),
+        "affine_transform": None,
+        "crs": "EPSG:32643",
+        "shape": (24, 24)
+    }
+
+    with patch("app.services.vision.site_vision_service.search_latest_sentinel_scene") as mock_stac, \
+         patch("app.services.vision.site_vision_service.fetch_site_imagery") as mock_fetch:
+
+        mock_stac.return_value = {
+            "scene_id": "MOCK_S2_SCENE",
+            "datetime": "2026-03-31T05:34:56Z",
+            "cloud_cover_pct": 0.5,
+            "source": "Copernicus Sentinel-2",
+            "assets": {"B02": "url", "B03": "url", "B04": "url", "B08": "url"}
+        }
+        mock_fetch.return_value = mock_imagery
+
+        sv_resp = client.post("/api/site-vision", json={
+            "latitude": 12.9716,
+            "longitude": 77.5946,
+            "plot_area_sqft": 2000.0
+        })
+        assert sv_resp.status_code == 200
+        site_vision = sv_resp.json()
+
+    # c. Floor Plan
+    fp_resp = client.post("/api/generate-floorplan", json={
+        "plot_width_m": 10.0,
+        "plot_depth_m": 12.0,
+        "required_rooms": ["master_bed", "kitchen", "living", "puja", "bath_1"],
+        "vastu_strictness": "high"
+    })
+    assert fp_resp.status_code == 200
+    floor_plan = fp_resp.json()
+
+    # Baseline report (omitting both site_vision and floor_plan)
+    resp_base = client.post("/api/report", json={
+        "analysis_data": analysis_data,
+        "site_vision": None,
+        "floor_plan": None
+    })
+    assert resp_base.status_code == 200
+    assert resp_base.content.startswith(b"%PDF-1.4")
+    base_size = len(resp_base.content)
+
+    # d. Unified report with ALL THREE objects combined
+    resp_full = client.post("/api/report", json={
+        "analysis_data": analysis_data,
+        "site_vision": site_vision,
+        "floor_plan": floor_plan
+    })
+    assert resp_full.status_code == 200
+    assert resp_full.content.startswith(b"%PDF-1.4")
+    full_size = len(resp_full.content)
+
+    # Assert significant size increase due to vector blueprint drawing and section additions
+    assert full_size > base_size + 1000, f"Expected size increase with floor_plan, got {full_size} vs {base_size}"
+
+    # Extract text from both PDFs using pypdf
+    reader_base = pypdf.PdfReader(io.BytesIO(resp_base.content))
+    base_text = "".join(page.extract_text() or "" for page in reader_base.pages)
+
+    reader_full = pypdf.PdfReader(io.BytesIO(resp_full.content))
+    full_text = "".join(page.extract_text() or "" for page in reader_full.pages)
+
+    # Assert baseline text does NOT contain Sections 9 or 10
+    assert "Ecological Site Vision" not in base_text
+    assert "Generative Architectural Blueprint" not in base_text
+
+    # Assert unified text contains both sections
+    assert "Ecological Site Vision" in full_text
+    assert "Generative Architectural Blueprint" in full_text
+
+    # Assert unified page count is greater than or equal to baseline page count
+    assert len(reader_full.pages) >= len(reader_base.pages)

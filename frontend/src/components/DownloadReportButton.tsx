@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
-import type { AnalysisResponse } from '../services/types';
+import type { AnalysisResponse, ReportRequestPayload } from '../services/types';
 import { downloadPdfReport } from '../services/api';
 import { Icon } from './Icon';
 
 interface DownloadReportButtonProps {
-  analysisData: AnalysisResponse;
+  payload?: ReportRequestPayload;
+  analysisData?: AnalysisResponse;
 }
 
-export const DownloadReportButton: React.FC<DownloadReportButtonProps> = ({ analysisData }) => {
+export const DownloadReportButton: React.FC<DownloadReportButtonProps> = ({ payload, analysisData }) => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
@@ -15,7 +16,11 @@ export const DownloadReportButton: React.FC<DownloadReportButtonProps> = ({ anal
     setIsDownloading(true);
     setDownloadError(null);
     try {
-      await downloadPdfReport(analysisData);
+      const dataToDownload = payload || analysisData;
+      if (!dataToDownload) {
+        throw new Error('No analysis data available to compile report.');
+      }
+      await downloadPdfReport(dataToDownload);
     } catch (err: any) {
       setDownloadError(err.message || 'Failed to generate PDF report.');
     } finally {

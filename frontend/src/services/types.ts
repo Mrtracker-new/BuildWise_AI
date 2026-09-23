@@ -350,3 +350,9 @@ export interface FloorPlanResponse {
   iterations: number;
 }
 
+export interface ReportRequestPayload {
+  analysis_data: AnalysisResponse;
+  site_vision?: SiteVisionResponse | null;
+  floor_plan?: FloorPlanResponse | null;
+}
+

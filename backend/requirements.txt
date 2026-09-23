@@ -12,4 +12,5 @@ rasterio>=1.4.0
 shapely>=2.0.0
 torch>=2.2.0
 transformers>=4.40.0
+pypdf>=5.0.0
 

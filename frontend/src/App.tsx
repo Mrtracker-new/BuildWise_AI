@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import type { AnalysisRequest, AnalysisResponse, SiteVisionResponse, FloorPlanResponse } from './services/types';
+import type { AnalysisRequest, AnalysisResponse, SiteVisionResponse, FloorPlanResponse, ReportRequestPayload } from './services/types';
 import { fetchHealth, submitAnalysis, submitSiteVision } from './services/api';
 import { AppHeader } from './components/AppHeader';
 import { MapCanvas } from './components/MapCanvas';
@@ -119,6 +119,7 @@ export const App: React.FC = () => {
   }, [isDrawerOpen]);
 
   // Coordinate changes from map click or input
+  // STALE-STATE RULE: Changing selected coordinates clears siteVisionData
   const handleLocationSelect = (lat: number, lon: number) => {
     setRequest((prev) => ({
       ...prev,
@@ -191,8 +192,24 @@ export const App: React.FC = () => {
     handleRunSiteVision();
 
     try {
+      // Capture plot dimensions before new analysis executes
+      const prevPlotArea = overridePlotArea ?? analysisData?.land_value?.plot_area_sqft;
+
       const response = await submitAnalysis(request);
       setAnalysisData(response);
+
+      // STALE-STATE RULE:
+      // A new analysis retains floorPlanData only when plot dimensions are unchanged;
+      // otherwise clear it to prevent displaying a blueprint mismatched with the new site boundaries.
+      const newPlotArea = overridePlotArea ?? response.land_value?.plot_area_sqft;
+      if (
+        prevPlotArea != null &&
+        newPlotArea != null &&
+        Math.abs(prevPlotArea - newPlotArea) > 0.5
+      ) {
+        setFloorPlanData(null);
+      }
+
       setIsDrawerOpen(true);
     } catch (err: any) {
       setErrorMessage(
@@ -205,6 +222,7 @@ export const App: React.FC = () => {
   };
 
   // Reset entire application
+  // STALE-STATE RULE: Pressing Reset clears siteVisionData, floorPlanData, and all active overrides
   const handleReset = () => {
     setRequest({
       latitude: 12.9716,
@@ -219,6 +237,8 @@ export const App: React.FC = () => {
     setAnalysisData(null);
     setSiteVisionData(null);
     setFloorPlanData(null);
+    setOverrideLandRate(null);
+    setOverridePlotArea(null);
     setErrorMessage(null);
     setIsDrawerOpen(false);
     setIsWarningDismissed(false);
@@ -260,20 +280,22 @@ export const App: React.FC = () => {
         ? analysisData.cost_estimate.total_estimated_cost_inr + currentLandCost
         : null;
 
-      const reportPayload: AnalysisResponse = {
-        ...analysisData,
-        site_vision: siteVisionData ?? undefined,
-        floorplan: floorPlanData ?? undefined,
-        land_value: analysisData.land_value
-          ? {
-              ...analysisData.land_value,
-              indicative_rate_per_sqft: currentEffectiveRate,
-              plot_area_sqft: currentPlotArea,
-              land_cost_inr: currentLandCost,
-              combined_project_total_inr: currentCombinedTotal,
-              is_user_override: overrideLandRate !== null || overridePlotArea !== null || analysisData.land_value.is_user_override,
-            }
-          : undefined,
+      const reportPayload: ReportRequestPayload = {
+        analysis_data: {
+          ...analysisData,
+          land_value: analysisData.land_value
+            ? {
+                ...analysisData.land_value,
+                indicative_rate_per_sqft: currentEffectiveRate,
+                plot_area_sqft: currentPlotArea,
+                land_cost_inr: currentLandCost,
+                combined_project_total_inr: currentCombinedTotal,
+                is_user_override: overrideLandRate !== null || overridePlotArea !== null || analysisData.land_value.is_user_override,
+              }
+            : undefined,
+        },
+        site_vision: siteVisionData ?? null,
+        floor_plan: floorPlanData ?? null,
       };
 
       return (
@@ -348,7 +370,7 @@ export const App: React.FC = () => {
           />
 
           {/* 10. Download Vector PDF Report */}
-          <DownloadReportButton analysisData={reportPayload} />
+          <DownloadReportButton payload={reportPayload} />
         </div>
       );
     }

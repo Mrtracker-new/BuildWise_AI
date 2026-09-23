@@ -15,3 +15,5 @@ class AnalysisRequest(BaseModel):
 
 class ReportRequest(BaseModel):
     analysis_data: dict = Field(..., description="Complete AnalysisResponse payload for PDF compilation")
+    site_vision: Optional[dict] = Field(None, description="Optional SiteVisionResponse object")
+    floor_plan: Optional[dict] = Field(None, description="Optional FloorPlanResponse object")

@@ -244,7 +244,11 @@ async def create_pdf_report(req: ReportRequest):
         raise HTTPException(status_code=400, detail="Invalid request: Missing analysis data payload.")
 
     try:
-        pdf_stream = generate_pdf_report(req.analysis_data)
+        pdf_stream = generate_pdf_report(
+            req.analysis_data,
+            site_vision=req.site_vision,
+            floor_plan=req.floor_plan
+        )
         coords = req.analysis_data.get("coordinates") or {}
         lat_val = coords.get('latitude') if isinstance(coords.get('latitude'), (int, float)) else 0.0
         lon_val = coords.get('longitude') if isinstance(coords.get('longitude'), (int, float)) else 0.0

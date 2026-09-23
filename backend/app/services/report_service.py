@@ -1,6 +1,8 @@
 import io
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+
+from app.schemas.request import ReportRequest
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -49,7 +51,11 @@ class NumberedCanvas(canvas.Canvas):
         self.restoreState()
 
 
-def generate_pdf_report(data: Dict[str, Any]) -> io.BytesIO:
+def generate_pdf_report(
+    data: Dict[str, Any],
+    site_vision: Optional[Dict[str, Any]] = None,
+    floor_plan: Optional[Dict[str, Any]] = None
+) -> io.BytesIO:
     """
     Generates a formal, professional vector PDF report from an AnalysisResponse payload.
     """
@@ -531,7 +537,7 @@ def generate_pdf_report(data: Dict[str, Any]) -> io.BytesIO:
             story.append(Spacer(1, 2))
 
     # 9. Ecological Site Vision & Tree Preservation (Sentinel-2 Remote Sensing)
-    vision = data.get("site_vision")
+    vision = site_vision if site_vision is not None else data.get("site_vision")
     if hasattr(vision, "model_dump"):
         vision = vision.model_dump()
 
@@ -594,11 +600,11 @@ def generate_pdf_report(data: Dict[str, Any]) -> io.BytesIO:
             story.append(Spacer(1, 6))
 
     # 10. Generative Architectural Blueprint (Vastu & Spatial CSP)
-    floorplan = data.get("floorplan")
+    floorplan = floor_plan if floor_plan is not None else (data.get("floor_plan") or data.get("floorplan"))
     if hasattr(floorplan, "model_dump"):
         floorplan = floorplan.model_dump()
 
-    if floorplan and isinstance(floorplan, dict) and floorplan.get("grid_matrix"):
+    if floorplan and isinstance(floorplan, dict) and (floorplan.get("grid_matrix") or floorplan.get("placements") or floorplan.get("svg_blueprint")):
         from app.services.floorplan.floorplan_service import create_floorplan_reportlab_drawing
 
         story.append(Paragraph("10. Generative Architectural Blueprint (Vastu & Spatial CSP)", section_h1))

@@ -6,6 +6,7 @@ import type {
   SiteVisionResponse,
   FloorPlanRequest,
   FloorPlanResponse,
+  ReportRequestPayload,
 } from './types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -70,20 +71,30 @@ export async function generateFloorPlan(request: FloorPlanRequest): Promise<Floo
 }
 
 export async function downloadPdfReport(
-  analysisData: AnalysisResponse,
+  payloadOrAnalysis: ReportRequestPayload | AnalysisResponse,
   floorplanData?: FloorPlanResponse | null
 ): Promise<void> {
-  const payloadData: Record<string, any> = { ...analysisData };
-  if (floorplanData) {
-    payloadData.floorplan = floorplanData;
-  }
+  const isUnified = 'analysis_data' in payloadOrAnalysis;
+  const analysisData = isUnified ? payloadOrAnalysis.analysis_data : payloadOrAnalysis;
+  const siteVision = isUnified
+    ? (payloadOrAnalysis.site_vision ?? null)
+    : (payloadOrAnalysis.site_vision ?? null);
+  const floorPlan = isUnified
+    ? (payloadOrAnalysis.floor_plan ?? null)
+    : (floorplanData ?? payloadOrAnalysis.floorplan ?? null);
+
+  const requestBody = {
+    analysis_data: analysisData,
+    site_vision: siteVision,
+    floor_plan: floorPlan,
+  };
 
   const resp = await fetch(`${API_BASE_URL}/api/report`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ analysis_data: payloadData }),
+    body: JSON.stringify(requestBody),
   });
 
   if (!resp.ok) {
