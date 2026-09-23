@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import type { AnalysisRequest, AnalysisResponse, SiteVisionResponse } from './services/types';
+import type { AnalysisRequest, AnalysisResponse, SiteVisionResponse, FloorPlanResponse } from './services/types';
 import { fetchHealth, submitAnalysis, submitSiteVision } from './services/api';
 import { AppHeader } from './components/AppHeader';
 import { MapCanvas } from './components/MapCanvas';
@@ -11,6 +11,7 @@ import { SiteVisionCard } from './components/SiteVisionCard';
 import { FactorBreakdown } from './components/FactorBreakdown';
 import { OrientationCompass } from './components/OrientationCompass';
 import { VastuAdvisoryCard } from './components/VastuAdvisoryCard';
+import { FloorPlanGeneratorCard } from './components/FloorPlanGeneratorCard';
 import { CostBreakdownTable } from './components/CostBreakdownTable';
 import { LandValueCard } from './components/LandValueCard';
 import { RiskMatrix } from './components/RiskMatrix';
@@ -40,6 +41,7 @@ export const App: React.FC = () => {
   const [overrideLandRate, setOverrideLandRate] = useState<number | null>(null);
   const [overridePlotArea, setOverridePlotArea] = useState<number | null>(null);
   const [siteVisionData, setSiteVisionData] = useState<SiteVisionResponse | null>(null);
+  const [floorPlanData, setFloorPlanData] = useState<FloorPlanResponse | null>(null);
   const [isSiteVisionLoading, setIsSiteVisionLoading] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -131,6 +133,7 @@ export const App: React.FC = () => {
     setHasLocation(false);
     setAnalysisData(null);
     setSiteVisionData(null);
+    setFloorPlanData(null);
     setErrorMessage(null);
     setIsDrawerOpen(false);
   };
@@ -215,6 +218,7 @@ export const App: React.FC = () => {
     setHasLocation(true);
     setAnalysisData(null);
     setSiteVisionData(null);
+    setFloorPlanData(null);
     setErrorMessage(null);
     setIsDrawerOpen(false);
     setIsWarningDismissed(false);
@@ -259,6 +263,7 @@ export const App: React.FC = () => {
       const reportPayload: AnalysisResponse = {
         ...analysisData,
         site_vision: siteVisionData ?? undefined,
+        floorplan: floorPlanData ?? undefined,
         land_value: analysisData.land_value
           ? {
               ...analysisData.land_value,
@@ -299,6 +304,22 @@ export const App: React.FC = () => {
           {analysisData.vastu_advisory && (
             <VastuAdvisoryCard advisory={analysisData.vastu_advisory} />
           )}
+
+          {/* 5.5 Generative Floor Plan Engine (CSP & Vastu Blueprints) */}
+          <FloorPlanGeneratorCard
+            defaultWidthM={
+              analysisData.land_value?.plot_area_sqft
+                ? Math.max(6.0, Math.min(60.0, +(Math.sqrt((analysisData.land_value.plot_area_sqft * 0.092903) / 1.2)).toFixed(1)))
+                : 10.0
+            }
+            defaultDepthM={
+              analysisData.land_value?.plot_area_sqft
+                ? Math.max(6.0, Math.min(60.0, +(Math.sqrt((analysisData.land_value.plot_area_sqft * 0.092903) / 1.2) * 1.2).toFixed(1)))
+                : 12.0
+            }
+            activeFloorPlan={floorPlanData}
+            onFloorPlanGenerated={(plan) => setFloorPlanData(plan)}
+          />
 
           {/* 6. Cost Breakdown Table */}
           <CostBreakdownTable costEstimate={analysisData.cost_estimate} />

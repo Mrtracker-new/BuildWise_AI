@@ -14,6 +14,10 @@ from app.schemas.site_vision import (
     SiteVisionRequest,
     SiteVisionResponse
 )
+from app.schemas.floorplan import (
+    FloorPlanRequest,
+    FloorPlanResponse
+)
 from app.services import (
     fetch_reverse_geocode,
     fetch_elevation_and_slope,
@@ -28,7 +32,8 @@ from app.services import (
     evaluate_vastu_advisory,
     generate_recommendations,
     get_top_severity_recommendations,
-    analyze_site_vision
+    analyze_site_vision,
+    generate_floor_plan
 )
 
 from app.ai import get_ai_adapter
@@ -276,4 +281,19 @@ async def site_vision_analysis(req: SiteVisionRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Site vision analysis error: {str(e)}")
+
+@app.post("/api/generate-floorplan", response_model=FloorPlanResponse)
+async def create_generative_floorplan(req: FloorPlanRequest):
+    """
+    Executes CSP-based architectural room placement satisfying Vastu Shastra,
+    plumbing wet-wall adjacency, and structural circulation.
+    Returns 2D matrix, placements, metrics, and production-grade SVG blueprint.
+    """
+    try:
+        response = generate_floor_plan(req)
+        return response
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Floor plan generation error: {str(e)}")
 

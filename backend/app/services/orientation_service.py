@@ -22,7 +22,7 @@ def calculate_building_orientation(latitude: float, wind_dir_deg: float) -> Orie
     # Wind angle adjustment
     wind_rad = math.radians(wind_dir_deg)
     # Deflect slightly toward wind normal to encourage positive pressure on opening
-    wind_offset = round(10.0 * math.sin(wind_rad * 2.0), 1)
+    wind_offset = round(4.5 * math.sin(wind_rad * 2.0), 1)
     
     # Constrain axis within [75.0, 105.0] degrees relative to true North
     optimal_axis = round(base_axis + wind_offset, 1)

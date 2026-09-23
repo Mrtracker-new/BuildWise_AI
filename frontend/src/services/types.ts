@@ -223,6 +223,7 @@ export interface AnalysisResponse {
   vastu_advisory?: VastuAdvisory;
   recommendation_items?: RecommendationItem[];
   site_vision?: SiteVisionResponse;
+  floorplan?: FloorPlanResponse;
   ai_metadata: {
     provider_requested?: string;
     provider_used?: string;
@@ -303,5 +304,49 @@ export interface SiteVisionResponse {
   preservation_plan: PreservationItem[];
   warnings: string[];
   timing_ms: Record<string, number>;
+}
+
+// ----------------------------------------------------
+// Generative Floor Plan Engine Interfaces (CSP & Vastu)
+// ----------------------------------------------------
+
+export interface FloorPlanRequest {
+  plot_width_m: number;
+  plot_depth_m: number;
+  required_rooms: string[];
+  vastu_strictness: 'high' | 'medium' | 'low';
+}
+
+export interface RoomPlacement {
+  room_id: string;
+  room_name: string;
+  row: number;
+  col: number;
+  width: number;
+  height: number;
+  area_sqm: number;
+  width_m: number;
+  depth_m: number;
+  zone: string;
+  vastu_compliant: boolean;
+}
+
+export interface FloorPlanMetrics {
+  vastu_compliance_pct: number;
+  plumbing_adjacency_score: number;
+  space_utilization_pct: number;
+  total_built_up_sqm: number;
+  circulation_efficiency_pct: number;
+}
+
+export interface FloorPlanResponse {
+  status: 'optimal' | 'compromise' | 'failed';
+  grid_matrix: string[][];
+  placements: RoomPlacement[];
+  svg_blueprint: string;
+  metrics: FloorPlanMetrics;
+  warnings: string[];
+  timing_ms: number;
+  iterations: number;
 }
 

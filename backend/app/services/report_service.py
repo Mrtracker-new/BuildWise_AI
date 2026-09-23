@@ -593,6 +593,38 @@ def generate_pdf_report(data: Dict[str, Any]) -> io.BytesIO:
             story.append(plan_table)
             story.append(Spacer(1, 6))
 
+    # 10. Generative Architectural Blueprint (Vastu & Spatial CSP)
+    floorplan = data.get("floorplan")
+    if hasattr(floorplan, "model_dump"):
+        floorplan = floorplan.model_dump()
+
+    if floorplan and isinstance(floorplan, dict) and floorplan.get("grid_matrix"):
+        from app.services.floorplan.floorplan_service import create_floorplan_reportlab_drawing
+
+        story.append(Paragraph("10. Generative Architectural Blueprint (Vastu & Spatial CSP)", section_h1))
+
+        metrics = floorplan.get("metrics") or {}
+        v_pct = float(metrics.get("vastu_compliance_pct", 0.0))
+        p_pct = float(metrics.get("plumbing_adjacency_score", 0.0))
+        u_pct = float(metrics.get("space_utilization_pct", 0.0))
+        b_area = float(metrics.get("total_built_up_sqm", 0.0))
+        st_val = (floorplan.get("status") or "optimal").upper()
+        t_ms = float(floorplan.get("timing_ms", 0.0))
+
+        fp_summary = (
+            f"<b>Solver Status:</b> {st_val} ({t_ms:.1f} ms) | "
+            f"<b>Vastu Compliance:</b> {v_pct:.1f}% | "
+            f"<b>Plumbing Adjacency:</b> {p_pct:.1f}% | "
+            f"<b>Space Utilization:</b> {u_pct:.1f}% | "
+            f"<b>Total Habitable:</b> {b_area:.1f} m²"
+        )
+        story.append(Paragraph(fp_summary, body_text))
+        story.append(Spacer(1, 4))
+
+        drawing = create_floorplan_reportlab_drawing(floorplan, max_w=520.0, max_h=220.0)
+        story.append(drawing)
+        story.append(Spacer(1, 6))
+
     # Formal Engineering Disclaimer
     story.append(Spacer(1, 10))
     story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#94A3B8"), spaceAfter=5))

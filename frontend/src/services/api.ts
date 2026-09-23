@@ -4,6 +4,8 @@ import type {
   HealthResponse,
   SiteVisionRequest,
   SiteVisionResponse,
+  FloorPlanRequest,
+  FloorPlanResponse,
 } from './types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -50,13 +52,38 @@ export async function submitSiteVision(request: SiteVisionRequest): Promise<Site
   return resp.json();
 }
 
-export async function downloadPdfReport(analysisData: AnalysisResponse): Promise<void> {
+export async function generateFloorPlan(request: FloorPlanRequest): Promise<FloorPlanResponse> {
+  const resp = await fetch(`${API_BASE_URL}/api/generate-floorplan`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!resp.ok) {
+    const errorData = await resp.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Floor plan generation failed with status: ${resp.status}`);
+  }
+
+  return resp.json();
+}
+
+export async function downloadPdfReport(
+  analysisData: AnalysisResponse,
+  floorplanData?: FloorPlanResponse | null
+): Promise<void> {
+  const payloadData: Record<string, any> = { ...analysisData };
+  if (floorplanData) {
+    payloadData.floorplan = floorplanData;
+  }
+
   const resp = await fetch(`${API_BASE_URL}/api/report`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ analysis_data: analysisData }),
+    body: JSON.stringify({ analysis_data: payloadData }),
   });
 
   if (!resp.ok) {

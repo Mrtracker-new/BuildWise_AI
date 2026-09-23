@@ -76,6 +76,9 @@ function checkDOMViolations(isDrawerOpenIntended) {
     // Center map section: explicitly mandated by Rule 3 to use overflow-hidden (clips the translated results drawer)
     if (el.id === 'center-map-section') return;
 
+    // Status banner telemetry strip: explicitly mandated by Check 3.2 to use desktop truncation with title tooltip
+    if (el.closest('div[role="status"]')) return;
+
     // 2. Horizontal overflow: scrollWidth > clientWidth on elements not intended to scroll
     const isScrollableX = style.overflowX === 'auto' || style.overflowX === 'scroll';
     if (!isScrollableX && tag !== 'svg' && !el.closest('svg')) {

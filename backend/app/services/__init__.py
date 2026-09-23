@@ -16,6 +16,10 @@ from app.services.recommendation_service import (
     get_top_severity_recommendations
 )
 from app.services.vision import analyze_site_vision
+from app.services.floorplan import (
+    generate_floor_plan,
+    create_floorplan_reportlab_drawing
+)
 
 __all__ = [
     "fetch_reverse_geocode",
@@ -31,6 +35,8 @@ __all__ = [
     "evaluate_vastu_advisory",
     "generate_recommendations",
     "get_top_severity_recommendations",
-    "analyze_site_vision"
+    "analyze_site_vision",
+    "generate_floor_plan",
+    "create_floorplan_reportlab_drawing"
 ]
 

@@ -14,6 +14,12 @@ from app.schemas.site_vision import (
     SceneMetadata,
     PreservationItem
 )
+from app.schemas.floorplan import (
+    FloorPlanRequest,
+    FloorPlanResponse,
+    RoomPlacement,
+    FloorPlanMetrics
+)
 
 __all__ = [
     "AnalysisRequest",
@@ -28,6 +34,10 @@ __all__ = [
     "SiteVisionRequest",
     "SiteVisionResponse",
     "SceneMetadata",
-    "PreservationItem"
+    "PreservationItem",
+    "FloorPlanRequest",
+    "FloorPlanResponse",
+    "RoomPlacement",
+    "FloorPlanMetrics"
 ]
 
