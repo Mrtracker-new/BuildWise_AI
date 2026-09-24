@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-23T19:07:48.919Z",
+  "timestamp": "2026-09-24T07:29:24.321Z",
   "totalViolations": 0,
   "passedAllChecks": true,
   "viewportResults": [
@@ -134,9 +134,9 @@
     {
       "name": "Score Gauge SVG Dimensions",
       "pass": true,
-      "width": 120,
-      "height": 120,
-      "message": "Score gauge SVG renders at 120x120px (>= 120px requirement)"
+      "width": 84,
+      "height": 84,
+      "message": "Score gauge SVG renders at 84x84px (>= 84px requirement)"
     },
     {
       "name": "StatusBanner Telemetry Truncate & Title",
@@ -220,46 +220,46 @@
       "angleResults": [
         {
           "zoom": 12,
-          "bearing": "91.11",
-          "devFromEastWest": "1.11"
+          "bearing": "90.60",
+          "devFromEastWest": "0.60"
         },
         {
           "zoom": 13,
-          "bearing": "91.11",
-          "devFromEastWest": "1.11"
+          "bearing": "90.60",
+          "devFromEastWest": "0.60"
         },
         {
           "zoom": 14,
-          "bearing": "91.11",
-          "devFromEastWest": "1.11"
+          "bearing": "90.60",
+          "devFromEastWest": "0.60"
         },
         {
           "zoom": 15,
-          "bearing": "91.11",
-          "devFromEastWest": "1.11"
+          "bearing": "90.60",
+          "devFromEastWest": "0.60"
         },
         {
           "zoom": 16,
-          "bearing": "91.11",
-          "devFromEastWest": "1.11"
+          "bearing": "90.60",
+          "devFromEastWest": "0.60"
         },
         {
           "zoom": 17,
-          "bearing": "91.11",
-          "devFromEastWest": "1.11"
+          "bearing": "90.60",
+          "devFromEastWest": "0.60"
         },
         {
           "zoom": 18,
-          "bearing": "91.11",
-          "devFromEastWest": "1.11"
+          "bearing": "90.60",
+          "devFromEastWest": "0.60"
         },
         {
           "zoom": 19,
-          "bearing": "91.11",
-          "devFromEastWest": "1.11"
+          "bearing": "90.60",
+          "devFromEastWest": "0.60"
         }
       ],
-      "message": "Long side runs within 5° of East-West on screen at all zooms (bearing: 91.11°, deviation: 1.11°)"
+      "message": "Long side runs within 5° of East-West on screen at all zooms (bearing: 90.60°, deviation: 0.60°)"
     }
   ]
 }

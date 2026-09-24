@@ -28,6 +28,7 @@ import { TelemetryStrip, ErrorBanner } from './components/StatusBanner';
 import { EmptyState } from './components/EmptyState';
 import { LoadingSkeleton } from './components/LoadingSkeleton';
 import { MethodologyModal } from './components/MethodologyModal';
+import { DataSourcesDisclosure } from './components/DataSourcesDisclosure';
 import { Icon } from './components/Icon';
 
 export const App: React.FC = () => {
@@ -76,6 +77,26 @@ export const App: React.FC = () => {
   const drawerToggleBtnRef = useRef<HTMLButtonElement>(null);
   const drawerCloseBtnRef = useRef<HTMLButtonElement>(null);
   const prevDrawerOpenRef = useRef<boolean>(false);
+  const resultsDrawerRef = useRef<HTMLElement>(null);
+
+  // Segmented Tabs State: 'overview' | 'hazards' | 'ecology' | 'cost_plan'
+  type ResultsTab = 'overview' | 'hazards' | 'ecology' | 'cost_plan';
+  const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('overview');
+  const [copiedRef, setCopiedRef] = useState<boolean>(false);
+
+  const handleTabChange = (tab: ResultsTab) => {
+    setActiveResultsTab(tab);
+    if (resultsDrawerRef.current) {
+      resultsDrawerRef.current.scrollTo({ top: 0, behavior: 'instant' });
+    }
+  };
+
+  const handleCopyRef = () => {
+    if (!analysisData) return;
+    navigator.clipboard.writeText(analysisData.request_id);
+    setCopiedRef(true);
+    setTimeout(() => setCopiedRef(false), 1500);
+  };
 
   // Synchronize document theme attribute
   useEffect(() => {
@@ -221,6 +242,7 @@ export const App: React.FC = () => {
     setIsDrawerOpen(true);
     setIsMobileResultsOpen(true);
     setIsMobileControlOpen(false);
+    setActiveResultsTab('overview');
 
     // Concurrently trigger site vision scan
     handleRunSiteVision();
@@ -342,97 +364,171 @@ export const App: React.FC = () => {
       };
 
       return (
-        <div className="@container w-full min-w-0 space-y-4 animate-fade-in">
-          {/* 1. Scorecard - Always first element visible */}
-          <ScoreSummaryCard data={analysisData} />
+        <div className="@container w-full min-w-0 space-y-3.5 animate-fade-in">
+          {/* Panel Header */}
+          <div className="flex items-center justify-between pb-2.5 border-b border-[var(--hairline)] min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <Icon name="shield-check" size={16} className="text-[var(--text-1)] shrink-0" />
+              <h2 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight truncate">
+                Land Suitability Assessment
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={handleCopyRef}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[12px] font-mono text-[var(--text-2)] hover:text-[var(--text-1)] transition-colors cursor-pointer select-none shrink-0"
+              title="Click to copy analysis reference ID"
+            >
+              <Icon
+                name={copiedRef ? 'check' : 'copy'}
+                size={12}
+                className={copiedRef ? 'text-[var(--semantic-green)]' : 'text-[var(--text-3)]'}
+              />
+              <span>{copiedRef ? 'Copied' : `Ref: ${analysisData.request_id.slice(0, 8)}`}</span>
+            </button>
+          </div>
 
-          {/* 2. Hazard History & Climate Stress Profile */}
-          {analysisData.hazard_profile && (
-            <HazardProfileCard hazard={analysisData.hazard_profile} />
-          )}
+          {/* Sticky iOS Segmented Control */}
+          <div className="sticky top-0 z-20 py-1.5 bg-[var(--panel)]/95 backdrop-blur-md border-b border-[var(--hairline)]">
+            <div className="bg-[var(--fill)] rounded-[10px] p-[2px] grid grid-cols-4 gap-1 text-[12px] font-medium select-none">
+              {[
+                { id: 'overview', label: 'Overview' },
+                { id: 'hazards', label: 'Hazards' },
+                { id: 'ecology', label: 'Ecology' },
+                { id: 'cost_plan', label: 'Cost & Plan' },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => handleTabChange(tab.id as ResultsTab)}
+                  className={`py-1.5 px-1 rounded-[8px] text-[11px] sm:text-[12px] text-center transition-all truncate cursor-pointer ${
+                    activeResultsTab === tab.id
+                      ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] font-semibold shadow-[var(--segmented-active-shadow)]'
+                      : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-          {/* 3. Ecological Site Vision & Tree Preservation */}
-          <SiteVisionCard
-            data={siteVisionData}
-            isLoading={isSiteVisionLoading}
-            onScan={handleRunSiteVision}
-            hasCoordinates={hasLocation}
-          />
+          {/* Tab Content Mapping with 200ms Fade/Slide */}
+          <div key={activeResultsTab} className="animate-tab-switch space-y-3 pt-0.5">
+            {activeResultsTab === 'overview' && (
+              <>
+                {/* 1. ScoreSummaryCard hero */}
+                <ScoreSummaryCard data={analysisData} />
 
-          {/* 4. Factor Breakdown Bars */}
-          <FactorBreakdown factors={analysisData.factors} />
+                {/* 2. Top 3 FactorBreakdown rows */}
+                <FactorBreakdown factors={analysisData.factors} limit={3} />
 
-          {/* 4. Passive Orientation Compass */}
-          <OrientationCompass orientation={analysisData.orientation} />
+                {/* 3. RecommendationPanel summary */}
+                <RecommendationPanel
+                  summary={analysisData.engineering_summary}
+                  recommendations={analysisData.detailed_recommendations}
+                  recommendationItems={analysisData.recommendation_items}
+                  aiMetadata={analysisData.ai_metadata}
+                  parameterReflection={analysisData.parameter_reflection}
+                  summaryOnly={true}
+                />
 
-          {/* 5. Vastu & Functional Planning Advisory */}
-          {analysisData.vastu_advisory && (
-            <VastuAdvisoryCard advisory={analysisData.vastu_advisory} />
-          )}
+                {/* 4. Download Vector PDF Report */}
+                <DownloadReportButton payload={reportPayload} />
+              </>
+            )}
 
-          {/* 5.5 Generative Floor Plan Engine */}
-          <FloorPlanGeneratorCard
-            defaultWidthM={
-              analysisData.land_value?.plot_area_sqft
-                ? Math.max(
-                    6.0,
-                    Math.min(
-                      60.0,
-                      +Math.sqrt(
-                        (analysisData.land_value.plot_area_sqft * 0.092903) / 1.2
-                      ).toFixed(1)
-                    )
-                  )
-                : 10.0
-            }
-            defaultDepthM={
-              analysisData.land_value?.plot_area_sqft
-                ? Math.max(
-                    6.0,
-                    Math.min(
-                      60.0,
-                      +(
-                        Math.sqrt(
-                          (analysisData.land_value.plot_area_sqft * 0.092903) / 1.2
-                        ) * 1.2
-                      ).toFixed(1)
-                    )
-                  )
-                : 12.0
-            }
-            activeFloorPlan={floorPlanData}
-            onFloorPlanGenerated={(plan) => setFloorPlanData(plan)}
-          />
+            {activeResultsTab === 'hazards' && (
+              <>
+                {/* HazardProfileCard sections */}
+                {analysisData.hazard_profile && (
+                  <HazardProfileCard hazard={analysisData.hazard_profile} />
+                )}
 
-          {/* 6. Cost Breakdown Table */}
-          <CostBreakdownTable costEstimate={analysisData.cost_estimate} />
+                {/* Risk Mitigation Matrix */}
+                <RiskMatrix risks={analysisData.risks} />
 
-          {/* 7. Indicative Land Value & Combined Project Total */}
-          {analysisData.land_value && (
-            <LandValueCard
-              landValue={analysisData.land_value}
-              civilTotalCostInr={analysisData.cost_estimate.total_estimated_cost_inr}
-              onOverrideChange={(rate, area) => {
-                setOverrideLandRate(rate);
-                setOverridePlotArea(area);
-              }}
-            />
-          )}
+                {/* Consolidated Data Sources & Standards */}
+                <DataSourcesDisclosure category="hazards" />
+              </>
+            )}
 
-          {/* 8. Risk Mitigation Matrix */}
-          <RiskMatrix risks={analysisData.risks} />
+            {activeResultsTab === 'ecology' && (
+              <>
+                {/* Ecological Site Vision & Tree Preservation */}
+                <SiteVisionCard
+                  data={siteVisionData}
+                  isLoading={isSiteVisionLoading}
+                  onScan={handleRunSiteVision}
+                  hasCoordinates={hasLocation}
+                />
 
-          {/* 9. Engineering Commentary & Traceable Recommendations */}
-          <RecommendationPanel
-            summary={analysisData.engineering_summary}
-            recommendations={analysisData.detailed_recommendations}
-            recommendationItems={analysisData.recommendation_items}
-            aiMetadata={analysisData.ai_metadata}
-            parameterReflection={analysisData.parameter_reflection}
-          />
+                {/* Passive Orientation Compass */}
+                <OrientationCompass orientation={analysisData.orientation} />
 
-          {/* 10. Download Vector PDF Report */}
-          <DownloadReportButton payload={reportPayload} />
+                {/* Vastu & Functional Planning Advisory */}
+                {analysisData.vastu_advisory && (
+                  <VastuAdvisoryCard advisory={analysisData.vastu_advisory} />
+                )}
+
+                {/* Consolidated Data Sources & Standards */}
+                <DataSourcesDisclosure category="ecology" />
+              </>
+            )}
+
+            {activeResultsTab === 'cost_plan' && (
+              <>
+                {/* Cost Breakdown Table */}
+                <CostBreakdownTable costEstimate={analysisData.cost_estimate} />
+
+                {/* Indicative Land Value & Combined Project Total */}
+                {analysisData.land_value && (
+                  <LandValueCard
+                    landValue={analysisData.land_value}
+                    civilTotalCostInr={analysisData.cost_estimate.total_estimated_cost_inr}
+                    onOverrideChange={(rate, area) => {
+                      setOverrideLandRate(rate);
+                      setOverridePlotArea(area);
+                    }}
+                  />
+                )}
+
+                {/* Generative Floor Plan Engine */}
+                <FloorPlanGeneratorCard
+                  defaultWidthM={
+                    analysisData.land_value?.plot_area_sqft
+                      ? Math.max(
+                          6.0,
+                          Math.min(
+                            60.0,
+                            +Math.sqrt(
+                              (analysisData.land_value.plot_area_sqft * 0.092903) / 1.2
+                            ).toFixed(1)
+                          )
+                        )
+                      : 10.0
+                  }
+                  defaultDepthM={
+                    analysisData.land_value?.plot_area_sqft
+                      ? Math.max(
+                          6.0,
+                          Math.min(
+                            60.0,
+                            +(
+                              Math.sqrt(
+                                (analysisData.land_value.plot_area_sqft * 0.092903) / 1.2
+                              ) * 1.2
+                            ).toFixed(1)
+                          )
+                        )
+                      : 12.0
+                  }
+                  activeFloorPlan={floorPlanData}
+                  onFloorPlanGenerated={(plan) => setFloorPlanData(plan)}
+                />
+              </>
+            )}
+          </div>
         </div>
       );
     }
@@ -619,6 +715,7 @@ export const App: React.FC = () => {
       {/* ========================================================================= */}
       <aside
         id="results-drawer"
+        ref={resultsDrawerRef}
         role="region"
         aria-label="Analysis Results"
         onTransitionEnd={triggerMapResize}

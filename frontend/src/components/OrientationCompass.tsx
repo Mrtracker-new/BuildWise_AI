@@ -33,24 +33,24 @@ export const OrientationCompass: React.FC<OrientationCompassProps> = ({ orientat
   const windHeadY = cy - (radius - 20) * Math.cos(windRad);
 
   return (
-    <div className="space-y-3.5 w-full min-w-0">
+    <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-3.5 w-full min-w-0">
       {/* Section Header */}
-      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2.5 min-w-0">
+      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
           <Icon name="compass" size={15} className="text-[var(--text-2)] shrink-0" />
-          <h3 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight">
+          <h3 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight">
             Passive Solar & Wind Orientation
           </h3>
         </div>
-        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] shrink-0">
-          Bioclimatic Layout
+        <span className="text-[12px] font-normal text-[var(--text-3)] shrink-0">
+          Bioclimatic layout
         </span>
       </div>
 
       <div className="space-y-3 min-w-0">
         {/* SVG Engineering Compass */}
         <div className="flex flex-col items-center justify-center p-3 bg-[var(--fill)] rounded-[12px] min-w-0">
-          <svg viewBox="0 0 200 200" className="w-[180px] max-w-full h-auto select-none block" width="200" height="200">
+          <svg viewBox="0 0 200 200" className="w-[170px] max-w-full h-auto select-none block" width="200" height="200">
             {/* Compass Outer Rings */}
             <circle cx={cx} cy={cy} r={radius} fill="none" stroke="var(--hairline)" strokeWidth="1.5" />
             <circle cx={cx} cy={cy} r={radius - 8} fill="none" stroke="var(--hairline)" strokeWidth="1" strokeDasharray="3 3" />
@@ -123,30 +123,23 @@ export const OrientationCompass: React.FC<OrientationCompassProps> = ({ orientat
           </div>
         </div>
 
-        {/* 2-Column Stat Tiles */}
-        <div className="grid grid-cols-2 gap-2.5">
-          <div className="bg-[var(--fill)] p-3 rounded-[12px]">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] block mb-1">
-              Principal Axis
+        {/* Grouped Key-Value Rows (No background micro-tiles) */}
+        <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
+          <div className="h-10 flex items-center justify-between px-0.5">
+            <span className="text-[13px] font-normal text-[var(--text-2)]">Principal building axis</span>
+            <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
+              {axis_label} ({optimal_axis_degrees.toFixed(1)}°)
             </span>
-            <span className="text-[13px] font-semibold text-[var(--text-1)] block leading-snug break-words">
-              {axis_label}
-            </span>
-            <span className="text-[11px] text-[var(--text-3)] font-mono">{optimal_axis_degrees.toFixed(1)}°</span>
           </div>
-
-          <div className="bg-[var(--fill)] p-3 rounded-[12px]">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] block mb-1">
-              Cross-Ventilation
+          <div className="h-10 flex items-center justify-between px-0.5">
+            <span className="text-[13px] font-normal text-[var(--text-2)]">Cross-ventilation potential</span>
+            <span className="text-[13px] font-semibold text-[var(--semantic-green)] whitespace-nowrap">
+              {cross_ventilation_rating} ({prevailing_wind_direction_degrees.toFixed(0)}°)
             </span>
-            <span className="text-[13px] font-semibold text-[var(--semantic-green)] block leading-snug break-words">
-              {cross_ventilation_rating}
-            </span>
-            <span className="text-[11px] text-[var(--text-3)]">{prevailing_wind_direction_degrees.toFixed(0)}° Azimuth</span>
           </div>
         </div>
 
-        <p className="text-[12px] text-[var(--text-2)] leading-normal">
+        <p className="text-[12px] text-[var(--text-2)] leading-normal pt-1">
           {passive_design_rationale}
         </p>
       </div>

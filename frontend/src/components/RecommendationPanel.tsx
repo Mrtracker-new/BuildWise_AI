@@ -15,6 +15,7 @@ interface RecommendationPanelProps {
     feasibility_score?: string;
   };
   parameterReflection?: string;
+  summaryOnly?: boolean;
 }
 
 export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
@@ -23,36 +24,48 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
   recommendationItems,
   aiMetadata,
   parameterReflection,
+  summaryOnly = false,
 }) => {
   const [copied, setCopied] = useState(false);
   const [filterSeverity, setFilterSeverity] = useState<string>('all');
 
   const handleCopy = () => {
     let fullText = `${summary}\n\n`;
-    if (recommendationItems && recommendationItems.length > 0) {
-      fullText += `Traceable Engineering Recommendations:\n` +
-        recommendationItems
-          .map((r) => `[${r.rule_id || r.id}] (${r.severity.toUpperCase()}) ${r.category_label || r.title || r.category}: ${r.recommendation_text || r.description}`)
-          .join('\n\n');
-    } else {
-      fullText += `Key Engineering Recommendations:\n` +
-        recommendations.map((r, i) => `${i + 1}. ${r}`).join('\n');
+    if (!summaryOnly) {
+      if (recommendationItems && recommendationItems.length > 0) {
+        fullText += `Traceable Engineering Recommendations:\n` +
+          recommendationItems
+            .map((r) => `[${r.rule_id || r.id}] (${r.severity}) ${r.category_label || r.title || r.category}: ${r.recommendation_text || r.description}`)
+            .join('\n\n');
+      } else {
+        fullText += `Key Engineering Recommendations:\n` +
+          recommendations.map((r, i) => `${i + 1}. ${r}`).join('\n');
+      }
     }
     navigator.clipboard.writeText(fullText);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setTimeout(() => setCopied(false), 1500);
   };
 
-  const getSeverityColor = (sev: string) => {
-    switch (sev) {
+  const getSeverityStyle = (sev: string) => {
+    switch (sev.toLowerCase()) {
       case 'critical':
-        return 'var(--semantic-red)';
+      case 'high':
+        return {
+          bg: 'rgba(255, 59, 48, 0.12)',
+          text: 'var(--semantic-red)',
+        };
       case 'advisory':
-        return 'var(--semantic-amber)';
-      case 'optimal':
-        return 'var(--semantic-green)';
+      case 'moderate':
+        return {
+          bg: 'rgba(255, 159, 10, 0.12)',
+          text: 'var(--semantic-amber)',
+        };
       default:
-        return 'var(--text-3)';
+        return {
+          bg: 'rgba(52, 199, 89, 0.12)',
+          text: 'var(--semantic-green)',
+        };
     }
   };
 
@@ -62,31 +75,31 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
     : items.filter((it) => it.severity === filterSeverity);
 
   return (
-    <div className="space-y-4 w-full min-w-0">
+    <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-3.5 w-full min-w-0">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2.5 min-w-0">
+      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
           <Icon name="file-text" size={15} className="text-[var(--text-2)] shrink-0" />
-          <h3 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight">
-            Engineering Commentary & Action Items
+          <h3 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight">
+            {summaryOnly ? 'Engineering Summary & Advisory' : 'Engineering Commentary & Action Items'}
           </h3>
         </div>
         <button
           type="button"
           onClick={handleCopy}
-          className="flex items-center gap-1.5 px-2.5 py-1 text-[12px] font-medium text-[var(--text-1)] bg-[var(--fill)] hover:bg-[var(--fill-hover)] rounded-[8px] transition-colors shrink-0"
+          className="flex items-center gap-1.5 px-2.5 py-1 text-[12px] font-medium text-[var(--text-2)] hover:text-[var(--text-1)] bg-[var(--fill)] hover:bg-[var(--fill-hover)] rounded-full transition-colors shrink-0 cursor-pointer"
         >
-          <Icon name={copied ? 'check-circle' : 'file-text'} size={13} />
+          <Icon name={copied ? 'check' : 'copy'} size={12} className={copied ? 'text-[var(--semantic-green)]' : 'text-[var(--text-3)]'} />
           <span>{copied ? 'Copied' : 'Copy'}</span>
         </button>
       </div>
 
       {/* Parameter Reflection (AI Decision Transparency) */}
       {(parameterReflection || aiMetadata.parameter_reflection) && (
-        <div className="p-3 bg-[var(--fill)] border border-[var(--hairline)] rounded-[12px] space-y-1">
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--accent)] uppercase tracking-wider">
+        <div className="p-3 bg-[var(--fill)] rounded-[12px] space-y-1">
+          <div className="flex items-center gap-1.5 text-[12px] font-medium text-[var(--accent)]">
             <Icon name="check-circle" size={13} />
-            <span>AI Parameter Reflection</span>
+            <span>AI parameter reflection</span>
           </div>
           <p className="text-[12px] text-[var(--text-1)] leading-relaxed italic">
             "{parameterReflection || aiMetadata.parameter_reflection}"
@@ -99,9 +112,9 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
         {summary}
       </div>
 
-      {/* Filter Segmented Control (if structured items exist) */}
-      {items.length > 0 && (
-        <div className="space-y-2">
+      {/* Detailed Recommendations (only if not summaryOnly) */}
+      {!summaryOnly && items.length > 0 && (
+        <div className="space-y-2 pt-1">
           <div className="bg-[var(--fill)] rounded-[10px] p-[2px] grid grid-cols-4 gap-1 text-[11px] font-medium">
             {['all', 'critical', 'advisory', 'optimal'].map((f) => (
               <button
@@ -125,15 +138,18 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
           {/* Grouped Recommendations List */}
           <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
             {filteredItems.map((item, idx) => {
-              const color = getSeverityColor(item.severity);
+              const style = getSeverityStyle(item.severity);
               return (
                 <div key={idx} className="py-2.5 space-y-1 min-w-0">
                   <div className="flex items-center justify-between gap-2 min-w-0">
                     <span className="text-[13px] font-semibold text-[var(--text-1)] leading-snug break-words">
                       {item.category_label || item.title || item.category}
                     </span>
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-[var(--fill)] text-[var(--text-1)] uppercase tracking-wider shrink-0">
-                      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} />
+                    <span
+                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold capitalize shrink-0"
+                      style={{ backgroundColor: style.bg, color: style.text }}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: style.text }} />
                       <span>{item.severity}</span>
                     </span>
                   </div>
@@ -147,8 +163,8 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
         </div>
       )}
 
-      {/* Fallback to simple list if no structured items */}
-      {items.length === 0 && recommendations.length > 0 && (
+      {/* Fallback to simple list if no structured items and not summaryOnly */}
+      {!summaryOnly && items.length === 0 && recommendations.length > 0 && (
         <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
           {recommendations.map((rec, idx) => (
             <div key={idx} className="py-2.5 text-[12px] text-[var(--text-2)] leading-normal flex items-start gap-2">

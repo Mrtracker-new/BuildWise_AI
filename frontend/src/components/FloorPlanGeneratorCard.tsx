@@ -85,17 +85,17 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   };
 
   return (
-    <div className="space-y-4 w-full min-w-0">
+    <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-3.5 w-full min-w-0">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2.5 min-w-0">
+      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
           <Icon name="blueprint" size={15} className="text-[var(--text-2)] shrink-0" />
-          <h2 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight">
+          <h3 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight">
             Generative Floor Plan Engine
-          </h2>
+          </h3>
         </div>
         {floorPlan && (
-          <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-[var(--fill)] text-[var(--text-1)] capitalize shrink-0">
+          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-[var(--fill)] text-[var(--text-1)] capitalize shrink-0">
             {floorPlan.status}
           </span>
         )}
@@ -109,16 +109,16 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         </div>
       )}
 
-      {/* Dimensions & Strictness Grid */}
+      {/* Dimensions & Strictness */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[12px]">
         {/* Plot Dimensions */}
-        <div className="space-y-1.5 min-w-0">
-          <label className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] block">
-            Plot Dimensions (Meters)
+        <div className="space-y-1 min-w-0">
+          <label className="text-[12px] font-normal text-[var(--text-3)] block">
+            Plot dimensions (meters)
           </label>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <span className="text-[10px] text-[var(--text-3)] block mb-0.5">Width (m)</span>
+              <span className="text-[11px] text-[var(--text-3)] block mb-0.5">Width (m)</span>
               <input
                 type="number"
                 min="6"
@@ -126,11 +126,11 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                 step="0.5"
                 value={plotWidth}
                 onChange={(e) => setUserWidth(parseFloat(e.target.value) || 10)}
-                className="w-full h-9 bg-[var(--fill)] border-0 rounded-[10px] px-2.5 text-[13px] font-mono text-[var(--text-1)] outline-none focus:ring-[3px] focus:ring-[var(--accent)]/25"
+                className="w-full h-8 bg-[var(--fill)] border-0 rounded-[8px] px-2.5 text-[12px] font-mono text-[var(--text-1)] outline-none focus:ring-[2px] focus:ring-[var(--accent)]/30"
               />
             </div>
             <div>
-              <span className="text-[10px] text-[var(--text-3)] block mb-0.5">Depth (m)</span>
+              <span className="text-[11px] text-[var(--text-3)] block mb-0.5">Depth (m)</span>
               <input
                 type="number"
                 min="6"
@@ -138,16 +138,16 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                 step="0.5"
                 value={plotDepth}
                 onChange={(e) => setUserDepth(parseFloat(e.target.value) || 12)}
-                className="w-full h-9 bg-[var(--fill)] border-0 rounded-[10px] px-2.5 text-[13px] font-mono text-[var(--text-1)] outline-none focus:ring-[3px] focus:ring-[var(--accent)]/25"
+                className="w-full h-8 bg-[var(--fill)] border-0 rounded-[8px] px-2.5 text-[12px] font-mono text-[var(--text-1)] outline-none focus:ring-[2px] focus:ring-[var(--accent)]/30"
               />
             </div>
           </div>
         </div>
 
         {/* Vastu Strictness: iOS Segmented Control */}
-        <div className="space-y-1.5 min-w-0">
-          <label className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] block">
-            Vastu Strictness
+        <div className="space-y-1 min-w-0">
+          <label className="text-[12px] font-normal text-[var(--text-3)] block">
+            Vastu strictness
           </label>
           <div className="bg-[var(--fill)] rounded-[10px] p-[2px] grid grid-cols-3 gap-1">
             {(['high', 'medium', 'low'] as const).map((lvl) => (
@@ -155,9 +155,9 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                 key={lvl}
                 type="button"
                 onClick={() => setStrictness(lvl)}
-                className={`py-1.5 px-2 rounded-[8px] text-[12px] font-semibold capitalize text-center transition-all ${
+                className={`py-1 px-2 rounded-[8px] text-[12px] font-medium capitalize text-center transition-all ${
                   strictness === lvl
-                    ? 'bg-[var(--segmented-active-bg)] shadow-[var(--segmented-active-shadow)]'
+                    ? 'bg-[var(--segmented-active-bg)] shadow-[var(--segmented-active-shadow)] font-semibold'
                     : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
                 }`}
                 style={{
@@ -172,19 +172,19 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
             {strictness === 'high'
               ? 'Canonical zones (Kitchen SE, Puja NE, Bed SW).'
               : strictness === 'medium'
-              ? 'Permits secondary zones to balance plumbing.'
-              : 'Soft Vastu scoring for maximum compactness.'}
+              ? 'Balanced plumbing and secondary zones.'
+              : 'Soft Vastu scoring for compact footprints.'}
           </span>
         </div>
       </div>
 
       {/* Room Selection */}
       <div className="space-y-1.5 min-w-0">
-        <div className="flex items-center justify-between text-[11px] text-[var(--text-3)]">
-          <span className="font-semibold uppercase tracking-[0.08em]">
+        <div className="flex items-center justify-between text-[12px] text-[var(--text-3)]">
+          <span className="font-normal">
             Rooms ({selectedRooms.length} selected)
           </span>
-          <span>Min 3 required</span>
+          <span className="text-[11px]">Min 3 required</span>
         </div>
         <div className="grid grid-cols-2 gap-1.5">
           {AVAILABLE_ROOMS.map((room) => {
@@ -194,7 +194,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                 key={room.id}
                 type="button"
                 onClick={() => toggleRoom(room.id)}
-                className={`p-2 rounded-[10px] text-left text-[12px] flex items-center gap-2 transition-all ${
+                className={`p-2 rounded-[8px] text-left text-[12px] flex items-center gap-2 transition-all cursor-pointer ${
                   isChecked
                     ? 'bg-[var(--accent-tint)] text-[var(--accent)] font-semibold'
                     : 'bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)]'
@@ -207,7 +207,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                       : 'border-[var(--hairline)] bg-transparent'
                   }`}
                 >
-                  {isChecked && <Icon name="check-circle" size={10} />}
+                  {isChecked && <Icon name="check" size={10} />}
                 </div>
                 <span className="leading-tight break-words">{room.label}</span>
               </button>
@@ -221,16 +221,16 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         type="button"
         onClick={handleGenerate}
         disabled={isGenerating}
-        className="w-full h-10 px-4 rounded-[12px] bg-[var(--accent)] hover:brightness-[0.98] active:brightness-95 disabled:bg-[var(--fill)] disabled:text-[var(--text-3)] text-white text-[13px] font-semibold flex items-center justify-center gap-2 transition-all select-none shadow-sm cursor-pointer disabled:cursor-not-allowed"
+        className="w-full h-9 px-4 rounded-full bg-[var(--accent)] hover:brightness-[0.98] active:brightness-95 disabled:bg-[var(--fill)] disabled:text-[var(--text-3)] text-white text-[13px] font-semibold flex items-center justify-center gap-2 transition-all select-none shadow-sm cursor-pointer disabled:cursor-not-allowed"
       >
         {isGenerating ? (
           <>
-            <Icon name="loader" size={15} className="animate-spin" />
+            <Icon name="loader" size={14} className="animate-spin" />
             <span>Solving Spatial Layout...</span>
           </>
         ) : (
           <>
-            <Icon name="blueprint" size={15} />
+            <Icon name="blueprint" size={14} />
             <span>Generate Architectural Blueprint</span>
           </>
         )}
@@ -239,60 +239,35 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       {/* Blueprint & Metrics Display */}
       {floorPlan && (
         <div className="space-y-3 pt-1">
-          {/* Horizontally Scrollable Snap Row of Fixed 104px Tiles */}
-          <div className="flex gap-2 overflow-x-auto scrollbar-apple snap-x snap-mandatory pb-1 min-w-0">
-            <div className="w-[104px] shrink-0 p-2.5 rounded-[12px] bg-[var(--fill)] snap-start">
-              <span
-                className="text-[11px] font-semibold text-[var(--text-3)] block truncate leading-tight whitespace-nowrap"
-                style={{ wordBreak: 'keep-all' }}
-              >
-                Vastu
-              </span>
-              <span className="text-[18px] font-semibold text-[var(--text-1)] tabular-nums block mt-1">
+          {/* Key-Value Metrics Rows (No background micro-tiles) */}
+          <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
+            <div className="h-10 flex items-center justify-between px-0.5">
+              <span className="text-[13px] font-normal text-[var(--text-2)]">Vastu compliance</span>
+              <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
                 {floorPlan.metrics.vastu_compliance_pct.toFixed(0)}%
               </span>
             </div>
-            <div className="w-[104px] shrink-0 p-2.5 rounded-[12px] bg-[var(--fill)] snap-start">
-              <span
-                className="text-[11px] font-semibold text-[var(--text-3)] block truncate leading-tight whitespace-nowrap"
-                style={{ wordBreak: 'keep-all' }}
-              >
-                Plumbing
-              </span>
-              <span className="text-[18px] font-semibold text-[var(--text-1)] tabular-nums block mt-1">
+            <div className="h-10 flex items-center justify-between px-0.5">
+              <span className="text-[13px] font-normal text-[var(--text-2)]">Plumbing adjacency efficiency</span>
+              <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
                 {floorPlan.metrics.plumbing_adjacency_score.toFixed(0)}%
               </span>
             </div>
-            <div className="w-[104px] shrink-0 p-2.5 rounded-[12px] bg-[var(--fill)] snap-start">
-              <span
-                className="text-[11px] font-semibold text-[var(--text-3)] block truncate leading-tight whitespace-nowrap"
-                style={{ wordBreak: 'keep-all' }}
-              >
-                Utilization
-              </span>
-              <span className="text-[18px] font-semibold text-[var(--text-1)] tabular-nums block mt-1">
+            <div className="h-10 flex items-center justify-between px-0.5">
+              <span className="text-[13px] font-normal text-[var(--text-2)]">Space utilization</span>
+              <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
                 {floorPlan.metrics.space_utilization_pct.toFixed(0)}%
               </span>
             </div>
-            <div className="w-[104px] shrink-0 p-2.5 rounded-[12px] bg-[var(--fill)] snap-start">
-              <span
-                className="text-[11px] font-semibold text-[var(--text-3)] block truncate leading-tight whitespace-nowrap"
-                style={{ wordBreak: 'keep-all' }}
-              >
-                Coverage
-              </span>
-              <span className="text-[18px] font-semibold text-[var(--text-1)] tabular-nums block mt-1">
+            <div className="h-10 flex items-center justify-between px-0.5">
+              <span className="text-[13px] font-normal text-[var(--text-2)]">Plot coverage ratio</span>
+              <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
                 {floorPlan.metrics.plot_coverage_pct ? `${floorPlan.metrics.plot_coverage_pct.toFixed(0)}%` : '—'}
               </span>
             </div>
-            <div className="w-[104px] shrink-0 p-2.5 rounded-[12px] bg-[var(--fill)] snap-start">
-              <span
-                className="text-[11px] font-semibold text-[var(--text-3)] block truncate leading-tight whitespace-nowrap"
-                style={{ wordBreak: 'keep-all' }}
-              >
-                Latency
-              </span>
-              <span className="text-[18px] font-semibold text-[var(--text-1)] tabular-nums block mt-1">
+            <div className="h-10 flex items-center justify-between px-0.5">
+              <span className="text-[13px] font-normal text-[var(--text-2)]">Engine latency</span>
+              <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
                 {floorPlan.timing_ms.toFixed(0)}ms
               </span>
             </div>

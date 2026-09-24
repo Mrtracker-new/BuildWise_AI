@@ -4,9 +4,12 @@ import { Icon, type IconName } from './Icon';
 
 interface FactorBreakdownProps {
   factors: FactorScore[];
+  limit?: number;
 }
 
-export const FactorBreakdown: React.FC<FactorBreakdownProps> = ({ factors }) => {
+export const FactorBreakdown: React.FC<FactorBreakdownProps> = ({ factors, limit }) => {
+  const displayFactors = limit ? factors.slice(0, limit) : factors;
+
   const getFactorIcon = (id: string): IconName => {
     switch (id) {
       case 'slope':
@@ -31,43 +34,43 @@ export const FactorBreakdown: React.FC<FactorBreakdownProps> = ({ factors }) => 
   };
 
   return (
-    <div className="space-y-3.5 w-full min-w-0">
+    <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-3.5 w-full min-w-0">
       {/* Section Header */}
-      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2.5 min-w-0">
+      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
           <Icon name="layers" size={15} className="text-[var(--text-2)] shrink-0" />
-          <h3 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight">
+          <h3 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight">
             Multi-Criteria Factor Breakdown
           </h3>
         </div>
-        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] shrink-0">
-          MCDA Model
+        <span className="text-[12px] font-normal text-[var(--text-3)] shrink-0">
+          MCDA model {limit ? `(Top ${limit})` : ''}
         </span>
       </div>
 
       {/* Grouped list of factors with hairline rows */}
-      <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
-        {factors.map((factor) => {
+      <div className="divide-y divide-[var(--hairline)]">
+        {displayFactors.map((factor) => {
           const barColor = getBarColor(factor.score);
           const icon = getFactorIcon(factor.factor_id);
 
           return (
-            <div key={factor.factor_id} className="py-2.5 space-y-1.5 min-w-0">
+            <div key={factor.factor_id} className="py-2.5 space-y-1.5 min-w-0 first:pt-0 last:pb-0">
               <div className="flex items-center justify-between gap-2 min-w-0">
                 <div className="flex items-center gap-2 min-w-0">
                   <Icon name={icon} size={14} className="text-[var(--text-2)] shrink-0" />
-                  <span className="text-[13px] font-semibold text-[var(--text-1)] break-words">
+                  <span className="text-[13px] font-semibold text-[var(--text-1)] truncate">
                     {factor.name}
                   </span>
-                  <span className="text-[11px] text-[var(--text-3)] font-medium">
+                  <span className="text-[11px] text-[var(--text-3)] font-normal">
                     {(factor.weight * 100).toFixed(0)}%
                   </span>
                 </div>
                 <div className="flex items-center gap-2 text-right shrink-0">
-                  <span className="text-[11px] text-[var(--text-3)] tabular-nums">
+                  <span className="text-[12px] text-[var(--text-3)] tabular-nums">
                     {factor.raw_value} {factor.unit}
                   </span>
-                  <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums min-w-[2.5rem]">
+                  <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums min-w-[2rem]">
                     {factor.score.toFixed(0)}
                   </span>
                 </div>

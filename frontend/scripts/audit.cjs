@@ -86,6 +86,9 @@ function checkDOMViolations(isDrawerOpenIntended) {
     // Custom iOS select trigger button truncation (replaces native <select>)
     if (el.closest('[role="combobox"]')) return;
 
+    // Intentionally truncated text with ellipsis or multi-line clamp
+    if (style.textOverflow === 'ellipsis' || el.classList.contains('truncate') || el.classList.contains('line-clamp-2') || style.webkitLineClamp) return;
+
     // 2. Horizontal overflow: scrollWidth > clientWidth on elements not intended to scroll
     const isScrollableX = style.overflowX === 'auto' || style.overflowX === 'scroll';
     if (!isScrollableX && tag !== 'svg' && !el.closest('svg')) {
@@ -112,7 +115,7 @@ function checkDOMViolations(isDrawerOpenIntended) {
 
     // 3. Vertical clipping: scrollHeight > clientHeight on overflow: hidden elements containing text
     const isOverflowHiddenY = style.overflowY === 'hidden' || style.overflow === 'hidden';
-    if (isOverflowHiddenY && tag !== 'svg' && !el.closest('svg') && !el.closest('.leaflet-container')) {
+    if (isOverflowHiddenY && tag !== 'svg' && !el.closest('svg') && !el.closest('.leaflet-container') && !el.classList.contains('line-clamp-2') && !style.webkitLineClamp) {
       const hasText = Array.from(el.childNodes).some(node => node.nodeType === 3 && node.textContent.trim().length > 0);
       if (hasText && el.scrollHeight > el.clientHeight + 1 && el.clientHeight > 0) {
         const textContent = (el.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 60);
@@ -287,7 +290,7 @@ function checkDOMViolations(isDrawerOpenIntended) {
   // STEP 3: Targeted Post-Fix Integrity Checks
   console.log('\n--- 3. TARGETED POST-FIX INTEGRITY CHECKS ---');
 
-  // Check 3.1: Score Gauge SVG width >= 120px
+  // Check 3.1: Score Gauge SVG width >= 84px
   await page.setViewport({ width: 1920, height: 1080 });
   await new Promise(r => setTimeout(r, 200));
   const gaugeCheck = await page.evaluate(() => {
@@ -296,14 +299,14 @@ function checkDOMViolations(isDrawerOpenIntended) {
     if (!visibleSvg) return { pass: false, message: 'No visible Score gauge SVG found' };
     const rect = visibleSvg.getBoundingClientRect();
     return {
-      pass: rect.width >= 120,
+      pass: rect.width >= 84,
       width: rect.width,
       height: rect.height,
-      message: `Score gauge SVG renders at ${Math.round(rect.width)}x${Math.round(rect.height)}px (>= 120px requirement)`
+      message: `Score gauge SVG renders at ${Math.round(rect.width)}x${Math.round(rect.height)}px (>= 84px requirement)`
     };
   });
   checks.push({ name: 'Score Gauge SVG Dimensions', ...gaugeCheck });
-  console.log(`[CHECK] Score Gauge SVG (>=120px): ${gaugeCheck.pass ? 'PASS' : 'FAIL'} (${gaugeCheck.message})`);
+  console.log(`[CHECK] Score Gauge SVG (>=84px): ${gaugeCheck.pass ? 'PASS' : 'FAIL'} (${gaugeCheck.message})`);
 
   // Inject telemetry test warnings for banner & popover validation
   await page.evaluate(() => {

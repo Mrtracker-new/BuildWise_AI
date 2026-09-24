@@ -303,3 +303,19 @@
   border-top-color: var(--panel) !important;
   border-bottom-color: var(--panel) !important;
 }
+
+/* iOS Segmented Tab Switch Animation (200ms fade/slide) */
+@keyframes tabSwitchFadeSlide {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-tab-switch {
+  animation: tabSwitchFadeSlide 200ms cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+}

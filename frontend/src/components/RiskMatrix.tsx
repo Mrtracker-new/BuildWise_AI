@@ -7,49 +7,63 @@ interface RiskMatrixProps {
 }
 
 export const RiskMatrix: React.FC<RiskMatrixProps> = ({ risks }) => {
-  const getSeverityColor = (severity: string) => {
+  const getSeverityStyle = (severity: string) => {
     switch (severity.toLowerCase()) {
       case 'high':
-        return 'var(--semantic-red)';
+      case 'critical':
+        return {
+          bg: 'rgba(255, 59, 48, 0.12)',
+          text: 'var(--semantic-red)',
+        };
       case 'medium':
-        return 'var(--semantic-amber)';
+      case 'moderate':
+        return {
+          bg: 'rgba(255, 159, 10, 0.12)',
+          text: 'var(--semantic-amber)',
+        };
       default:
-        return 'var(--semantic-green)';
+        return {
+          bg: 'rgba(52, 199, 89, 0.12)',
+          text: 'var(--semantic-green)',
+        };
     }
   };
 
   return (
-    <div className="space-y-4 w-full min-w-0">
+    <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-3.5 w-full min-w-0">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2.5 min-w-0">
+      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
           <Icon name="shield-alert" size={15} className="text-[var(--text-2)] shrink-0" />
-          <h3 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight">
-            Site Constraints & Risk Matrix
+          <h3 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight">
+            Site Constraints & Risk Mitigation
           </h3>
         </div>
-        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] shrink-0">
-          {risks.length} Identified
+        <span className="text-[12px] font-normal text-[var(--text-3)] shrink-0">
+          {risks.length} identified
         </span>
       </div>
 
       {/* Grouped list with hairline dividers */}
-      <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
+      <div className="divide-y divide-[var(--hairline)]">
         {risks.map((risk, idx) => {
-          const color = getSeverityColor(risk.severity);
+          const style = getSeverityStyle(risk.severity);
 
           return (
-            <div key={idx} className="py-3 space-y-1.5 min-w-0">
+            <div key={idx} className="py-3 space-y-1.5 min-w-0 first:pt-0 last:pb-0">
               <div className="flex items-center justify-between gap-2 min-w-0">
                 <span className="text-[13px] font-semibold text-[var(--text-1)] leading-snug break-words">
                   {risk.title}
                 </span>
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-[var(--fill)] text-[var(--text-1)] shrink-0 capitalize">
+                <span
+                  className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold capitalize shrink-0"
+                  style={{ backgroundColor: style.bg, color: style.text }}
+                >
                   <span
                     className="w-1.5 h-1.5 rounded-full"
-                    style={{ backgroundColor: color }}
+                    style={{ backgroundColor: style.text }}
                   />
-                  <span>{risk.severity} Risk</span>
+                  <span>{risk.severity} risk</span>
                 </span>
               </div>
 
@@ -58,7 +72,7 @@ export const RiskMatrix: React.FC<RiskMatrixProps> = ({ risks }) => {
               </p>
 
               <div className="text-[12px] text-[var(--text-2)] leading-normal pt-0.5">
-                <span className="font-medium text-[var(--text-1)]">Mitigation: </span>
+                <span className="font-semibold text-[var(--text-1)]">Mitigation: </span>
                 <span>{risk.mitigation_strategy}</span>
               </div>
             </div>

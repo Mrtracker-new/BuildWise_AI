@@ -16,22 +16,22 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
   const gridMap = new Map((room_grid || []).map((z) => [z.zone, z]));
 
   return (
-    <div className="space-y-4 w-full min-w-0">
+    <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-3.5 w-full min-w-0">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2.5 min-w-0">
+      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
           <Icon name="layout-grid" size={15} className="text-[var(--text-2)] shrink-0" />
-          <h2 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight">
-            Vastu & Functional Planning Advisory
-          </h2>
+          <h3 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight">
+            Vastu & Spatial Planning Advisory
+          </h3>
         </div>
-        <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-3)] shrink-0">
+        <div className="flex items-center gap-1.5 text-[12px] text-[var(--text-3)] shrink-0">
           {road_approach.is_fallback ? (
-            <span className="px-2 py-0.5 rounded-[6px] bg-[var(--fill)] text-[var(--text-2)]">
-              Approach Road: Auto
+            <span className="px-2.5 py-0.5 rounded-full bg-[var(--fill)] text-[var(--text-2)]">
+              Approach road: Auto
             </span>
           ) : (
-            <span className="px-2 py-0.5 rounded-[6px] bg-[var(--fill)] text-[var(--text-2)]">
+            <span className="px-2.5 py-0.5 rounded-full bg-[var(--fill)] text-[var(--text-2)]">
               Approach: {road_approach.approach_side}
             </span>
           )}
@@ -40,12 +40,12 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
 
       {/* Ranked Entrances */}
       <div className="space-y-2">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] block">
-          Ranked Entrance Portals
+        <span className="text-[12px] font-normal text-[var(--text-3)] block">
+          Ranked entrance portals
         </span>
         <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
           {(ranked_entrances || []).slice(0, 3).map((ent, idx) => (
-            <div key={ent.direction} className="py-2.5 space-y-1 min-w-0">
+            <div key={ent.direction} className="py-2 space-y-1 min-w-0 first:pt-1 last:pb-1">
               <div className="flex items-center justify-between gap-2 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="w-5 h-5 rounded-full bg-[var(--fill)] text-[var(--text-1)] text-[11px] flex items-center justify-center font-bold">
@@ -55,8 +55,8 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
                     {ent.direction} Facing
                   </span>
                   {ent.is_approach_side && (
-                    <span className="text-[10px] font-medium bg-[var(--accent-tint)] text-[var(--accent)] px-1.5 py-0.2 rounded">
-                      Road Facade
+                    <span className="text-[11px] font-medium bg-[var(--accent-tint)] text-[var(--accent)] px-2 py-0.5 rounded-full">
+                      Road facade
                     </span>
                   )}
                 </div>
@@ -74,11 +74,11 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
 
       {/* 3x3 Mandala Grid */}
       <div className="space-y-2 pt-1">
-        <div className="flex justify-between items-center text-[11px] text-[var(--text-3)]">
-          <span className="font-semibold uppercase tracking-[0.08em]">
-            3×3 Spatial Placement Grid
+        <div className="flex justify-between items-center text-[12px] text-[var(--text-3)]">
+          <span className="font-normal">
+            3×3 spatial placement grid
           </span>
-          <span>Click cell for details</span>
+          <span className="text-[11px]">Click cell for details</span>
         </div>
 
         <div className="grid grid-cols-3 gap-1.5 bg-[var(--fill)] p-1.5 rounded-[12px]">
@@ -91,16 +91,16 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
                 key={quad}
                 type="button"
                 onClick={() => zone && setSelectedZone(zone)}
-                className={`p-2 rounded-[8px] text-left transition-all min-h-[64px] flex flex-col justify-between select-none cursor-pointer ${
+                className={`p-2 rounded-[8px] text-left transition-all min-h-[60px] flex flex-col justify-between select-none cursor-pointer ${
                   isSelected
                     ? 'bg-[var(--accent)] text-white shadow-sm'
-                    : 'bg-[var(--card-bg-subtle)] hover:bg-[var(--fill)] border border-[var(--panel-border-color)] text-[var(--text-1)]'
+                    : 'bg-[var(--card-bg-subtle)] hover:bg-[var(--fill)] border border-[var(--hairline)] text-[var(--text-1)]'
                 }`}
               >
                 <div className="flex justify-between items-center w-full min-w-0">
                   <span className="font-bold text-[11px] opacity-80 shrink-0">{quad}</span>
                   {zone?.zone_name && (
-                    <span className="text-[8px] uppercase opacity-60 break-words leading-none text-right">
+                    <span className="text-[9px] capitalize opacity-60 break-words leading-none text-right">
                       {zone.zone === 'Center' ? 'Brahma' : zone.zone_name}
                     </span>
                   )}
@@ -115,7 +115,7 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
 
         {/* Selected Zone Details */}
         {selectedZone && (
-          <div className="p-3 bg-[var(--fill)] rounded-[10px] space-y-1.5 text-[12px] text-[var(--text-1)]">
+          <div className="p-3 bg-[var(--fill)] rounded-[10px] space-y-1 text-[12px] text-[var(--text-1)]">
             <div className="flex justify-between items-center font-semibold text-[13px]">
               <span>{selectedZone.zone} ({selectedZone.zone_name})</span>
               <button
@@ -147,11 +147,11 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
 
       {/* Slope Drainage Aspect */}
       <div className="p-3 bg-[var(--fill)] rounded-[10px] text-[12px] text-[var(--text-2)] space-y-1">
-        <div className="flex items-center justify-between text-[11px]">
-          <span className="font-semibold uppercase tracking-[0.08em] text-[var(--text-3)]">
-            Drainage Aspect
+        <div className="flex items-center justify-between text-[12px]">
+          <span className="font-normal text-[var(--text-3)]">
+            Drainage aspect
           </span>
-          <span className="font-medium text-[var(--text-1)]">
+          <span className="font-semibold text-[var(--text-1)]">
             {slope_reading.drainage_direction} ({slope_reading.auspiciousness})
           </span>
         </div>
@@ -161,19 +161,19 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
       {/* Reconciliation Notes */}
       {reconciliation_notes && reconciliation_notes.length > 0 && (
         <div className="space-y-2 pt-1">
-          <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] block">
-            Vastu & Building Physics Reconciliation
+          <span className="text-[12px] font-normal text-[var(--text-3)] block">
+            Vastu & building physics reconciliation
           </span>
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             {reconciliation_notes.map((item, idx) => (
               <div key={idx} className="p-2.5 bg-[var(--fill)] rounded-[8px] space-y-1 text-[12px]">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-[var(--text-1)] text-[12px]">{item.topic}</span>
                   <span
-                    className={`text-[10px] font-medium px-2 py-0.5 rounded-full capitalize ${
+                    className={`text-[10px] font-semibold px-2 py-0.5 rounded-full capitalize ${
                       item.status === 'concordant'
-                        ? 'bg-[var(--semantic-green)]/15 text-[var(--semantic-green)]'
-                        : 'bg-[var(--semantic-amber)]/15 text-[var(--semantic-amber)]'
+                        ? 'bg-[var(--semantic-green)]/12 text-[var(--semantic-green)]'
+                        : 'bg-[var(--semantic-amber)]/12 text-[var(--semantic-amber)]'
                     }`}
                   >
                     {item.status}
