@@ -74,16 +74,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     >
       {/* Brand identity: BuildWise AI Logo */}
       <div className="flex items-center gap-2.5 min-w-0">
-        <div className="w-7 h-7 rounded-[8px] bg-slate-900/5 dark:bg-white/10 flex items-center justify-center shrink-0 border border-[var(--hairline)] overflow-hidden shadow-xs">
+        <div className="w-7 h-7 rounded-[8px] bg-white dark:bg-white/10 flex items-center justify-center shrink-0 border border-slate-200/90 dark:border-white/10 overflow-hidden shadow-xs">
           <img
-            src="/brand/BuildWise_logo_square.png"
+            src={theme === 'dark' ? '/brand/BuildWise_logo_square_white.png' : '/brand/BuildWise_logo_square.png'}
             alt="BuildWise AI Logo"
-            className="w-5 h-5 object-contain dark:hidden"
-          />
-          <img
-            src="/brand/BuildWise_logo_square_white.png"
-            alt="BuildWise AI Logo"
-            className="w-5 h-5 object-contain hidden dark:block"
+            className="w-[21px] h-[21px] object-contain select-none"
           />
         </div>
         <div className="min-w-0 flex items-center gap-2">
