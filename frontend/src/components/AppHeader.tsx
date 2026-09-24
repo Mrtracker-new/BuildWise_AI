@@ -72,10 +72,19 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       className="fixed top-3 left-3 right-3 h-[52px] rounded-[16px] vibrancy-panel z-[1001] px-3 sm:px-4 flex items-center justify-between pointer-events-auto border border-[var(--panel-border-color)] shadow-md select-none"
       style={{ top: '12px', left: '12px', right: '12px', height: '52px', borderRadius: '16px' }}
     >
-      {/* Brand identity: 28px radius-8 flat --accent square with white "BW" 12px/700 */}
+      {/* Brand identity: BuildWise AI Logo */}
       <div className="flex items-center gap-2.5 min-w-0">
-        <div className="w-7 h-7 rounded-[8px] bg-[var(--accent)] text-white flex items-center justify-center font-bold text-[12px] tracking-tight shrink-0 shadow-sm">
-          BW
+        <div className="w-7 h-7 rounded-[8px] bg-slate-900/5 dark:bg-white/10 flex items-center justify-center shrink-0 border border-[var(--hairline)] overflow-hidden shadow-xs">
+          <img
+            src="/brand/BuildWise_logo_square.png"
+            alt="BuildWise AI Logo"
+            className="w-5 h-5 object-contain dark:hidden"
+          />
+          <img
+            src="/brand/BuildWise_logo_square_white.png"
+            alt="BuildWise AI Logo"
+            className="w-5 h-5 object-contain hidden dark:block"
+          />
         </div>
         <div className="min-w-0 flex items-center gap-2">
           <h1 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight whitespace-nowrap">

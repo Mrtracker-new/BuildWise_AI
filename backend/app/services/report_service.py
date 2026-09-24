@@ -9,7 +9,7 @@ from reportlab.lib.units import mm
 from reportlab.lib import colors
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, HRFlowable, PageBreak
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, HRFlowable, PageBreak, Image as RLImage
 )
 from reportlab.pdfgen import canvas
 from reportlab.graphics.shapes import Drawing, Rect, Line, String, ArcPath, Circle, Polygon
@@ -1131,15 +1131,22 @@ def generate_pdf_report(
     lon = _safe_float(coords.get("longitude"), 0.0)
     address = str(data.get("formatted_address") or "Site Location")
 
-    # Logo Drawing (28x28 rounded square with accent fill and white "BW")
-    logo_d = Drawing(28, 28)
-    logo_d.add(Rect(0, 0, 28, 28, rx=6, ry=6, fillColor=COLOR_ACCENT, strokeColor=None))
-    logo_d.add(String(14, 8.5, "BW", fontName=FONT_BOLD, fontSize=11.5, textAnchor="middle", fillColor=colors.white))
+    # Logo: Official brand logo or fallback Drawing
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    logo_path = os.path.join(base_dir, "assets", "brand", "BuildWise_logo_square.png")
+    if os.path.exists(logo_path):
+        logo_element = RLImage(logo_path, width=28, height=28)
+    else:
+        # Logo Drawing (28x28 rounded square with accent fill and white "BW")
+        logo_d = Drawing(28, 28)
+        logo_d.add(Rect(0, 0, 28, 28, rx=6, ry=6, fillColor=COLOR_ACCENT, strokeColor=None))
+        logo_d.add(String(14, 8.5, "BW", fontName=FONT_BOLD, fontSize=11.5, textAnchor="middle", fillColor=colors.white))
+        logo_element = logo_d
 
     app_brand_p = Paragraph(f'<font color="{COLOR_ACCENT.hexval()}" size="11"><b>BuildWise AI</b></font>', ParagraphStyle('Brand', fontName=FONT_SEMIBOLD, leading=12))
     app_title_p = Paragraph('<font color="#1D1D1F" size="15"><b>Site Feasibility &amp; Engineering Advisory</b></font>', ParagraphStyle('DocTitle', fontName=FONT_BOLD, leading=17))
 
-    title_box = Table([[logo_d, Table([[app_brand_p], [app_title_p]], colWidths=[270])]], colWidths=[34, 276])
+    title_box = Table([[logo_element, Table([[app_brand_p], [app_title_p]], colWidths=[270])]], colWidths=[34, 276])
     title_box.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('LEFTPADDING', (0, 0), (-1, -1), 0),

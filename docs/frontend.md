@@ -176,15 +176,11 @@ Renders continuous-geometry SVG floor plans directly into the browser DOM:
 
 ## Capturing Documentation Screenshots
 
-The hero screenshot referenced in the root `README.md` is located at [`docs/assets/hero.png`](assets/hero.png).
+The hero banner referenced in the root `README.md` is located at [`docs/assets/hero.png`](assets/hero.png) (master version in `assets/brand/BuildWise_AI_with_title.png`).
 
 > [!NOTE]
-> **How to Re-capture `hero.png`:**
-> 1. Launch the web application: `npm run dev` in `frontend/`.
-> 2. Open `http://localhost:5173` in a Chromium browser at 1920×1080 resolution.
-> 3. Click on a prominent site (e.g. Bangalore `12.9716, 77.5946`) and run analysis.
-> 4. Open the **ReportSheet** modal to the **Cost & Plan** tab showing the blueprint and metrics.
-> 5. Take a full-window screenshot and save it to `docs/assets/hero.png`.
+> **Brand & Asset Organization:**
+> Official brand identity assets (logos, square icons, title banners) are organized in [`assets/brand/`](../assets/brand/) and mirrored in `frontend/public/brand/` for client serving and favicons.
 
 ---
 
