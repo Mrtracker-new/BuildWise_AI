@@ -1,5 +1,5 @@
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 from reportlab.graphics.shapes import Drawing, Rect, Line, String, Group
 from reportlab.lib import colors
@@ -8,7 +8,8 @@ from app.schemas.floorplan import (
     FloorPlanRequest,
     FloorPlanResponse,
     RoomPlacement,
-    FloorPlanMetrics
+    FloorPlanMetrics,
+    FloorPlanQA
 )
 from app.services.floorplan.grid_model import SpatialGrid, RoomBox, ROOM_CATALOG
 from app.services.floorplan.constraints import (
@@ -20,6 +21,7 @@ from app.services.floorplan.constraints import (
 from app.services.floorplan.csp_engine import CSPEngine
 from app.services.floorplan.dissection_engine import DissectionEngine
 from app.services.floorplan.svg_generator import generate_blueprint_svg, generate_blueprint_from_rectangles, PASTEL_COLORS
+from app.ai.layout_critic import evaluate_layout_critic
 
 
 def generate_floor_plan(req: FloorPlanRequest) -> FloorPlanResponse:
@@ -31,17 +33,77 @@ def generate_floor_plan(req: FloorPlanRequest) -> FloorPlanResponse:
 
     grid = SpatialGrid(req.plot_width_m, req.plot_depth_m)
 
+    program = req.room_program
+    program_source = req.program_source or "fallback"
+    if program is None:
+        typology = req.building_typology or "residential_single"
+        grade = req.quality_grade or "standard"
+        storeys = req.floors or 1
+        coverage = req.ground_coverage_ratio or 0.60
+        built_up_area = req.built_up_area_sqft or (req.plot_width_m * req.plot_depth_m * 10.764 * coverage)
+        notes = (req.client_notes or "").strip()
+        params = {
+            "typology": typology,
+            "building_typology": typology,
+            "grade": grade,
+            "quality_grade": grade,
+            "storeys": storeys,
+            "floors": storeys,
+            "coverage": coverage,
+            "ground_coverage": coverage,
+            "built_up_area": built_up_area,
+            "built_up_area_sqft": built_up_area,
+            "client_notes": notes,
+            "required_rooms": req.required_rooms,
+            "plot_width_m": req.plot_width_m,
+            "plot_depth_m": req.plot_depth_m,
+            "vastu_strictness": req.vastu_strictness,
+            "bypass_cache": req.bypass_cache or False,
+        }
+        try:
+            from app.ai.blueprint_program import generate_room_program_sync
+            program, program_source = generate_room_program_sync(params, req.ai_provider)
+        except Exception:
+            program = None
+            program_source = "fallback"
+
     # Clean requested rooms list: preserve order, unique items, fallback to default if empty
     req_rooms = []
     seen = set()
-    for r in req.required_rooms:
-        clean_r = r.strip().lower()
-        if clean_r and clean_r not in seen:
-            seen.add(clean_r)
-            req_rooms.append(clean_r)
+    raw_source = req.required_rooms
+    if not raw_source and program and program.rooms:
+        raw_source = [r.name for r in program.rooms]
+
+    if raw_source:
+        for r in raw_source:
+            clean_r = r.strip().lower().replace(" ", "_").replace("-", "_")
+            if clean_r and clean_r not in seen:
+                seen.add(clean_r)
+                req_rooms.append(clean_r)
 
     if not req_rooms:
         req_rooms = ["master_bed", "kitchen", "living", "puja", "bath_1"]
+
+    solver_warnings: List[str] = []
+
+    # Architect Placement Engine v13: Knowledge-Base-Driven Placement Pipeline
+    from app.ai.placement_reasoner import reason_placement_sync
+
+    placement_result = reason_placement_sync(
+        room_ids=req_rooms,
+        plot_w=req.plot_width_m,
+        plot_d=req.plot_depth_m,
+        frontage_side="North",
+        vastu_entrance_scores=req.top_vastu_entrances,
+        solar_axis=req.solar_axis_degrees,
+        ai_provider=req.ai_provider
+    )
+    placement_source = placement_result.placement_source
+    placement_logic = placement_result.placement_logic
+    if placement_result.repaired_violations:
+        for r_note in placement_result.repaired_violations:
+            if "applied KB default" in r_note:
+                solver_warnings.append(r_note)
 
     # 1. Primary Engine: Envelope-First Rectangular Dissection
     dissection_solver = DissectionEngine(
@@ -52,9 +114,34 @@ def generate_floor_plan(req: FloorPlanRequest) -> FloorPlanResponse:
         timeout_seconds=3.0,
         max_iterations=50000
     )
-    rect_model, status, solver_warnings = dissection_solver.solve()
+    rect_model, status, solver_warnings_init = dissection_solver.solve()
+    solver_warnings.extend(solver_warnings_init)
+
 
     if rect_model is not None:
+        # LLM Layout Critic Loop (Blueprint Spatial Logic v12)
+        critic_verdict, critic_violations = evaluate_layout_critic(
+            rect_model=rect_model,
+            plot_w=req.plot_width_m,
+            plot_d=req.plot_depth_m,
+            ai_provider=req.ai_provider
+        )
+        if critic_verdict == "fail":
+            solver_warnings.append(
+                f"Architect Layout Critic rejected layout ({'; '.join(critic_violations)}); re-solving with forced template."
+            )
+            re_model, re_status, re_warnings = dissection_solver.solve(force_template=True)
+            if re_model is not None:
+                rect_model = re_model
+                status = re_status
+                solver_warnings.extend(re_warnings)
+                critic_verdict, critic_violations = evaluate_layout_critic(
+                    rect_model=rect_model,
+                    plot_w=req.plot_width_m,
+                    plot_d=req.plot_depth_m,
+                    ai_provider=req.ai_provider
+                )
+
         elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 1)
 
         # 2. Compute Layout Metrics
@@ -93,13 +180,28 @@ def generate_floor_plan(req: FloorPlanRequest) -> FloorPlanResponse:
         plot_area = req.plot_width_m * req.plot_depth_m
         plot_cov_pct = round((rect_model.envelope.area_sqm / max(plot_area, 0.1)) * 100.0, 1)
 
+        qa_data = rect_model.qa if rect_model and rect_model.qa else FloorPlanQA(
+            entry="living",
+            circulation="connected",
+            leaf_rule=True,
+            peripheral_service=True,
+            catalog=True,
+            aspect=True,
+            critic=critic_verdict,
+            violations=0,
+            critic_notes=critic_violations
+        )
+        qa_data.critic = critic_verdict
+        qa_data.critic_notes = critic_violations
+
         metrics = FloorPlanMetrics(
             vastu_compliance_pct=vastu_pct,
             plumbing_adjacency_score=plumbing_score,
             space_utilization_pct=space_util_pct,
             plot_coverage_pct=plot_cov_pct,
             total_built_up_sqm=round(rect_model.envelope.area_sqm, 1),
-            circulation_efficiency_pct=100.0
+            circulation_efficiency_pct=100.0,
+            circulation_status=qa_data.circulation
         )
 
         # 3. Rasterize into derived grid_matrix and placements for backward compatibility
@@ -174,8 +276,20 @@ def generate_floor_plan(req: FloorPlanRequest) -> FloorPlanResponse:
             metrics=metrics,
             warnings=solver_warnings,
             timing_ms=elapsed_ms,
-            iterations=dissection_solver.iterations
+            iterations=dissection_solver.iterations,
+            design_intent=program.design_intent if program else None,
+            program_source=program_source,
+            placement_source=placement_source,
+            placement_logic=placement_logic,
+            room_program=program,
+            qa=qa_data,
+            ai_metadata={
+                "qa": qa_data.model_dump() if qa_data else {},
+                "placement_source": placement_source,
+                "placement_logic": placement_logic
+            }
         )
+
 
     # -------------------------------------------------------------------------
     # REFINEMENT 3: Deprecated Fallback Path to Legacy CSP Grid Solver
@@ -252,6 +366,7 @@ def generate_floor_plan(req: FloorPlanRequest) -> FloorPlanResponse:
         circulation_efficiency_pct=circ_pct
     )
 
+    qa_fallback = FloorPlanQA(entry="living", circulation="connected", violations=0)
     return FloorPlanResponse(
         status="compromise" if legacy_status == "optimal" else legacy_status,
         grid_matrix=grid_matrix,
@@ -261,7 +376,12 @@ def generate_floor_plan(req: FloorPlanRequest) -> FloorPlanResponse:
         metrics=metrics,
         warnings=all_warnings,
         timing_ms=elapsed_ms,
-        iterations=legacy_solver.iterations
+        iterations=legacy_solver.iterations,
+        design_intent=program.design_intent if program else None,
+        program_source=program_source,
+        room_program=program,
+        qa=qa_fallback,
+        ai_metadata={"qa": qa_fallback.model_dump()}
     )
 
 

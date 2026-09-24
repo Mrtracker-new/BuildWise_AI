@@ -43,7 +43,7 @@ from app.services import (
     generate_floor_plan
 )
 
-from app.ai import get_ai_adapter
+from app.ai import get_ai_adapter, generate_room_program
 
 app = FastAPI(
     title="BuildWise AI API",
@@ -258,7 +258,8 @@ async def analyze_site(req: AnalysisRequest, request: Request):
         "recommendations": [r.model_dump() for r in top_8_recs],
         "built_up_area_sqft": req.built_up_area_sqft,
         "quality_grade": req.quality_grade,
-        "floors": req.floors
+        "floors": req.floors,
+        "client_requirements": req.client_requirements
     }
 
     # 8. Generate engineering commentary via requested AI adapter
@@ -413,6 +414,38 @@ async def create_generative_floorplan(req: FloorPlanRequest):
     Returns 2D matrix, placements, metrics, and production-grade SVG blueprint.
     """
     try:
+        # Pre-compute or resolve RoomProgram via LLM before solver execution if not provided
+        if req.room_program is None:
+            typology = req.building_typology or "residential_single"
+            grade = req.quality_grade or "standard"
+            storeys = req.floors or 1
+            coverage = req.ground_coverage_ratio or 0.60
+            built_up_area = req.built_up_area_sqft or (req.plot_width_m * req.plot_depth_m * 10.764 * coverage)
+            notes = req.client_notes
+            params = {
+                "typology": typology,
+                "building_typology": typology,
+                "grade": grade,
+                "quality_grade": grade,
+                "storeys": storeys,
+                "floors": storeys,
+                "coverage": coverage,
+                "ground_coverage": coverage,
+                "built_up_area": built_up_area,
+                "built_up_area_sqft": built_up_area,
+                "client_notes": notes,
+                "solar_axis_degrees": req.solar_axis_degrees,
+                "prevailing_wind_direction_degrees": req.prevailing_wind_direction_degrees,
+                "top_vastu_entrances": req.top_vastu_entrances,
+                "required_rooms": req.required_rooms,
+                "plot_width_m": req.plot_width_m,
+                "plot_depth_m": req.plot_depth_m,
+                "vastu_strictness": req.vastu_strictness,
+                "bypass_cache": req.bypass_cache or False,
+            }
+            prog, prog_source = await generate_room_program(params, req.ai_provider)
+            req = req.model_copy(update={"room_program": prog, "program_source": prog_source})
+
         response = generate_floor_plan(req)
         return response
     except Exception as e:
