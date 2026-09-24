@@ -9,6 +9,7 @@ export interface AnalysisRequest {
   override_land_rate_per_sqft?: number;
   plot_area_sqft?: number;
   ground_coverage_ratio?: number;
+  client_requirements?: string;
 }
 
 export interface FactorScore {
@@ -363,18 +364,65 @@ export interface WindowGeometry {
   width_m: number;
 }
 
+export interface FloorPlanQA {
+  entry: string;
+  circulation: string;
+  leaf_rule?: boolean;
+  peripheral_service?: boolean;
+  catalog?: boolean;
+  aspect?: boolean;
+  critic?: string;
+  violations: number;
+  critic_notes?: string[];
+}
+
 export interface RectanglesModel {
   envelope: EnvelopeRect;
   rooms: RoomRectangle[];
   doors: DoorGeometry[];
   windows: WindowGeometry[];
+  qa?: FloorPlanQA;
+}
+
+export interface RoomSpec {
+  name: string;
+  min_area_pct: number;
+  max_area_pct: number;
+  vastu_zone: 'N' | 'NE' | 'E' | 'SE' | 'S' | 'SW' | 'W' | 'NW' | 'CENTER';
+  adjacency: string[];
+  requires_plumbing: boolean;
+  priority: number;
+}
+
+export interface SolverHints {
+  target_utilization: number;
+  allow_corridors: boolean;
+}
+
+export interface RoomProgram {
+  rooms: RoomSpec[];
+  design_intent: string;
+  solver_hints: SolverHints;
 }
 
 export interface FloorPlanRequest {
   plot_width_m: number;
   plot_depth_m: number;
-  required_rooms: string[];
+  required_rooms?: string[];
   vastu_strictness: 'high' | 'medium' | 'low';
+  building_typology?: string;
+  quality_grade?: string;
+  floors?: number;
+  built_up_area_sqft?: number;
+  ground_coverage_ratio?: number;
+  client_notes?: string;
+  ai_provider?: string;
+  room_program?: RoomProgram;
+  solar_axis_degrees?: number;
+  prevailing_wind_direction_degrees?: number;
+  top_vastu_entrances?: string[];
+  program_source?: string;
+  bypass_cache?: boolean;
 }
 
 export interface RoomPlacement {
@@ -398,6 +446,7 @@ export interface FloorPlanMetrics {
   plot_coverage_pct?: number;
   total_built_up_sqm: number;
   circulation_efficiency_pct: number;
+  circulation_status?: string;
 }
 
 export interface FloorPlanResponse {
@@ -408,9 +457,16 @@ export interface FloorPlanResponse {
   svg_blueprint: string;
   svg_blueprint_paper?: string;
   metrics: FloorPlanMetrics;
+  qa?: FloorPlanQA;
   warnings: string[];
   timing_ms: number;
   iterations: number;
+  design_intent?: string;
+  program_source?: 'llm' | 'cache' | 'fallback' | string;
+  placement_source?: 'llm+kb' | 'kb-default' | string;
+  placement_logic?: Record<string, string> | string[];
+  ai_metadata?: Record<string, any>;
+  room_program?: RoomProgram;
 }
 
 export interface ReportRequestPayload {

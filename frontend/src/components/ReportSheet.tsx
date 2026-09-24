@@ -4,6 +4,7 @@ import type {
   SiteVisionResponse,
   FloorPlanResponse,
   ReportRequestPayload,
+  AnalysisRequest,
 } from '../services/types';
 import { ReportHeroBand } from './ReportHeroBand';
 import { FactorBreakdown } from './FactorBreakdown';
@@ -26,6 +27,7 @@ export interface ReportSheetProps {
   isOpen: boolean;
   onClose: () => void;
   analysisData: AnalysisResponse;
+  analysisRequest?: AnalysisRequest;
   siteVisionData: SiteVisionResponse | null;
   isSiteVisionLoading: boolean;
   onRunSiteVision: (modeOverride?: 'segformer' | 'index-only') => void;
@@ -51,6 +53,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
   isOpen,
   onClose,
   analysisData,
+  analysisRequest,
   siteVisionData,
   isSiteVisionLoading,
   onRunSiteVision,
@@ -512,6 +515,15 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                         }
                         activeFloorPlan={floorPlanData}
                         onFloorPlanGenerated={onFloorPlanGenerated}
+                        buildingTypology={analysisRequest?.building_typology}
+                        qualityGrade={analysisRequest?.quality_grade}
+                        floors={analysisRequest?.floors}
+                        builtUpAreaSqft={analysisRequest?.built_up_area_sqft}
+                        groundCoverageRatio={analysisRequest?.ground_coverage_ratio ?? analysisData.land_value?.ground_coverage_ratio_applied}
+                        clientNotes={analysisRequest?.client_requirements}
+                        aiProvider={analysisRequest?.ai_provider ?? analysisData.ai_metadata?.provider_requested}
+                        solarAxisDegrees={analysisData.orientation?.optimal_axis_degrees}
+                        prevailingWindDirectionDegrees={analysisData.orientation?.prevailing_wind_direction_degrees}
                       />
                     </div>
                   </div>

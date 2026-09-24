@@ -9,6 +9,16 @@ interface FloorPlanGeneratorCardProps {
   defaultDepthM?: number;
   onFloorPlanGenerated?: (plan: FloorPlanResponse) => void;
   activeFloorPlan?: FloorPlanResponse | null;
+  buildingTypology?: string;
+  qualityGrade?: string;
+  floors?: number;
+  builtUpAreaSqft?: number;
+  groundCoverageRatio?: number;
+  clientNotes?: string;
+  aiProvider?: string;
+  solarAxisDegrees?: number;
+  prevailingWindDirectionDegrees?: number;
+  topVastuEntrances?: string[];
 }
 
 const AVAILABLE_ROOMS = [
@@ -28,6 +38,16 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   defaultDepthM = 12.0,
   onFloorPlanGenerated,
   activeFloorPlan = null,
+  buildingTypology,
+  qualityGrade,
+  floors,
+  builtUpAreaSqft,
+  groundCoverageRatio,
+  clientNotes,
+  aiProvider,
+  solarAxisDegrees,
+  prevailingWindDirectionDegrees,
+  topVastuEntrances,
 }) => {
   const [userWidth, setUserWidth] = useState<number | null>(null);
   const [userDepth, setUserDepth] = useState<number | null>(null);
@@ -46,6 +66,13 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   const [localFloorPlan, setLocalFloorPlan] = useState<FloorPlanResponse | null>(null);
   const floorPlan = localFloorPlan ?? activeFloorPlan;
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Synchronize when parent activeFloorPlan changes
+  React.useEffect(() => {
+    if (activeFloorPlan !== undefined) {
+      setLocalFloorPlan(activeFloorPlan);
+    }
+  }, [activeFloorPlan]);
 
   const toggleRoom = (roomId: string) => {
     setSelectedRooms((prev) =>
@@ -69,6 +96,17 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       plot_depth_m: Math.max(6.0, Math.min(60.0, Number(plotDepth) || 12.0)),
       required_rooms: selectedRooms,
       vastu_strictness: strictness,
+      building_typology: buildingTypology,
+      quality_grade: qualityGrade,
+      floors: floors,
+      built_up_area_sqft: builtUpAreaSqft,
+      ground_coverage_ratio: groundCoverageRatio,
+      client_notes: clientNotes,
+      ai_provider: aiProvider,
+      solar_axis_degrees: solarAxisDegrees,
+      prevailing_wind_direction_degrees: prevailingWindDirectionDegrees,
+      top_vastu_entrances: topVastuEntrances,
+      bypass_cache: true,
     };
 
     try {
@@ -239,6 +277,90 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       {/* Blueprint & Metrics Display */}
       {floorPlan && (
         <div className="space-y-3 pt-1">
+          {/* Design Brief Accent-tinted Callout */}
+          <div className="rounded-[10px] bg-[var(--accent-tint)] border border-[var(--accent)]/20 p-3 space-y-1.5">
+            <div className="flex items-center justify-between flex-wrap gap-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--accent)]">
+                Design Brief
+              </span>
+              <div className="flex items-center gap-1.5">
+                {floorPlan.qa?.critic && (
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-semibold select-none ${
+                      floorPlan.qa.critic === 'pass'
+                        ? 'bg-emerald-600 text-white'
+                        : floorPlan.qa.critic === 'skipped'
+                        ? 'bg-[var(--fill)] text-[var(--text-2)] border border-[var(--hairline)]'
+                        : 'bg-rose-600 text-white'
+                    }`}
+                  >
+                    {floorPlan.qa.critic === 'pass'
+                      ? 'Architect review: passed'
+                      : floorPlan.qa.critic === 'skipped'
+                      ? 'Architect review: skipped'
+                      : 'Architect review: flagged'}
+                  </span>
+                )}
+                {floorPlan.placement_source && (
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-semibold select-none ${
+                      floorPlan.placement_source.includes('ai') || floorPlan.placement_source.includes('llm')
+                        ? 'bg-[var(--accent)] text-white'
+                        : 'bg-[var(--fill)] text-[var(--text-2)] border border-[var(--hairline)]'
+                    }`}
+                  >
+                    {floorPlan.placement_source.includes('ai') || floorPlan.placement_source.includes('llm')
+                      ? 'Placement: AI-reasoned + KB-validated'
+                      : 'Placement: KB-standard'}
+                  </span>
+                )}
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-semibold select-none ${
+                    floorPlan.program_source === 'llm' || floorPlan.program_source === 'cache'
+                      ? 'bg-[var(--accent)] text-white'
+                      : 'bg-[var(--fill)] text-[var(--text-2)] border border-[var(--hairline)]'
+                  }`}
+                >
+                  {floorPlan.program_source === 'llm' || floorPlan.program_source === 'cache'
+                    ? 'Program: AI-generated'
+                    : 'Program: Standard'}
+                </span>
+              </div>
+            </div>
+            <p className="text-[12px] italic text-[var(--text-1)] leading-relaxed">
+              {floorPlan.design_intent ||
+                'Space plan optimized for functional circulation, Vastu compliance, and plumbing consolidation.'}
+            </p>
+            {(() => {
+              const logicList: { room?: string; text: string }[] = [];
+              if (Array.isArray(floorPlan.placement_logic)) {
+                floorPlan.placement_logic.forEach((item: any) => {
+                  logicList.push({ text: String(item) });
+                });
+              } else if (floorPlan.placement_logic && typeof floorPlan.placement_logic === 'object') {
+                Object.entries(floorPlan.placement_logic).forEach(([room, text]) => {
+                  logicList.push({ room, text: String(text) });
+                });
+              }
+              if (logicList.length === 0) return null;
+              return (
+                <details className="mt-2 text-[12px] group">
+                  <summary className="cursor-pointer text-[11px] font-medium text-[var(--accent)] hover:underline select-none flex items-center gap-1">
+                    <span>Placement Logic ({logicList.length} rules applied)</span>
+                  </summary>
+                  <ul className="mt-1.5 space-y-1 pl-4 list-disc text-[11px] text-[var(--text-1)]">
+                    {logicList.map((item, idx) => (
+                      <li key={idx} className="leading-snug">
+                        {item.room && <span className="font-semibold capitalize mr-1">{item.room.replace('_', ' ')}:</span>}
+                        {item.text}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              );
+            })()}
+          </div>
+
           {/* Key-Value Metrics Rows (No background micro-tiles) */}
           <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
             <div className="h-10 flex items-center justify-between px-0.5">
@@ -265,6 +387,36 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                 {floorPlan.metrics.plot_coverage_pct ? `${floorPlan.metrics.plot_coverage_pct.toFixed(0)}%` : '—'}
               </span>
             </div>
+            <div className="h-10 flex items-center justify-between px-0.5">
+              <span className="text-[13px] font-normal text-[var(--text-2)]">Circulation</span>
+              <span className="text-[13px] font-semibold text-emerald-600 dark:text-emerald-400 capitalize tabular-nums whitespace-nowrap">
+                {floorPlan.metrics.circulation_status || floorPlan.qa?.circulation || 'Connected'}
+              </span>
+            </div>
+            {floorPlan.qa && (
+              <>
+                <div className="h-10 flex items-center justify-between px-0.5">
+                  <span className="text-[13px] font-normal text-[var(--text-2)]">Solver QA gate</span>
+                  <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
+                    {floorPlan.qa.violations === 0 ? 'Passed (0 violations)' : `${floorPlan.qa.violations} violations`}
+                  </span>
+                </div>
+                {floorPlan.qa.critic && (
+                  <div className="h-10 flex items-center justify-between px-0.5">
+                    <span className="text-[13px] font-normal text-[var(--text-2)]">Architect review</span>
+                    <span className={`text-[13px] font-semibold tabular-nums whitespace-nowrap capitalize ${
+                      floorPlan.qa.critic === 'pass'
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : floorPlan.qa.critic === 'skipped'
+                        ? 'text-[var(--text-2)]'
+                        : 'text-rose-600'
+                    }`}>
+                      {floorPlan.qa.critic === 'pass' ? 'Passed' : floorPlan.qa.critic}
+                    </span>
+                  </div>
+                )}
+              </>
+            )}
             <div className="h-10 flex items-center justify-between px-0.5">
               <span className="text-[13px] font-normal text-[var(--text-2)]">Engine latency</span>
               <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">

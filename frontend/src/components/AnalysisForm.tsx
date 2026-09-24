@@ -230,6 +230,30 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
         </div>
       </div>
 
+      {/* Client Requirements (Optional) */}
+      <div className="space-y-1.5 min-w-0">
+        <div className="flex justify-between items-baseline gap-2 min-w-0">
+          <label
+            htmlFor="client-requirements-input"
+            className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)]"
+          >
+            Client Requirements <span className="font-normal normal-case text-[10px] text-[var(--text-3)]">(Optional)</span>
+          </label>
+          <span className="text-[10px] text-[var(--text-3)] tabular-nums shrink-0">
+            {(request.client_requirements?.length || 0)}/240
+          </span>
+        </div>
+        <textarea
+          id="client-requirements-input"
+          rows={3}
+          maxLength={240}
+          value={request.client_requirements || ''}
+          onChange={(e) => onChange({ client_requirements: e.target.value })}
+          placeholder="e.g. home office, 2 baths, north-facing study, open kitchen"
+          className="w-full bg-[var(--fill)] border border-[var(--separator)] rounded-[10px] p-2.5 text-[13px] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)] resize-none transition-all duration-200"
+        />
+      </div>
+
       {/* Technical Explanation Generator */}
       <div className="min-w-0">
         <label

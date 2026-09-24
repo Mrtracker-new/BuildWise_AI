@@ -828,6 +828,7 @@ export const App: React.FC = () => {
           isOpen={isReportOpen}
           onClose={handleCloseReport}
           analysisData={analysisData}
+          analysisRequest={request}
           siteVisionData={siteVisionData}
           isSiteVisionLoading={isSiteVisionLoading}
           onRunSiteVision={handleRunSiteVision}

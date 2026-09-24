@@ -292,6 +292,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
           onMouseUp={handleMouseUp}
         >
           <div
+            key={`blueprint-svg-${mode}-${sanitizedSvg.length}-${plotWidthM}-${plotDepthM}`}
             className="relative flex items-center justify-center max-w-full max-h-full drop-shadow-md"
             dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
           />
@@ -461,6 +462,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                   }}
                 >
                   <div
+                    key={`modal-blueprint-svg-${mode}-${sanitizedSvg.length}-${plotWidthM}-${plotDepthM}`}
                     className="relative flex items-center justify-center max-w-full max-h-full drop-shadow-xl"
                     dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
                   />
