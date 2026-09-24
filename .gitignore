@@ -28,7 +28,7 @@ ENV/
 # Testing & Cache
 .pytest_cache/
 .coverage
-htmlcov/
+desktop.ini
 
 # Logs
 logs/
