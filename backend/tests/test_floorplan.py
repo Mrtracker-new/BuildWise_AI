@@ -273,10 +273,15 @@ def test_dissection_engine_contiguity_and_no_voids():
     total_room_area = sum(r.area_sqm for r in rooms)
     assert abs(total_room_area - env.area_sqm) / env.area_sqm < 0.02
 
-    # 2. Minimum dimension >= 1.95m for all rooms
+    # 2. Minimum dimension >= 1.95m for all rooms (excluding corridor and compact leaf baths)
     for r in rooms:
-        assert r.width >= 1.95, f"Room {r.room_id} width {r.width} < 2.0m"
-        assert r.height >= 1.95, f"Room {r.room_id} height {r.height} < 2.0m"
+        if r.room_id == "corridor":
+            assert r.height >= 1.0 or r.width >= 1.0
+        elif "bath" in r.room_id:
+            assert r.width >= 1.5 and r.height >= 1.95
+        else:
+            assert r.width >= 1.95, f"Room {r.room_id} width {r.width} < 2.0m"
+            assert r.height >= 1.95, f"Room {r.room_id} height {r.height} < 2.0m"
 
     # 3. Pairwise intersection area is strictly zero
     for i in range(len(rooms)):
@@ -353,7 +358,7 @@ def test_dissection_acceptance_demos():
     res1 = generate_floor_plan(req1)
     assert res1.status == "optimal"
     assert res1.metrics.space_utilization_pct >= 95.0
-    assert len(res1.rectangles.rooms) == 6
+    assert len(res1.rectangles.rooms) in (6, 7)  # 6 rooms + optional explicit circulation corridor
 
     # Demo 2: 8m x 8m (4 rooms)
     req2 = FloorPlanRequest(
@@ -378,5 +383,348 @@ def test_dissection_acceptance_demos():
     assert res3.status == "optimal"
     assert res3.metrics.space_utilization_pct >= 95.0
     assert len(res3.rectangles.rooms) == 9
+
+
+def test_blueprint_spatial_logic_v11_16x19m():
+    """
+    Blueprint Spatial Logic v11 Comprehensive Verification:
+    Tests the 16.1m x 19.3m residential case ensuring:
+    1. Functional Zoning: PUBLIC North frontage, PRIVATE West/SW flank, SERVICE East/SE flank.
+    2. Circulation Graph & Entry: Main entry arrow lands on North frontage wall inside living extent.
+    3. Bathrooms: BATH 1 is common off corridor/hall; BATH 2 is ensuite opening ONLY off master bedroom.
+    4. Adjacency: Zero forbidden shared walls (bath-puja, bath-kitchen, bed-kitchen).
+    5. Room Area Catalog: No mega-rooms (baths <= 6.0 m2, master bedroom <= 22.0 m2, kitchen <= 16.0 m2).
+    6. Aspect ratio <= 1:2.5 for all rooms (excluding corridor).
+    7. BFS Reachability: 100% connected door graph.
+    8. Solver QA Gate: qa: { entry: "living", circulation: "connected", violations: 0 }.
+    9. SVG Rendering: No exterior door arcs for bathrooms; main entry arrow rendered.
+    """
+    from collections import deque
+    from app.services.floorplan.grid_model import get_room_catalog_entry
+    from app.services.floorplan.constraints import is_forbidden_shared_wall
+
+    req = FloorPlanRequest(
+        plot_width_m=16.1,
+        plot_depth_m=19.3,
+        required_rooms=["master_bed", "kitchen", "living", "puja", "bath_1", "bath_2", "bed_2", "dining"],
+        vastu_strictness="high"
+    )
+    res = generate_floor_plan(req)
+
+    # 1. Optimal solve status & Rectangles model present
+    assert res.status == "optimal"
+    assert res.rectangles is not None
+    assert res.qa is not None
+    assert res.qa.violations == 0
+    assert res.qa.circulation == "connected"
+    assert res.qa.entry in ("living", "hall")
+    assert res.metrics.circulation_status == "connected"
+
+    rects = res.rectangles
+    rooms_by_id = {r.room_id: r for r in rects.rooms}
+
+    # Verify all 8 requested rooms + circulation corridor are present
+    expected_rooms = ["master_bed", "kitchen", "living", "puja", "bath_1", "bath_2", "bed_2", "dining"]
+    for er in expected_rooms:
+        assert er in rooms_by_id, f"Missing expected room: {er}"
+
+    # 2. Main Entry Door Verification:
+    # Must be on North frontage wall and land strictly inside Living/Hall extent
+    main_doors = [d for d in rects.doors if d.door_id == "main_entry" or d.from_room == "exterior"]
+    assert len(main_doors) >= 1, "Main entry door not found"
+    entry_door = main_doors[0]
+    assert entry_door.to_room in ("living", "hall")
+    assert entry_door.from_room == "exterior"
+    assert entry_door.wall_edge == "horizontal"
+    assert abs(entry_door.y1 - rects.envelope.y) < 0.1
+    # Check door falls within living room X range
+    living = rooms_by_id["living"]
+    assert living.x - 0.05 <= entry_door.x1 <= living.x + living.width + 0.05
+    assert living.x - 0.05 <= entry_door.x2 <= living.x + living.width + 0.05
+
+    # 3. Bathroom Doors Verification:
+    # BATH 1 = common (door off corridor/hall)
+    bath1_doors = [d for d in rects.doors if d.from_room == "bath_1" or d.to_room == "bath_1"]
+    assert len(bath1_doors) >= 1, "Bath 1 has no door"
+    bath1_connected = {d.from_room for d in bath1_doors} | {d.to_room for d in bath1_doors}
+    assert any("corridor" in r or "living" in r for r in bath1_connected), f"Bath 1 not off corridor: {bath1_connected}"
+
+    # BATH 2 = ensuite (door ONLY off master bedroom)
+    bath2_doors = [d for d in rects.doors if d.from_room == "bath_2" or d.to_room == "bath_2"]
+    assert len(bath2_doors) >= 1, "Bath 2 has no door"
+    for d in bath2_doors:
+        other_side = d.from_room if d.to_room == "bath_2" else d.to_room
+        assert other_side == "master_bed", f"Ensuite Bath 2 door must only connect to master_bed, got {other_side}"
+
+    # No exterior doors on bathrooms
+    for d in rects.doors:
+        if "bath" in d.from_room or "bath" in d.to_room:
+            assert d.from_room != "exterior" and d.to_room != "exterior", "Bathroom has an exterior door!"
+
+    # 4. Adjacency Prohibition Matrix: Zero forbidden shared walls
+    for i in range(len(rects.rooms)):
+        r1 = rects.rooms[i]
+        for j in range(i + 1, len(rects.rooms)):
+            r2 = rects.rooms[j]
+            # Check if r1 and r2 share a wall segment >= 0.2m
+            vert_share = (abs(r1.x + r1.width - r2.x) < 0.05 or abs(r2.x + r2.width - r1.x) < 0.05) and (
+                min(r1.y + r1.height, r2.y + r2.height) - max(r1.y, r2.y) >= 0.2
+            )
+            horiz_share = (abs(r1.y + r1.height - r2.y) < 0.05 or abs(r2.y + r2.height - r1.y) < 0.05) and (
+                min(r1.x + r1.width, r2.x + r2.width) - max(r1.x, r2.x) >= 0.2
+            )
+            if vert_share or horiz_share:
+                assert not is_forbidden_shared_wall(r1.room_id, r2.room_id), (
+                    f"Forbidden adjacency detected between {r1.room_id} and {r2.room_id}"
+                )
+
+    # Pooja NE touching hall with no bath wall
+    puja = rooms_by_id["puja"]
+    assert puja.x >= living.x, "Pooja must be in the NE corner"
+    # Shared wall with living
+    puja_living_share = (abs(puja.x - (living.x + living.width)) < 0.05) and (
+        min(puja.y + puja.height, living.y + living.height) - max(puja.y, living.y) >= 0.5
+    )
+    assert puja_living_share, "Pooja must touch living room"
+
+    # Bedrooms on SW/W band
+    mbed = rooms_by_id["master_bed"]
+    bed2 = rooms_by_id["bed_2"]
+    mid_x = rects.envelope.x + (rects.envelope.width / 2.0)
+    mid_y = rects.envelope.y + (rects.envelope.height / 2.0)
+    assert mbed.x < mid_x and mbed.y + mbed.height >= mid_y, "Master bedroom must be in SW quadrant"
+    assert bed2.x < mid_x, "Bedroom 2 must be on West flank"
+
+    # Kitchen in SE touching dining
+    kitchen = rooms_by_id["kitchen"]
+    dining = rooms_by_id["dining"]
+    assert kitchen.x >= mid_x and kitchen.y + kitchen.height >= mid_y, "Kitchen must be in SE quadrant"
+    kitchen_dining_share = (abs(kitchen.y - (dining.y + dining.height)) < 0.05) and (
+        min(kitchen.x + kitchen.width, dining.x + dining.width) - max(kitchen.x, dining.x) >= 0.5
+    )
+    assert kitchen_dining_share, "Kitchen must share wall with dining"
+
+    # 5. Realistic Room Area Catalog Ranges (No Mega-Rooms, No 16.5m2 baths, No 44m2 bedrooms)
+    for r in rects.rooms:
+        if "corridor" in r.room_id:
+            continue
+        cat = get_room_catalog_entry(r.room_id)
+        cat_min = cat.get("catalog_min_m2", 3.0)
+        cat_max = cat.get("catalog_max_m2", 35.0)
+        assert r.area_sqm >= round(cat_min * 0.90, 2), f"Room {r.room_id} area {r.area_sqm} < min {cat_min}"
+        assert r.area_sqm <= round(cat_max * 1.10, 2), f"Room {r.room_id} area {r.area_sqm} > max {cat_max}"
+
+    # Specific strict checks
+    assert rooms_by_id["bath_1"].area_sqm <= 6.0, f"Bath 1 oversized: {rooms_by_id['bath_1'].area_sqm}"
+    assert rooms_by_id["bath_2"].area_sqm <= 6.0, f"Bath 2 oversized: {rooms_by_id['bath_2'].area_sqm}"
+    assert rooms_by_id["master_bed"].area_sqm <= 22.0, f"Master bedroom oversized: {rooms_by_id['master_bed'].area_sqm}"
+    assert rooms_by_id["kitchen"].area_sqm <= 16.0, f"Kitchen oversized: {rooms_by_id['kitchen'].area_sqm}"
+
+    # 6. Aspect ratios <= 1:2.5 (excluding corridors)
+    for r in rects.rooms:
+        if "corridor" in r.room_id:
+            continue
+        ar = max(r.width, r.height) / max(min(r.width, r.height), 0.01)
+        assert ar <= 2.50, f"Room {r.room_id} aspect ratio {ar:.2f} exceeds 1:2.5"
+
+    # 7. BFS Reachability from Entry
+    door_adj = {r.room_id: set() for r in rects.rooms}
+    for d in rects.doors:
+        if d.from_room != "exterior" and d.to_room != "exterior":
+            if d.from_room in door_adj and d.to_room in door_adj:
+                door_adj[d.from_room].add(d.to_room)
+                door_adj[d.to_room].add(d.from_room)
+
+    visited = set()
+    queue = deque(["living"])
+    visited.add("living")
+    while queue:
+        curr = queue.popleft()
+        for nbr in door_adj.get(curr, []):
+            if nbr not in visited:
+                visited.add(nbr)
+                queue.append(nbr)
+
+    room_ids_set = {r.room_id for r in rects.rooms}
+    assert visited == room_ids_set, f"Unreachable rooms via door BFS: {room_ids_set - visited}"
+
+    # 8. SVG Blueprint Verification
+    assert "<svg" in res.svg_blueprint
+    assert "main_entry" in res.svg_blueprint or "MAIN ENTRY" in res.svg_blueprint
+    # Ensure no exterior door arc for bathrooms
+    assert not ('from="bath' in res.svg_blueprint and 'to="exterior"' in res.svg_blueprint)
+
+
+def test_blueprint_topological_invariants_10x10m_v12():
+    """
+    BLUEPRINT TOPOLOGICAL INVARIANTS + LLM LAYOUT CRITIC v12
+    Re-runs the exact failing case (~10.9m x 10.6m, 5 rooms):
+    1. LEAF RULE: Bath has degree == 1 in door graph (single door to corridor, no through-traffic).
+    2. PERIPHERAL SERVICE: Bath and Kitchen touch exterior walls. Centroids outside central 40% box.
+    3. CORRIDOR RULE: 1.2m wide explicit corridor separates public and rear bands.
+    4. EXTERIOR WALL RULE: Living, Master Bed, Kitchen each touch exterior wall.
+    5. CATALOG CLAMPS:
+       - Bath: 3.5 - 6.0 m2 (compact leaf)
+       - Puja: 4.0 - 9.0 m2 with min width >= 2.4m (no strip rooms)
+       - Master Bed: 14 - 22 m2
+       - Kitchen: 9 - 16 m2
+       - Living: 18 - 35 m2
+       - Aspect ratio <= 1:2.2 for every room.
+    6. DOOR VISIBILITY: Bath door does not face entry axis.
+    7. ZERO doors between two private/service rooms.
+    8. Mock mode: critic skipped without crashing, invariants strictly preserved.
+    """
+    from app.services.floorplan.grid_model import get_room_catalog_entry
+    from app.services.floorplan.constraints import is_bath_or_wc, is_service_room
+
+    req = FloorPlanRequest(
+        plot_width_m=10.9,
+        plot_depth_m=10.6,
+        required_rooms=["master_bed", "kitchen", "living", "puja", "bath_1"],
+        vastu_strictness="high",
+        ai_provider="mock"
+    )
+    res = generate_floor_plan(req)
+
+    assert res.status == "optimal"
+    assert res.rectangles is not None
+    assert res.qa is not None
+    assert res.qa.violations == 0
+    assert res.qa.circulation == "connected"
+    assert res.qa.leaf_rule is True
+    assert res.qa.peripheral_service is True
+    assert res.qa.catalog is True
+    assert res.qa.aspect is True
+    assert res.qa.entry in ("living", "hall")
+    assert res.qa.critic in ("pass", "skipped")
+
+    rects = res.rectangles
+    rooms_by_id = {r.room_id: r for r in rects.rooms}
+
+    # 1. Rooms Presence: all 5 rooms + corridor
+    for expected in ["master_bed", "kitchen", "living", "puja", "bath_1", "corridor"]:
+        assert expected in rooms_by_id, f"Missing room {expected}"
+
+    env = rects.envelope
+    ex0, ex1 = env.x, env.x + env.width
+    ey0, ey1 = env.y, env.y + env.height
+    cx0, cx1 = ex0 + 0.30 * env.width, ex0 + 0.70 * env.width
+    cy0, cy1 = ey0 + 0.30 * env.height, ey0 + 0.70 * env.height
+
+    # 2. Leaf Rule: Degree of bath_1 == 1
+    degree = {r.room_id: 0 for r in rects.rooms}
+    for d in rects.doors:
+        if d.door_id == "main_entry" or d.from_room == "exterior" or d.to_room == "exterior":
+            continue
+        if d.from_room in degree:
+            degree[d.from_room] += 1
+        if d.to_room in degree:
+            degree[d.to_room] += 1
+
+    assert degree["bath_1"] == 1, f"Bath must have degree == 1, got {degree['bath_1']}"
+    assert degree["puja"] == 1, f"Puja must have degree == 1, got {degree['puja']}"
+
+    # Bath door must open to corridor only
+    bath_doors = [d for d in rects.doors if d.from_room == "bath_1" or d.to_room == "bath_1"]
+    assert len(bath_doors) == 1
+    bd = bath_doors[0]
+    other_end = bd.from_room if bd.to_room == "bath_1" else bd.to_room
+    assert other_end == "corridor", f"Bath door must open to corridor only, got {other_end}"
+
+    # 3. Compact Bath Dimensions & Exterior Wall:
+    bath = rooms_by_id["bath_1"]
+    assert 3.5 <= bath.area_sqm <= 6.0, f"Bath area must be 3.5-6.0 m2, got {bath.area_sqm}"
+    # Bath touches South exterior wall
+    assert abs((bath.y + bath.height) - ey1) < 0.08, "Bath must touch South exterior wall"
+    # Centroid outside central 40% box
+    bath_cx = bath.x + bath.width / 2.0
+    bath_cy = bath.y + bath.height / 2.0
+    assert not (cx0 <= bath_cx <= cx1 and cy0 <= bath_cy <= cy1), "Bath centroid cannot be in central 40% box"
+
+    # 4. Puja: NE corner, width >= 2.4m, area <= 9.0m2
+    puja = rooms_by_id["puja"]
+    assert min(puja.width, puja.height) >= 2.35, f"Puja width must be >= 2.4m, got {min(puja.width, puja.height)}"
+    assert 4.0 <= puja.area_sqm <= 9.0, f"Puja area must be 4.0-9.0 m2, got {puja.area_sqm}"
+    assert puja.x >= rooms_by_id["living"].x, "Puja must be in East/NE quadrant"
+
+    # 5. Kitchen: SE corner leaf, area 9-16 m2
+    kitch = rooms_by_id["kitchen"]
+    assert 9.0 * 0.90 <= kitch.area_sqm <= 16.0 * 1.10, f"Kitchen area must be 9-16 m2, got {kitch.area_sqm}"
+    assert abs((kitch.y + kitch.height) - ey1) < 0.08, "Kitchen must touch South exterior wall"
+    assert abs((kitch.x + kitch.width) - ex1) < 0.08, "Kitchen must touch East exterior wall"
+
+    # 6. Master Bed: SW region, area 14-22 m2
+    mb = rooms_by_id["master_bed"]
+    assert 14.0 * 0.90 <= mb.area_sqm <= 22.0 * 1.10, f"Master bedroom area must be 14-22 m2, got {mb.area_sqm}"
+    assert abs((mb.y + mb.height) - ey1) < 0.08, "Master bed must touch South exterior wall"
+
+    # 7. Living: Entry on North wall, aspect ratio <= 2.2
+    liv = rooms_by_id["living"]
+    liv_ar = max(liv.width, liv.height) / max(min(liv.width, liv.height), 0.01)
+    assert liv_ar <= 2.20, f"Living aspect ratio {liv_ar:.2f} exceeds 1:2.2"
+    main_doors = [d for d in rects.doors if d.door_id == "main_entry"]
+    assert len(main_doors) == 1
+    assert main_doors[0].to_room == "living"
+
+    # 8. Corridor band: 1.0 - 1.2m wide, separates public and rear
+    corr = rooms_by_id["corridor"]
+    assert 1.0 <= min(corr.width, corr.height) <= 1.25, f"Corridor width must be 1.0-1.2m, got {min(corr.width, corr.height)}"
+    assert corr.y >= liv.y + liv.height - 0.05
+    assert mb.y >= corr.y + min(corr.width, corr.height) - 0.05
+
+    # 9. No room in central 40% box except corridor
+    for r in rects.rooms:
+        if r.room_id == "corridor":
+            continue
+        rcx = r.x + r.width / 2.0
+        rcy = r.y + r.height / 2.0
+        assert not (cx0 <= rcx <= cx1 and cy0 <= rcy <= cy1), f"Room {r.room_id} centroid inside central 40% box!"
+
+    # 10. Zero doors between two private/service rooms
+    for d in rects.doors:
+        if d.door_id == "main_entry" or d.from_room == "exterior" or d.to_room == "exterior":
+            continue
+        r1, r2 = d.from_room, d.to_room
+        is_r1_connector = r1 in ("living", "hall", "foyer", "corridor")
+        is_r2_connector = r2 in ("living", "hall", "foyer", "corridor")
+        assert is_r1_connector or is_r2_connector, f"Door directly between private/service rooms: {r1} <-> {r2}"
+
+
+def test_llm_layout_critic_retry_loop():
+    """
+    Tests the LLM Layout Critic loop:
+    1. Simulates critic rejecting initial layout.
+    2. Verifies re-solve with forced template seed is triggered.
+    3. Verifies critic verdict and warnings are recorded in solver output.
+    """
+    import app.services.floorplan.floorplan_service as fps
+
+    original_critic = fps.evaluate_layout_critic
+    call_count = 0
+
+    def mock_critic_fail_then_pass(rect_model, plot_w, plot_d, ai_provider):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return "fail", ["Simulated rejection: bathroom in central position"]
+        return "pass", []
+
+    fps.evaluate_layout_critic = mock_critic_fail_then_pass
+    try:
+        req = FloorPlanRequest(
+            plot_width_m=10.9,
+            plot_depth_m=10.6,
+            required_rooms=["master_bed", "kitchen", "living", "puja", "bath_1"],
+            vastu_strictness="high",
+            ai_provider="groq"
+        )
+        res = generate_floor_plan(req)
+        assert res.qa.critic == "pass"
+        assert any("Architect Layout Critic rejected layout" in w for w in res.warnings)
+        assert call_count == 2
+    finally:
+        fps.evaluate_layout_critic = original_critic
+
+
 
 

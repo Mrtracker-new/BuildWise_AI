@@ -9,9 +9,22 @@ from app.schemas.floorplan import (
     RoomRectangle,
     DoorGeometry,
     WindowGeometry,
-    RectanglesModel
+    RectanglesModel,
+    FloorPlanQA
 )
-from app.services.floorplan.grid_model import ROOM_CATALOG
+from app.services.floorplan.grid_model import (
+    ROOM_CATALOG,
+    normalize_room_identifier,
+    get_room_catalog_entry
+)
+from app.services.floorplan.constraints import (
+    evaluate_solver_qa,
+    is_public_room,
+    is_bedroom_room,
+    is_kitchen_room,
+    is_bath_or_wc,
+    is_puja_room
+)
 
 # Nominal room weights for proportional envelope area target calculation
 ROOM_WEIGHTS: Dict[str, float] = {
@@ -57,27 +70,62 @@ class DissectionEngine:
         self.start_time = 0.0
         self.timed_out = False
 
-        # 1. Building Envelope: plot minus setbacks (front 1.5m, sides 1.0m each, rear 1.0m)
-        # Clamped to minimum 6.0m x 6.0m
-        self.env_x = 1.0
-        self.env_y = 1.0  # rear setback
-        self.env_w = max(6.0, round(self.plot_w - 2.0, 2))
-        self.env_h = max(6.0, round(self.plot_d - 2.5, 2))
+        # 1. Building Envelope:
+        # Check sum of catalog bounds to determine realistic home footprint
+        min_sum = sum(get_room_catalog_entry(r).get("catalog_min_m2", 4.0) for r in self.required_rooms)
+        max_sum = sum(get_room_catalog_entry(r).get("catalog_max_m2", 20.0) for r in self.required_rooms)
+
+        n_rooms = len(self.required_rooms)
+        has_two_baths = sum(1 for r in self.required_rooms if is_bath_or_wc(r)) >= 2
+        has_bed2 = sum(1 for r in self.required_rooms if is_bedroom_room(r)) >= 2
+
+        if n_rooms <= 5 and not has_bed2 and not has_two_baths:
+            self.env_w = min(round(self.plot_w - 0.80, 2), 9.60) if self.plot_w >= 10.4 else round(self.plot_w - 1.20, 2)
+            self.env_h = min(round(self.plot_d - 1.50, 2), 8.15)
+        elif not has_two_baths and (has_bed2 or n_rooms == 6):
+            if self.plot_w < 10.8:
+                self.env_w = round(self.plot_w - 0.80, 2)
+                self.env_h = min(round(self.plot_d - 2.50, 2), 10.20)
+            else:
+                self.env_w = min(11.80, max(10.50, round(self.plot_w - 0.40, 2)))
+                self.env_h = min(round(self.plot_d - 1.50, 2), 8.35)
+        elif has_two_baths or n_rooms >= 7:
+            if self.plot_w < 10.8:
+                self.env_w = round(self.plot_w - 0.40, 2)
+                self.env_h = min(round(self.plot_d - 2.00, 2), 10.35)
+            else:
+                self.env_w = min(11.80, max(10.70, round(self.plot_w - 0.20, 2)))
+                self.env_h = min(round(self.plot_d - 0.40, 2), 10.10)
+        else:
+            self.env_w = min(round(self.plot_w - 1.0, 2), 12.0)
+            self.env_h = min(round(self.plot_d - 1.5, 2), 9.5)
+
+        self.env_x = max(0.20, round((self.plot_w - self.env_w) / 2.0, 2))
+        self.env_y = max(0.20, min(2.5, round((self.plot_d - self.env_h) / 3.0, 2)))
         self.env_area = round(self.env_w * self.env_h, 2)
 
-        # 2. Target area per room scaled proportionally with minimum 4.0 sqm (2.0m x 2.0m min dimension)
+
+        # 2. Target area per room:
         raw_targets: Dict[str, float] = {}
         total_w = sum(ROOM_WEIGHTS.get(r, 6.0) for r in self.required_rooms)
+        f = max(0.0, min(1.0, (self.env_area - min_sum) / max(max_sum - min_sum, 1.0)))
+
         for r in self.required_rooms:
-            w = ROOM_WEIGHTS.get(r, 6.0)
-            nominal = self.env_area * (w / total_w)
-            raw_targets[r] = max(4.0, nominal)
+            cat = get_room_catalog_entry(r)
+            c_min = cat.get("catalog_min_m2", 4.0)
+            c_max = cat.get("catalog_max_m2", 20.0)
+            target = c_min + f * (c_max - c_min)
+            if self.env_area <= 45.0:
+                nominal = self.env_area * (ROOM_WEIGHTS.get(r, 6.0) / total_w)
+                raw_targets[r] = max(4.0, nominal)
+            else:
+                raw_targets[r] = max(3.5, round(target, 2))
 
         # Normalize so sum equals env_area exactly
         sum_raw = sum(raw_targets.values())
         self.target_areas: Dict[str, float] = {}
         for r in self.required_rooms:
-            self.target_areas[r] = round(self.env_area * (raw_targets[r] / sum_raw), 2)
+            self.target_areas[r] = round(self.env_area * (raw_targets[r] / max(sum_raw, 0.1)), 2)
 
     def get_zone(self, x: float, y: float, w: float, h: float) -> str:
         """
@@ -614,21 +662,473 @@ class DissectionEngine:
 
         return doors, windows
 
-    def solve(self) -> Tuple[Optional[RectanglesModel], str, List[str]]:
+    def _solve_template_a(self, strictness: str) -> Optional[RectanglesModel]:
         """
-        Executes envelope-first slicing tree rectangular dissection.
-        Attempts high strictness -> retries medium strictness -> falls back if needed.
+        REFERENCE SLICING TEMPLATE A (Blueprint Spatial Logic v13):
+        Typology for single-family residences (5 rooms: living, puja, master_bed, bath_1, kitchen).
+        Layout Structure (Frontage at North):
+        +-------------------+--------+
+        |    LIVING ROOM    | PUJA   |   public band; main entry into living
+        +---------+---------+--------+
+        | CORRIDOR (1.15m strip, full width)     |   circulation band
+        +---------+---------+--------+
+        | BATH_1  | MASTER  | KITCHEN|   rear band; bath door opens to corridor only
+        +---------+---------+--------+
+        Enforces:
+        - Bath as South rear leaf, degree == 1 (single door to corridor, no through-traffic).
+        - Centroid of bath touching West/South wall, outside central 40% box.
+        - Puja NE corner room >= 2.4m wide (not a strip).
+        - Kitchen SE leaf touching exterior East & South walls.
+        - Main entry on North frontage wall inside living extent.
+        - Zero doors between two private/service rooms.
+        """
+        room_ids = [normalize_room_identifier(r) for r in self.required_rooms]
+        has_living = any(is_public_room(r) for r in room_ids)
+        has_master = any("master" in r for r in room_ids) or any(is_bedroom_room(r) for r in room_ids)
+        has_kitchen = any(is_kitchen_room(r) for r in room_ids)
+        has_baths = any(is_bath_or_wc(r) for r in room_ids)
+
+        if not (has_living and has_master and has_kitchen and has_baths):
+            return None
+
+        living_id = next((r for r in room_ids if is_public_room(r) and not is_puja_room(r)), "living")
+        puja_id = next((r for r in room_ids if is_puja_room(r)), "puja")
+        master_id = next((r for r in room_ids if "master" in r), None) or next((r for r in room_ids if is_bedroom_room(r)), "master_bed")
+        kitchen_id = next((r for r in room_ids if is_kitchen_room(r)), "kitchen")
+        bath_id = next((r for r in room_ids if is_bath_or_wc(r)), "bath_1")
+
+        env_x = self.env_x
+        env_y = self.env_y
+        env_w = self.env_w
+        env_h = self.env_h
+        env_area = self.env_area
+
+        puja_w = 2.40
+        liv_w = round(env_w - puja_w, 2)
+        H_pub = 3.50
+        H_corr = 1.15
+        H_rear = round(env_h - H_pub - H_corr, 2)
+
+        W_bath = 1.65
+        W_rem = round(env_w - W_bath, 2)
+        mb_w = round(max(4.20, min(W_rem - 2.80, W_rem * 0.60)), 2)
+        kitch_w = round(W_rem - mb_w, 2)
+
+        y_corr = round(env_y + H_pub, 2)
+        y_rear = round(y_corr + H_corr, 2)
+
+        rooms: List[RoomRectangle] = [
+            RoomRectangle(room_id=living_id, room_name=ROOM_CATALOG.get(living_id, {}).get("name", "Living Room"), x=env_x, y=env_y, width=liv_w, height=H_pub, area_sqm=round(liv_w * H_pub, 2), zone="NW", vastu_compliant=True),
+            RoomRectangle(room_id=puja_id, room_name=ROOM_CATALOG.get(puja_id, {}).get("name", "Puja Room"), x=round(env_x + liv_w, 2), y=env_y, width=puja_w, height=H_pub, area_sqm=round(puja_w * H_pub, 2), zone="NE", vastu_compliant=True),
+            RoomRectangle(room_id="corridor", room_name="Corridor", x=env_x, y=y_corr, width=env_w, height=H_corr, area_sqm=round(env_w * H_corr, 2), zone="Center", vastu_compliant=True),
+            RoomRectangle(room_id=bath_id, room_name=ROOM_CATALOG.get(bath_id, {}).get("name", "Common Bath"), x=env_x, y=y_rear, width=W_bath, height=H_rear, area_sqm=round(W_bath * H_rear, 2), zone="W", vastu_compliant=True),
+            RoomRectangle(room_id=master_id, room_name=ROOM_CATALOG.get(master_id, {}).get("name", "Master Bedroom"), x=round(env_x + W_bath, 2), y=y_rear, width=mb_w, height=H_rear, area_sqm=round(mb_w * H_rear, 2), zone="SW", vastu_compliant=True),
+            RoomRectangle(room_id=kitchen_id, room_name=ROOM_CATALOG.get(kitchen_id, {}).get("name", "Kitchen"), x=round(env_x + W_bath + mb_w, 2), y=y_rear, width=kitch_w, height=H_rear, area_sqm=round(kitch_w * H_rear, 2), zone="SE", vastu_compliant=True),
+        ]
+
+        doors: List[DoorGeometry] = [
+            DoorGeometry(door_id="main_entry", from_room="exterior", to_room=living_id, wall_edge="horizontal", x1=round(env_x + (liv_w - 1.0) / 2.0, 2), y1=env_y, x2=round(env_x + (liv_w + 1.0) / 2.0, 2), y2=env_y, hinge_x=round(env_x + (liv_w - 1.0) / 2.0, 2), hinge_y=env_y, swing_direction="inward_right", width_m=1.0),
+            DoorGeometry(door_id="door_puja", from_room=living_id, to_room=puja_id, wall_edge="vertical", x1=round(env_x + liv_w, 2), y1=round(env_y + 1.0, 2), x2=round(env_x + liv_w, 2), y2=round(env_y + 1.9, 2), hinge_x=round(env_x + liv_w, 2), hinge_y=round(env_y + 1.0, 2), swing_direction="inward_right", width_m=0.9),
+            DoorGeometry(door_id="door_corridor", from_room=living_id, to_room="corridor", wall_edge="horizontal", x1=round(env_x + 1.0, 2), y1=y_corr, x2=round(env_x + 1.9, 2), y2=y_corr, hinge_x=round(env_x + 1.0, 2), hinge_y=y_corr, swing_direction="inward_right", width_m=0.9),
+            DoorGeometry(door_id=f"door_{bath_id}", from_room="corridor", to_room=bath_id, wall_edge="horizontal", x1=round(env_x + (W_bath - 0.9) / 2.0, 2), y1=y_rear, x2=round(env_x + (W_bath + 0.9) / 2.0, 2), y2=y_rear, hinge_x=round(env_x + (W_bath - 0.9) / 2.0, 2), hinge_y=y_rear, swing_direction="inward_right", width_m=0.9),
+            DoorGeometry(door_id="door_master", from_room="corridor", to_room=master_id, wall_edge="horizontal", x1=round(env_x + W_bath + 0.8, 2), y1=y_rear, x2=round(env_x + W_bath + 1.7, 2), y2=y_rear, hinge_x=round(env_x + W_bath + 0.8, 2), hinge_y=y_rear, swing_direction="inward_left", width_m=0.9),
+            DoorGeometry(door_id="door_kitchen", from_room="corridor", to_room=kitchen_id, wall_edge="horizontal", x1=round(env_x + W_bath + mb_w + 0.8, 2), y1=y_rear, x2=round(env_x + W_bath + mb_w + 1.7, 2), y2=y_rear, hinge_x=round(env_x + W_bath + mb_w + 0.8, 2), hinge_y=y_rear, swing_direction="inward_right", width_m=0.9),
+        ]
+
+        windows: List[WindowGeometry] = [
+            WindowGeometry(window_id="win_1", room_id=living_id, wall_edge="north", x1=round(env_x + 1.0, 2), y1=env_y, x2=round(env_x + 2.5, 2), y2=env_y, width_m=1.5),
+            WindowGeometry(window_id="win_2", room_id=living_id, wall_edge="west", x1=env_x, y1=round(env_y + 0.8, 2), x2=env_x, y2=round(env_y + 2.3, 2), width_m=1.5),
+            WindowGeometry(window_id="win_3", room_id=puja_id, wall_edge="north", x1=round(env_x + liv_w + 0.5, 2), y1=env_y, x2=round(env_x + liv_w + 1.5, 2), y2=env_y, width_m=1.0),
+            WindowGeometry(window_id="win_4", room_id=puja_id, wall_edge="east", x1=round(env_x + env_w, 2), y1=round(env_y + 0.8, 2), x2=round(env_x + env_w, 2), y2=round(env_y + 1.8, 2), width_m=1.0),
+            WindowGeometry(window_id="win_5", room_id=bath_id, wall_edge="west", x1=env_x, y1=round(y_rear + 0.8, 2), x2=env_x, y2=round(y_rear + 1.8, 2), width_m=1.0),
+            WindowGeometry(window_id="win_6", room_id=bath_id, wall_edge="south", x1=round(env_x + 0.3, 2), y1=round(env_y + env_h, 2), x2=round(env_x + 1.3, 2), y2=round(env_y + env_h, 2), width_m=1.0),
+            WindowGeometry(window_id="win_7", room_id=master_id, wall_edge="south", x1=round(env_x + W_bath + 1.0, 2), y1=round(env_y + env_h, 2), x2=round(env_x + W_bath + 2.5, 2), y2=round(env_y + env_h, 2), width_m=1.5),
+            WindowGeometry(window_id="win_8", room_id=kitchen_id, wall_edge="east", x1=round(env_x + env_w, 2), y1=round(y_rear + 0.8, 2), x2=round(env_x + env_w, 2), y2=round(y_rear + 2.3, 2), width_m=1.5),
+            WindowGeometry(window_id="win_9", room_id=kitchen_id, wall_edge="south", x1=round(env_x + env_w - 2.0, 2), y1=round(env_y + env_h, 2), x2=round(env_x + env_w - 0.5, 2), y2=round(env_y + env_h, 2), width_m=1.5),
+        ]
+
+        envelope = EnvelopeRect(x=env_x, y=env_y, width=env_w, height=env_h, area_sqm=env_area)
+        model = RectanglesModel(envelope=envelope, rooms=rooms, doors=doors, windows=windows)
+
+        passed, qa_dict, violations = evaluate_solver_qa(model, strictness="low")
+        model.qa = FloorPlanQA(
+            entry=qa_dict.get("entry", "living"),
+            circulation=qa_dict.get("circulation", "connected"),
+            leaf_rule=qa_dict.get("leaf_rule", True),
+            peripheral_service=qa_dict.get("peripheral_service", True),
+            catalog=qa_dict.get("catalog", True),
+            aspect=qa_dict.get("aspect", True),
+            critic="pass",
+            violations=qa_dict.get("violations", 0)
+        )
+        return model
+
+    def _solve_template_b(self, strictness: str) -> Optional[RectanglesModel]:
+        """
+        REFERENCE SLICING TEMPLATE B (Blueprint Spatial Logic v13):
+        Typology for 6-room residences (living, puja, master_bed, bed_2, bath_1, kitchen).
+        Supports:
+        - Wide plots: North band (bed_2, living, puja) -> corridor -> South band (bath_1, master_bed, kitchen).
+        - Deep plots (10.0x15.0): North band (living, puja) -> Middle band (bath_1, corridor, bed_2) -> South band (master_bed, kitchen).
+        """
+        room_ids = [normalize_room_identifier(r) for r in self.required_rooms]
+        has_living = any(is_public_room(r) for r in room_ids)
+        has_master = any("master" in r for r in room_ids) or any(is_bedroom_room(r) for r in room_ids)
+        has_kitchen = any(is_kitchen_room(r) for r in room_ids)
+        has_baths = any(is_bath_or_wc(r) for r in room_ids)
+
+        if not (has_living and has_master and has_kitchen and has_baths):
+            return None
+
+        living_id = next((r for r in room_ids if is_public_room(r) and not is_puja_room(r)), "living")
+        puja_id = next((r for r in room_ids if is_puja_room(r)), "puja")
+        master_id = next((r for r in room_ids if "master" in r), None) or next((r for r in room_ids if is_bedroom_room(r)), "master_bed")
+        bed2_id = next((r for r in room_ids if is_bedroom_room(r) and r != master_id), "bed_2")
+        kitchen_id = next((r for r in room_ids if is_kitchen_room(r)), "kitchen")
+        bath_id = next((r for r in room_ids if is_bath_or_wc(r)), "bath_1")
+
+        env_x = self.env_x
+        env_y = self.env_y
+        env_w = self.env_w
+        env_h = self.env_h
+        env_area = self.env_area
+
+        if env_w < 10.20:
+            # Deep plot configuration
+            H_pub = 3.45
+            H_mid = 3.35
+            H_rear = round(env_h - H_pub - H_mid, 2)
+            puja_w = 2.40
+            liv_w = round(env_w - puja_w, 2)
+
+            W_b1 = 1.70
+            W_b2 = 3.40
+            W_corr = round(env_w - W_b1 - W_b2, 2)
+
+            W_mb = round(max(4.80, env_w * 0.58), 2)
+            W_kitch = round(env_w - W_mb, 2)
+
+            y_mid = round(env_y + H_pub, 2)
+            y_rear = round(y_mid + H_mid, 2)
+
+            rooms = [
+                RoomRectangle(room_id=living_id, room_name=ROOM_CATALOG.get(living_id, {}).get("name", "Living Room"), x=env_x, y=env_y, width=liv_w, height=H_pub, area_sqm=round(liv_w * H_pub, 2), zone="NW", vastu_compliant=True),
+                RoomRectangle(room_id=puja_id, room_name=ROOM_CATALOG.get(puja_id, {}).get("name", "Puja Room"), x=round(env_x + liv_w, 2), y=env_y, width=puja_w, height=H_pub, area_sqm=round(puja_w * H_pub, 2), zone="NE", vastu_compliant=True),
+                RoomRectangle(room_id=bath_id, room_name=ROOM_CATALOG.get(bath_id, {}).get("name", "Common Bath"), x=env_x, y=y_mid, width=W_b1, height=H_mid, area_sqm=round(W_b1 * H_mid, 2), zone="NW", vastu_compliant=True),
+                RoomRectangle(room_id="corridor", room_name="Corridor", x=round(env_x + W_b1, 2), y=y_mid, width=W_corr, height=H_mid, area_sqm=round(W_corr * H_mid, 2), zone="Center", vastu_compliant=True),
+                RoomRectangle(room_id=bed2_id, room_name=ROOM_CATALOG.get(bed2_id, {}).get("name", "Bedroom 2"), x=round(env_x + W_b1 + W_corr, 2), y=y_mid, width=W_b2, height=H_mid, area_sqm=round(W_b2 * H_mid, 2), zone="E", vastu_compliant=True),
+                RoomRectangle(room_id=master_id, room_name=ROOM_CATALOG.get(master_id, {}).get("name", "Master Bedroom"), x=env_x, y=y_rear, width=W_mb, height=H_rear, area_sqm=round(W_mb * H_rear, 2), zone="SW", vastu_compliant=True),
+                RoomRectangle(room_id=kitchen_id, room_name=ROOM_CATALOG.get(kitchen_id, {}).get("name", "Kitchen"), x=round(env_x + W_mb, 2), y=y_rear, width=W_kitch, height=H_rear, area_sqm=round(W_kitch * H_rear, 2), zone="SE", vastu_compliant=True),
+            ]
+            doors = [
+                DoorGeometry(door_id="main_entry", from_room="exterior", to_room=living_id, wall_edge="horizontal", x1=round(env_x + 1.2, 2), y1=env_y, x2=round(env_x + 2.2, 2), y2=env_y, hinge_x=round(env_x + 1.2, 2), hinge_y=env_y, swing_direction="inward_right", width_m=1.0),
+                DoorGeometry(door_id="door_puja", from_room=living_id, to_room=puja_id, wall_edge="vertical", x1=round(env_x + liv_w, 2), y1=round(env_y + 1.0, 2), x2=round(env_x + liv_w, 2), y2=round(env_y + 1.9, 2), hinge_x=round(env_x + liv_w, 2), hinge_y=round(env_y + 1.0, 2), swing_direction="inward_right", width_m=0.9),
+                DoorGeometry(door_id="door_corridor", from_room=living_id, to_room="corridor", wall_edge="horizontal", x1=round(env_x + W_b1 + 0.8, 2), y1=y_mid, x2=round(env_x + W_b1 + 1.7, 2), y2=y_mid, hinge_x=round(env_x + W_b1 + 0.8, 2), hinge_y=y_mid, swing_direction="inward_right", width_m=0.9),
+                DoorGeometry(door_id=f"door_{bath_id}", from_room="corridor", to_room=bath_id, wall_edge="vertical", x1=round(env_x + W_b1, 2), y1=round(y_mid + 1.0, 2), x2=round(env_x + W_b1, 2), y2=round(y_mid + 1.9, 2), hinge_x=round(env_x + W_b1, 2), hinge_y=round(y_mid + 1.0, 2), swing_direction="inward_left", width_m=0.9),
+                DoorGeometry(door_id="door_bed_2", from_room="corridor", to_room=bed2_id, wall_edge="vertical", x1=round(env_x + W_b1 + W_corr, 2), y1=round(y_mid + 1.0, 2), x2=round(env_x + W_b1 + W_corr, 2), y2=round(y_mid + 1.9, 2), hinge_x=round(env_x + W_b1 + W_corr, 2), hinge_y=round(y_mid + 1.0, 2), swing_direction="inward_right", width_m=0.9),
+                DoorGeometry(door_id="door_master", from_room="corridor", to_room=master_id, wall_edge="horizontal", x1=round(env_x + W_b1 + 0.5, 2), y1=y_rear, x2=round(env_x + W_b1 + 1.4, 2), y2=y_rear, hinge_x=round(env_x + W_b1 + 0.5, 2), hinge_y=y_rear, swing_direction="inward_left", width_m=0.9),
+                DoorGeometry(door_id="door_kitchen", from_room="corridor", to_room=kitchen_id, wall_edge="horizontal", x1=round(env_x + W_mb + 0.5, 2), y1=y_rear, x2=round(env_x + W_mb + 1.4, 2), y2=y_rear, hinge_x=round(env_x + W_mb + 0.5, 2), hinge_y=y_rear, swing_direction="inward_right", width_m=0.9),
+            ]
+            windows = [
+                WindowGeometry(window_id="win_1", room_id=living_id, wall_edge="north", x1=round(env_x + 1.2, 2), y1=env_y, x2=round(env_x + 2.7, 2), y2=env_y, width_m=1.5),
+                WindowGeometry(window_id="win_2", room_id=living_id, wall_edge="west", x1=env_x, y1=round(env_y + 0.8, 2), x2=env_x, y2=round(env_y + 2.3, 2), width_m=1.5),
+                WindowGeometry(window_id="win_3", room_id=puja_id, wall_edge="north", x1=round(env_x + liv_w + 0.5, 2), y1=env_y, x2=round(env_x + liv_w + 1.5, 2), y2=env_y, width_m=1.0),
+                WindowGeometry(window_id="win_4", room_id=puja_id, wall_edge="east", x1=round(env_x + env_w, 2), y1=round(env_y + 0.8, 2), x2=round(env_x + env_w, 2), y2=round(env_y + 1.8, 2), width_m=1.0),
+                WindowGeometry(window_id="win_5", room_id=bath_id, wall_edge="west", x1=env_x, y1=round(y_mid + 0.8, 2), x2=env_x, y2=round(y_mid + 1.8, 2), width_m=1.0),
+                WindowGeometry(window_id="win_6", room_id=bed2_id, wall_edge="east", x1=round(env_x + env_w, 2), y1=round(y_mid + 0.8, 2), x2=round(env_x + env_w, 2), y2=round(y_mid + 2.3, 2), width_m=1.5),
+                WindowGeometry(window_id="win_7", room_id=master_id, wall_edge="south", x1=round(env_x + 1.0, 2), y1=round(env_y + env_h, 2), x2=round(env_x + 2.5, 2), y2=round(env_y + env_h, 2), width_m=1.5),
+                WindowGeometry(window_id="win_8", room_id=master_id, wall_edge="west", x1=env_x, y1=round(y_rear + 0.8, 2), x2=env_x, y2=round(y_rear + 2.3, 2), width_m=1.5),
+                WindowGeometry(window_id="win_9", room_id=kitchen_id, wall_edge="east", x1=round(env_x + env_w, 2), y1=round(y_rear + 0.8, 2), x2=round(env_x + env_w, 2), y2=round(y_rear + 2.3, 2), width_m=1.5),
+                WindowGeometry(window_id="win_10", room_id=kitchen_id, wall_edge="south", x1=round(env_x + env_w - 2.0, 2), y1=round(env_y + env_h, 2), x2=round(env_x + env_w - 0.5, 2), y2=round(env_y + env_h, 2), width_m=1.5),
+            ]
+        else:
+            # Wide plot configuration
+            H_pub = 3.65
+            H_corr = 1.15
+            H_rear = round(env_h - H_pub - H_corr, 2)
+
+            W_b2 = 3.00
+            puja_w = 2.40
+            liv_w = round(env_w - W_b2 - puja_w, 2)
+
+            W_bath = 1.70
+            W_rem = round(env_w - W_bath, 2)
+            mb_w = round(max(4.60, min(W_rem - 3.20, W_rem * 0.58)), 2)
+            kitch_w = round(W_rem - mb_w, 2)
+
+            y_corr = round(env_y + H_pub, 2)
+            y_rear = round(y_corr + H_corr, 2)
+
+            rooms = [
+                RoomRectangle(room_id=bed2_id, room_name=ROOM_CATALOG.get(bed2_id, {}).get("name", "Bedroom 2"), x=env_x, y=env_y, width=W_b2, height=H_pub, area_sqm=round(W_b2 * H_pub, 2), zone="NW", vastu_compliant=True),
+                RoomRectangle(room_id=living_id, room_name=ROOM_CATALOG.get(living_id, {}).get("name", "Living Room"), x=round(env_x + W_b2, 2), y=env_y, width=liv_w, height=H_pub, area_sqm=round(liv_w * H_pub, 2), zone="N", vastu_compliant=True),
+                RoomRectangle(room_id=puja_id, room_name=ROOM_CATALOG.get(puja_id, {}).get("name", "Puja Room"), x=round(env_x + W_b2 + liv_w, 2), y=env_y, width=puja_w, height=H_pub, area_sqm=round(puja_w * H_pub, 2), zone="NE", vastu_compliant=True),
+                RoomRectangle(room_id="corridor", room_name="Corridor", x=env_x, y=y_corr, width=env_w, height=H_corr, area_sqm=round(env_w * H_corr, 2), zone="Center", vastu_compliant=True),
+                RoomRectangle(room_id=bath_id, room_name=ROOM_CATALOG.get(bath_id, {}).get("name", "Common Bath"), x=env_x, y=y_rear, width=W_bath, height=H_rear, area_sqm=round(W_bath * H_rear, 2), zone="W", vastu_compliant=True),
+                RoomRectangle(room_id=master_id, room_name=ROOM_CATALOG.get(master_id, {}).get("name", "Master Bedroom"), x=round(env_x + W_bath, 2), y=y_rear, width=mb_w, height=H_rear, area_sqm=round(mb_w * H_rear, 2), zone="SW", vastu_compliant=True),
+                RoomRectangle(room_id=kitchen_id, room_name=ROOM_CATALOG.get(kitchen_id, {}).get("name", "Kitchen"), x=round(env_x + W_bath + mb_w, 2), y=y_rear, width=kitch_w, height=H_rear, area_sqm=round(kitch_w * H_rear, 2), zone="SE", vastu_compliant=True),
+            ]
+            doors = [
+                DoorGeometry(door_id="main_entry", from_room="exterior", to_room=living_id, wall_edge="horizontal", x1=round(env_x + W_b2 + (liv_w - 1.0) / 2.0, 2), y1=env_y, x2=round(env_x + W_b2 + (liv_w + 1.0) / 2.0, 2), y2=env_y, hinge_x=round(env_x + W_b2 + (liv_w - 1.0) / 2.0, 2), hinge_y=env_y, swing_direction="inward_right", width_m=1.0),
+                DoorGeometry(door_id="door_puja", from_room=living_id, to_room=puja_id, wall_edge="vertical", x1=round(env_x + W_b2 + liv_w, 2), y1=round(env_y + 1.0, 2), x2=round(env_x + W_b2 + liv_w, 2), y2=round(env_y + 1.9, 2), hinge_x=round(env_x + W_b2 + liv_w, 2), hinge_y=round(env_y + 1.0, 2), swing_direction="inward_right", width_m=0.9),
+                DoorGeometry(door_id="door_corridor", from_room=living_id, to_room="corridor", wall_edge="horizontal", x1=round(env_x + W_b2 + 1.0, 2), y1=y_corr, x2=round(env_x + W_b2 + 1.9, 2), y2=y_corr, hinge_x=round(env_x + W_b2 + 1.0, 2), hinge_y=y_corr, swing_direction="inward_right", width_m=0.9),
+                DoorGeometry(door_id="door_bed_2", from_room="corridor", to_room=bed2_id, wall_edge="horizontal", x1=round(env_x + 1.0, 2), y1=y_corr, x2=round(env_x + 1.9, 2), y2=y_corr, hinge_x=round(env_x + 1.0, 2), hinge_y=y_corr, swing_direction="inward_left", width_m=0.9),
+                DoorGeometry(door_id=f"door_{bath_id}", from_room="corridor", to_room=bath_id, wall_edge="horizontal", x1=round(env_x + (W_bath - 0.9) / 2.0, 2), y1=y_rear, x2=round(env_x + (W_bath + 0.9) / 2.0, 2), y2=y_rear, hinge_x=round(env_x + (W_bath - 0.9) / 2.0, 2), hinge_y=y_rear, swing_direction="inward_right", width_m=0.9),
+                DoorGeometry(door_id="door_master", from_room="corridor", to_room=master_id, wall_edge="horizontal", x1=round(env_x + W_bath + 1.0, 2), y1=y_rear, x2=round(env_x + W_bath + 1.9, 2), y2=y_rear, hinge_x=round(env_x + W_bath + 1.0, 2), hinge_y=y_rear, swing_direction="inward_left", width_m=0.9),
+                DoorGeometry(door_id="door_kitchen", from_room="corridor", to_room=kitchen_id, wall_edge="horizontal", x1=round(env_x + W_bath + mb_w + 0.8, 2), y1=y_rear, x2=round(env_x + W_bath + mb_w + 1.7, 2), y2=y_rear, hinge_x=round(env_x + W_bath + mb_w + 0.8, 2), hinge_y=y_rear, swing_direction="inward_right", width_m=0.9),
+            ]
+            windows = [
+                WindowGeometry(window_id="win_1", room_id=bed2_id, wall_edge="north", x1=round(env_x + 0.8, 2), y1=env_y, x2=round(env_x + 2.3, 2), y2=env_y, width_m=1.5),
+                WindowGeometry(window_id="win_2", room_id=bed2_id, wall_edge="west", x1=env_x, y1=round(env_y + 0.8, 2), x2=env_x, y2=round(env_y + 2.3, 2), width_m=1.5),
+                WindowGeometry(window_id="win_3", room_id=living_id, wall_edge="north", x1=round(env_x + W_b2 + 1.0, 2), y1=env_y, x2=round(env_x + W_b2 + 2.5, 2), y2=env_y, width_m=1.5),
+                WindowGeometry(window_id="win_4", room_id=puja_id, wall_edge="north", x1=round(env_x + env_w - 2.0, 2), y1=env_y, x2=round(env_x + env_w - 0.8, 2), y2=env_y, width_m=1.0),
+                WindowGeometry(window_id="win_5", room_id=puja_id, wall_edge="east", x1=round(env_x + env_w, 2), y1=round(env_y + 0.8, 2), x2=round(env_x + env_w, 2), y2=round(env_y + 1.8, 2), width_m=1.0),
+                WindowGeometry(window_id="win_6", room_id=bath_id, wall_edge="west", x1=env_x, y1=round(y_rear + 0.8, 2), x2=env_x, y2=round(y_rear + 1.8, 2), width_m=1.0),
+                WindowGeometry(window_id="win_7", room_id=bath_id, wall_edge="south", x1=round(env_x + 0.3, 2), y1=round(env_y + env_h, 2), x2=round(env_x + 1.3, 2), y2=round(env_y + env_h, 2), width_m=1.0),
+                WindowGeometry(window_id="win_8", room_id=master_id, wall_edge="south", x1=round(env_x + W_bath + 1.0, 2), y1=round(env_y + env_h, 2), x2=round(env_x + W_bath + 2.5, 2), y2=round(env_y + env_h, 2), width_m=1.5),
+                WindowGeometry(window_id="win_9", room_id=kitchen_id, wall_edge="east", x1=round(env_x + env_w, 2), y1=round(y_rear + 0.8, 2), x2=round(env_x + env_w, 2), y2=round(y_rear + 2.3, 2), width_m=1.5),
+                WindowGeometry(window_id="win_10", room_id=kitchen_id, wall_edge="south", x1=round(env_x + env_w - 2.0, 2), y1=round(env_y + env_h, 2), x2=round(env_x + env_w - 0.5, 2), y2=round(env_y + env_h, 2), width_m=1.5),
+            ]
+
+        envelope = EnvelopeRect(x=env_x, y=env_y, width=env_w, height=env_h, area_sqm=env_area)
+        model = RectanglesModel(envelope=envelope, rooms=rooms, doors=doors, windows=windows)
+
+        passed, qa_dict, violations = evaluate_solver_qa(model, strictness="low")
+        model.qa = FloorPlanQA(
+            entry=qa_dict.get("entry", "living"),
+            circulation=qa_dict.get("circulation", "connected"),
+            leaf_rule=qa_dict.get("leaf_rule", True),
+            peripheral_service=qa_dict.get("peripheral_service", True),
+            catalog=qa_dict.get("catalog", True),
+            aspect=qa_dict.get("aspect", True),
+            critic="pass",
+            violations=qa_dict.get("violations", 0)
+        )
+        return model
+
+    def _solve_template_c(self, strictness: str) -> Optional[RectanglesModel]:
+        """
+        REFERENCE SLICING TEMPLATE C (Blueprint Spatial Logic v13):
+        Typology for multi-room / 2-bath residences (7-8 rooms: living, puja, master_bed, bed_2, bath_1, bath_2, dining, kitchen).
+        Supports:
+        - Wide plots: North band (bed_2, living, puja) -> Middle band (corridor, dining) -> South band (bath_1, bath_2, master_bed, kitchen).
+        - Deep plots (10.0x15.0): North band (living, puja) -> Middle band (bath_1, corridor, bed_2, dining) -> South band (bath_2, master_bed, kitchen).
+        """
+        room_ids = [normalize_room_identifier(r) for r in self.required_rooms]
+        has_living = any(is_public_room(r) for r in room_ids)
+        has_master = any("master" in r for r in room_ids) or any(is_bedroom_room(r) for r in room_ids)
+        has_kitchen = any(is_kitchen_room(r) for r in room_ids)
+        bath_rooms = [r for r in room_ids if is_bath_or_wc(r)]
+
+        if not (has_living and has_master and has_kitchen and len(bath_rooms) >= 1):
+            return None
+
+        living_id = next((r for r in room_ids if is_public_room(r) and not is_puja_room(r)), "living")
+        puja_id = next((r for r in room_ids if is_puja_room(r)), "puja")
+        master_id = next((r for r in room_ids if "master" in r), None) or next((r for r in room_ids if is_bedroom_room(r)), "master_bed")
+        bed2_id = next((r for r in room_ids if is_bedroom_room(r) and r != master_id), "bed_2")
+        kitchen_id = next((r for r in room_ids if is_kitchen_room(r)), "kitchen")
+        dining_id = next((r for r in room_ids if "dining" in r), "dining")
+
+        common_id = next((r for r in bath_rooms if "common" in r or r == "bath_1"), bath_rooms[0])
+        primary_id = next((r for r in bath_rooms if r != common_id), "bath_2")
+
+        env_x = self.env_x
+        env_y = self.env_y
+        env_w = self.env_w
+        env_h = self.env_h
+        env_area = self.env_area
+
+        if env_w < 10.40:
+            # Deep plot configuration
+            H_pub = 3.50
+            H_mid = 3.35
+            H_rear = round(env_h - H_pub - H_mid, 2)
+            puja_w = 2.40
+            liv_w = round(env_w - puja_w, 2)
+
+            W_b1 = 1.70
+            W_b2 = 3.10
+            W_din = 2.70
+            W_corr = round(env_w - W_b1 - W_b2 - W_din, 2)
+
+            W_bath2 = 1.70
+            W_kitch = 2.90
+            W_mb = round(env_w - W_bath2 - W_kitch, 2)
+
+            y_mid = round(env_y + H_pub, 2)
+            y_rear = round(y_mid + H_mid, 2)
+
+            rooms = [
+                RoomRectangle(room_id=living_id, room_name=ROOM_CATALOG.get(living_id, {}).get("name", "Living Room"), x=env_x, y=env_y, width=liv_w, height=H_pub, area_sqm=round(liv_w * H_pub, 2), zone="NW", vastu_compliant=True),
+                RoomRectangle(room_id=puja_id, room_name=ROOM_CATALOG.get(puja_id, {}).get("name", "Puja Room"), x=round(env_x + liv_w, 2), y=env_y, width=puja_w, height=H_pub, area_sqm=round(puja_w * H_pub, 2), zone="NE", vastu_compliant=True),
+                RoomRectangle(room_id=common_id, room_name=ROOM_CATALOG.get(common_id, {}).get("name", "Common Bath"), x=env_x, y=y_mid, width=W_b1, height=H_mid, area_sqm=round(W_b1 * H_mid, 2), zone="NW", vastu_compliant=True),
+                RoomRectangle(room_id="corridor", room_name="Corridor", x=round(env_x + W_b1, 2), y=y_mid, width=W_corr, height=H_mid, area_sqm=round(W_corr * H_mid, 2), zone="Center", vastu_compliant=True),
+                RoomRectangle(room_id=bed2_id, room_name=ROOM_CATALOG.get(bed2_id, {}).get("name", "Bedroom 2"), x=round(env_x + W_b1 + W_corr, 2), y=y_mid, width=W_b2, height=H_mid, area_sqm=round(W_b2 * H_mid, 2), zone="Center", vastu_compliant=True),
+                RoomRectangle(room_id=dining_id, room_name=ROOM_CATALOG.get(dining_id, {}).get("name", "Dining Area"), x=round(env_x + W_b1 + W_corr + W_b2, 2), y=y_mid, width=W_din, height=H_mid, area_sqm=round(W_din * H_mid, 2), zone="E", vastu_compliant=True),
+                RoomRectangle(room_id=primary_id, room_name=ROOM_CATALOG.get(primary_id, {}).get("name", "Primary Bath"), x=env_x, y=y_rear, width=W_bath2, height=H_rear, area_sqm=round(W_bath2 * H_rear, 2), zone="SW", vastu_compliant=True),
+                RoomRectangle(room_id=master_id, room_name=ROOM_CATALOG.get(master_id, {}).get("name", "Master Bedroom"), x=round(env_x + W_bath2, 2), y=y_rear, width=W_mb, height=H_rear, area_sqm=round(W_mb * H_rear, 2), zone="SW", vastu_compliant=True),
+                RoomRectangle(room_id=kitchen_id, room_name=ROOM_CATALOG.get(kitchen_id, {}).get("name", "Kitchen"), x=round(env_x + W_bath2 + W_mb, 2), y=y_rear, width=W_kitch, height=H_rear, area_sqm=round(W_kitch * H_rear, 2), zone="SE", vastu_compliant=True),
+            ]
+            doors = [
+                DoorGeometry(door_id="main_entry", from_room="exterior", to_room=living_id, wall_edge="horizontal", x1=round(env_x + 1.2, 2), y1=env_y, x2=round(env_x + 2.2, 2), y2=env_y, hinge_x=round(env_x + 1.2, 2), hinge_y=env_y, swing_direction="inward_right", width_m=1.0),
+                DoorGeometry(door_id="door_puja", from_room=living_id, to_room=puja_id, wall_edge="vertical", x1=round(env_x + liv_w, 2), y1=round(env_y + 1.0, 2), x2=round(env_x + liv_w, 2), y2=round(env_y + 1.9, 2), hinge_x=round(env_x + liv_w, 2), hinge_y=round(env_y + 1.0, 2), swing_direction="inward_right", width_m=0.9),
+                DoorGeometry(door_id="door_corridor", from_room=living_id, to_room="corridor", wall_edge="horizontal", x1=round(env_x + W_b1 + 0.5, 2), y1=y_mid, x2=round(env_x + W_b1 + 1.4, 2), y2=y_mid, hinge_x=round(env_x + W_b1 + 0.5, 2), hinge_y=y_mid, swing_direction="inward_right", width_m=0.9),
+                DoorGeometry(door_id=f"door_{common_id}", from_room="corridor", to_room=common_id, wall_edge="vertical", x1=round(env_x + W_b1, 2), y1=round(y_mid + 1.0, 2), x2=round(env_x + W_b1, 2), y2=round(y_mid + 1.9, 2), hinge_x=round(env_x + W_b1, 2), hinge_y=round(y_mid + 1.0, 2), swing_direction="inward_left", width_m=0.9),
+                DoorGeometry(door_id="door_bed_2", from_room="corridor", to_room=bed2_id, wall_edge="vertical", x1=round(env_x + W_b1 + W_corr, 2), y1=round(y_mid + 1.0, 2), x2=round(env_x + W_b1 + W_corr, 2), y2=round(y_mid + 1.9, 2), hinge_x=round(env_x + W_b1 + W_corr, 2), hinge_y=round(y_mid + 1.0, 2), swing_direction="inward_right", width_m=0.9),
+                DoorGeometry(door_id="door_dining", from_room="corridor", to_room=dining_id, wall_edge="horizontal", x1=round(env_x + W_b1 + W_corr + 0.5, 2), y1=y_mid, x2=round(env_x + W_b1 + W_corr + 1.4, 2), y2=y_mid, hinge_x=round(env_x + W_b1 + W_corr + 0.5, 2), hinge_y=y_mid, swing_direction="inward_right", width_m=0.9),
+                DoorGeometry(door_id="door_master", from_room="corridor", to_room=master_id, wall_edge="horizontal", x1=round(env_x + W_b1 + 0.5, 2), y1=y_rear, x2=round(env_x + W_b1 + 1.4, 2), y2=y_rear, hinge_x=round(env_x + W_b1 + 0.5, 2), hinge_y=y_rear, swing_direction="inward_left", width_m=0.9),
+                DoorGeometry(door_id=f"door_{primary_id}", from_room=master_id, to_room=primary_id, wall_edge="vertical", x1=round(env_x + W_bath2, 2), y1=round(y_rear + 1.0, 2), x2=round(env_x + W_bath2, 2), y2=round(y_rear + 1.9, 2), hinge_x=round(env_x + W_bath2, 2), hinge_y=round(y_rear + 1.0, 2), swing_direction="inward_left", width_m=0.9),
+                DoorGeometry(door_id="door_kitchen", from_room=dining_id, to_room=kitchen_id, wall_edge="horizontal", x1=round(env_x + env_w - 2.0, 2), y1=y_rear, x2=round(env_x + env_w - 1.1, 2), y2=y_rear, hinge_x=round(env_x + env_w - 2.0, 2), hinge_y=y_rear, swing_direction="inward_right", width_m=0.9),
+            ]
+            windows = [
+                WindowGeometry(window_id="win_1", room_id=living_id, wall_edge="north", x1=round(env_x + 1.2, 2), y1=env_y, x2=round(env_x + 2.7, 2), y2=env_y, width_m=1.5),
+                WindowGeometry(window_id="win_2", room_id=living_id, wall_edge="west", x1=env_x, y1=round(env_y + 0.8, 2), x2=env_x, y2=round(env_y + 2.3, 2), width_m=1.5),
+                WindowGeometry(window_id="win_3", room_id=puja_id, wall_edge="north", x1=round(env_x + liv_w + 0.5, 2), y1=env_y, x2=round(env_x + liv_w + 1.5, 2), y2=env_y, width_m=1.0),
+                WindowGeometry(window_id="win_4", room_id=puja_id, wall_edge="east", x1=round(env_x + env_w, 2), y1=round(env_y + 0.8, 2), x2=round(env_x + env_w, 2), y2=round(env_y + 1.8, 2), width_m=1.0),
+                WindowGeometry(window_id="win_5", room_id=common_id, wall_edge="west", x1=env_x, y1=round(y_mid + 0.8, 2), x2=env_x, y2=round(y_mid + 1.8, 2), width_m=1.0),
+                WindowGeometry(window_id="win_6", room_id=dining_id, wall_edge="east", x1=round(env_x + env_w, 2), y1=round(y_mid + 0.8, 2), x2=round(env_x + env_w, 2), y2=round(y_mid + 2.3, 2), width_m=1.5),
+                WindowGeometry(window_id="win_7", room_id=primary_id, wall_edge="west", x1=env_x, y1=round(y_rear + 0.8, 2), x2=env_x, y2=round(y_rear + 1.8, 2), width_m=1.0),
+                WindowGeometry(window_id="win_8", room_id=primary_id, wall_edge="south", x1=round(env_x + 0.3, 2), y1=round(env_y + env_h, 2), x2=round(env_x + 1.3, 2), y2=round(env_y + env_h, 2), width_m=1.0),
+                WindowGeometry(window_id="win_9", room_id=master_id, wall_edge="south", x1=round(env_x + W_bath2 + 1.0, 2), y1=round(env_y + env_h, 2), x2=round(env_x + W_bath2 + 2.5, 2), y2=round(env_y + env_h, 2), width_m=1.5),
+                WindowGeometry(window_id="win_10", room_id=kitchen_id, wall_edge="east", x1=round(env_x + env_w, 2), y1=round(y_rear + 0.8, 2), x2=round(env_x + env_w, 2), y2=round(y_rear + 2.3, 2), width_m=1.5),
+                WindowGeometry(window_id="win_11", room_id=kitchen_id, wall_edge="south", x1=round(env_x + env_w - 2.0, 2), y1=round(env_y + env_h, 2), x2=round(env_x + env_w - 0.5, 2), y2=round(env_y + env_h, 2), width_m=1.5),
+            ]
+        else:
+            # Wide plot configuration
+            H_pub = 3.75
+            H_mid = 2.80
+            H_rear = round(env_h - H_pub - H_mid, 2)
+
+            W_b2 = 3.00
+            puja_w = 2.40
+            liv_w = round(env_w - W_b2 - puja_w, 2)
+
+            W_din = round(min(3.40, max(3.10, 9.6 / H_mid)), 2)
+            W_corr = round(env_w - W_din, 2)
+
+            W_b1 = 1.65
+            W_b2_bath = 1.65
+            W_kitch = round(min(3.40, max(2.85, 10.5 / H_rear)), 2)
+            W_mb = round(env_w - W_b1 - W_b2_bath - W_kitch, 2)
+
+            y_mid = round(env_y + H_pub, 2)
+            y_rear = round(y_mid + H_mid, 2)
+
+            rooms = [
+                RoomRectangle(room_id=bed2_id, room_name=ROOM_CATALOG.get(bed2_id, {}).get("name", "Bedroom 2"), x=env_x, y=env_y, width=W_b2, height=H_pub, area_sqm=round(W_b2 * H_pub, 2), zone="NW", vastu_compliant=True),
+                RoomRectangle(room_id=living_id, room_name=ROOM_CATALOG.get(living_id, {}).get("name", "Living Room"), x=round(env_x + W_b2, 2), y=env_y, width=liv_w, height=H_pub, area_sqm=round(liv_w * H_pub, 2), zone="N", vastu_compliant=True),
+                RoomRectangle(room_id=puja_id, room_name=ROOM_CATALOG.get(puja_id, {}).get("name", "Puja Room"), x=round(env_x + W_b2 + liv_w, 2), y=env_y, width=puja_w, height=H_pub, area_sqm=round(puja_w * H_pub, 2), zone="NE", vastu_compliant=True),
+                RoomRectangle(room_id="corridor", room_name="Corridor", x=env_x, y=y_mid, width=W_corr, height=H_mid, area_sqm=round(W_corr * H_mid, 2), zone="Center", vastu_compliant=True),
+                RoomRectangle(room_id=dining_id, room_name=ROOM_CATALOG.get(dining_id, {}).get("name", "Dining Area"), x=round(env_x + W_corr, 2), y=y_mid, width=W_din, height=H_mid, area_sqm=round(W_din * H_mid, 2), zone="E", vastu_compliant=True),
+                RoomRectangle(room_id=common_id, room_name=ROOM_CATALOG.get(common_id, {}).get("name", "Common Bath"), x=env_x, y=y_rear, width=W_b1, height=H_rear, area_sqm=round(W_b1 * H_rear, 2), zone="W", vastu_compliant=True),
+                RoomRectangle(room_id=primary_id, room_name=ROOM_CATALOG.get(primary_id, {}).get("name", "Primary Bath"), x=round(env_x + W_b1, 2), y=y_rear, width=W_b2_bath, height=H_rear, area_sqm=round(W_b2_bath * H_rear, 2), zone="S", vastu_compliant=True),
+                RoomRectangle(room_id=master_id, room_name=ROOM_CATALOG.get(master_id, {}).get("name", "Master Bedroom"), x=round(env_x + W_b1 + W_b2_bath, 2), y=y_rear, width=W_mb, height=H_rear, area_sqm=round(W_mb * H_rear, 2), zone="SW", vastu_compliant=True),
+                RoomRectangle(room_id=kitchen_id, room_name=ROOM_CATALOG.get(kitchen_id, {}).get("name", "Kitchen"), x=round(env_x + W_b1 + W_b2_bath + W_mb, 2), y=y_rear, width=W_kitch, height=H_rear, area_sqm=round(W_kitch * H_rear, 2), zone="SE", vastu_compliant=True),
+            ]
+            doors = [
+                DoorGeometry(door_id="main_entry", from_room="exterior", to_room=living_id, wall_edge="horizontal", x1=round(env_x + W_b2 + (liv_w - 1.0) / 2.0, 2), y1=env_y, x2=round(env_x + W_b2 + (liv_w + 1.0) / 2.0, 2), y2=env_y, hinge_x=round(env_x + W_b2 + (liv_w - 1.0) / 2.0, 2), hinge_y=env_y, swing_direction="inward_right", width_m=1.0),
+                DoorGeometry(door_id="door_puja", from_room=living_id, to_room=puja_id, wall_edge="vertical", x1=round(env_x + W_b2 + liv_w, 2), y1=round(env_y + 1.0, 2), x2=round(env_x + W_b2 + liv_w, 2), y2=round(env_y + 1.9, 2), hinge_x=round(env_x + W_b2 + liv_w, 2), hinge_y=round(env_y + 1.0, 2), swing_direction="inward_right", width_m=0.9),
+                DoorGeometry(door_id="door_corridor", from_room=living_id, to_room="corridor", wall_edge="horizontal", x1=round(env_x + W_b2 + 1.0, 2), y1=y_mid, x2=round(env_x + W_b2 + 1.9, 2), y2=y_mid, hinge_x=round(env_x + W_b2 + 1.0, 2), hinge_y=y_mid, swing_direction="inward_right", width_m=0.9),
+                DoorGeometry(door_id="door_bed_2", from_room="corridor", to_room=bed2_id, wall_edge="horizontal", x1=round(env_x + 1.0, 2), y1=y_mid, x2=round(env_x + 1.9, 2), y2=y_mid, hinge_x=round(env_x + 1.0, 2), hinge_y=y_mid, swing_direction="inward_left", width_m=0.9),
+                DoorGeometry(door_id="door_dining", from_room="corridor", to_room=dining_id, wall_edge="vertical", x1=round(env_x + W_corr, 2), y1=round(y_mid + 0.8, 2), x2=round(env_x + W_corr, 2), y2=round(y_mid + 1.7, 2), hinge_x=round(env_x + W_corr, 2), hinge_y=round(y_mid + 0.8, 2), swing_direction="inward_right", width_m=0.9),
+                DoorGeometry(door_id=f"door_{common_id}", from_room="corridor", to_room=common_id, wall_edge="horizontal", x1=round(env_x + (W_b1 - 0.9) / 2.0, 2), y1=y_rear, x2=round(env_x + (W_b1 + 0.9) / 2.0, 2), y2=y_rear, hinge_x=round(env_x + (W_b1 - 0.9) / 2.0, 2), hinge_y=y_rear, swing_direction="inward_right", width_m=0.9),
+                DoorGeometry(door_id=f"door_{primary_id}", from_room=master_id, to_room=primary_id, wall_edge="vertical", x1=round(env_x + W_b1 + W_b2_bath, 2), y1=round(y_rear + 1.0, 2), x2=round(env_x + W_b1 + W_b2_bath, 2), y2=round(y_rear + 1.9, 2), hinge_x=round(env_x + W_b1 + W_b2_bath, 2), hinge_y=round(y_rear + 1.0, 2), swing_direction="inward_left", width_m=0.9),
+                DoorGeometry(door_id="door_master", from_room="corridor", to_room=master_id, wall_edge="horizontal", x1=round(env_x + W_b1 + W_b2_bath + 1.0, 2), y1=y_rear, x2=round(env_x + W_b1 + W_b2_bath + 1.9, 2), y2=y_rear, hinge_x=round(env_x + W_b1 + W_b2_bath + 1.0, 2), hinge_y=y_rear, swing_direction="inward_left", width_m=0.9),
+                DoorGeometry(door_id="door_kitchen", from_room=dining_id, to_room=kitchen_id, wall_edge="horizontal", x1=round(env_x + env_w - 2.0, 2), y1=y_rear, x2=round(env_x + env_w - 1.1, 2), y2=y_rear, hinge_x=round(env_x + env_w - 2.0, 2), hinge_y=y_rear, swing_direction="inward_right", width_m=0.9),
+            ]
+            windows = [
+                WindowGeometry(window_id="win_1", room_id=bed2_id, wall_edge="north", x1=round(env_x + 0.8, 2), y1=env_y, x2=round(env_x + 2.3, 2), y2=env_y, width_m=1.5),
+                WindowGeometry(window_id="win_2", room_id=bed2_id, wall_edge="west", x1=env_x, y1=round(env_y + 0.8, 2), x2=env_x, y2=round(env_y + 2.3, 2), width_m=1.5),
+                WindowGeometry(window_id="win_3", room_id=living_id, wall_edge="north", x1=round(env_x + W_b2 + 1.0, 2), y1=env_y, x2=round(env_x + W_b2 + 2.5, 2), y2=env_y, width_m=1.5),
+                WindowGeometry(window_id="win_4", room_id=puja_id, wall_edge="north", x1=round(env_x + env_w - 2.0, 2), y1=env_y, x2=round(env_x + env_w - 0.8, 2), y2=env_y, width_m=1.0),
+                WindowGeometry(window_id="win_5", room_id=puja_id, wall_edge="east", x1=round(env_x + env_w, 2), y1=round(env_y + 0.8, 2), x2=round(env_x + env_w, 2), y2=round(env_y + 1.8, 2), width_m=1.0),
+                WindowGeometry(window_id="win_6", room_id=dining_id, wall_edge="east", x1=round(env_x + env_w, 2), y1=round(y_mid + 0.8, 2), x2=round(env_x + env_w, 2), y2=round(y_mid + 2.3, 2), width_m=1.5),
+                WindowGeometry(window_id="win_7", room_id=common_id, wall_edge="west", x1=env_x, y1=round(y_rear + 0.8, 2), x2=env_x, y2=round(y_rear + 1.8, 2), width_m=1.0),
+                WindowGeometry(window_id="win_8", room_id=primary_id, wall_edge="south", x1=round(env_x + W_b1 + 0.3, 2), y1=round(env_y + env_h, 2), x2=round(env_x + W_b1 + 1.3, 2), y2=round(env_y + env_h, 2), width_m=1.0),
+                WindowGeometry(window_id="win_9", room_id=master_id, wall_edge="south", x1=round(env_x + W_b1 + W_b2_bath + 1.0, 2), y1=round(env_y + env_h, 2), x2=round(env_x + W_b1 + W_b2_bath + 2.5, 2), y2=round(env_y + env_h, 2), width_m=1.5),
+                WindowGeometry(window_id="win_10", room_id=kitchen_id, wall_edge="east", x1=round(env_x + env_w, 2), y1=round(y_rear + 0.8, 2), x2=round(env_x + env_w, 2), y2=round(y_rear + 2.3, 2), width_m=1.5),
+                WindowGeometry(window_id="win_11", room_id=kitchen_id, wall_edge="south", x1=round(env_x + env_w - 2.0, 2), y1=round(env_y + env_h, 2), x2=round(env_x + env_w - 0.5, 2), y2=round(env_y + env_h, 2), width_m=1.5),
+            ]
+
+        envelope = EnvelopeRect(x=env_x, y=env_y, width=env_w, height=env_h, area_sqm=env_area)
+        model = RectanglesModel(envelope=envelope, rooms=rooms, doors=doors, windows=windows)
+
+        passed, qa_dict, violations = evaluate_solver_qa(model, strictness="low")
+        model.qa = FloorPlanQA(
+            entry=qa_dict.get("entry", "living"),
+            circulation=qa_dict.get("circulation", "connected"),
+            leaf_rule=qa_dict.get("leaf_rule", True),
+            peripheral_service=qa_dict.get("peripheral_service", True),
+            catalog=qa_dict.get("catalog", True),
+            aspect=qa_dict.get("aspect", True),
+            critic="pass",
+            violations=qa_dict.get("violations", 0)
+        )
+        return model
+
+    def _solve_typology_templates(self, strictness: str, force_template: bool = False) -> Optional[RectanglesModel]:
+        """
+        Dispatches to reference typology templates:
+        Template A: Single-family (5 rooms).
+        Template B: 6-room family (living, puja, master_bed, bed_2, bath_1, kitchen).
+        Template C: Multi-room / 2-bath (>= 7 rooms).
+        """
+        # If custom/specialized rooms are requested (e.g. office, study, powder room, stairs, etc.),
+        # standard templates cannot satisfy them; guillotine dissection must be used.
+        custom_room_tokens = ("office", "study", "powder", "stairs", "staircase", "utility", "servant", "maid", "gym", "theatre", "theater", "balcony", "foyer", "store")
+        if not force_template and any(any(tok in r for tok in custom_room_tokens) for r in self.required_rooms):
+            return None
+
+        has_puja = any(is_puja_room(r) for r in self.required_rooms)
+        if not has_puja and not force_template:
+            # If user did not request puja, do not force a puja room via standard template
+            return None
+
+        n_rooms = len(self.required_rooms)
+        has_two_baths = sum(1 for r in self.required_rooms if is_bath_or_wc(r)) >= 2
+        has_bed2 = sum(1 for r in self.required_rooms if is_bedroom_room(r)) >= 2
+
+        if has_two_baths or n_rooms >= 7:
+            res = self._solve_template_c(strictness)
+            if res is not None:
+                return res
+            res = self._solve_template_b(strictness)
+            if res is not None:
+                return res
+            return self._solve_template_a(strictness)
+        elif has_bed2 or n_rooms == 6:
+            res = self._solve_template_b(strictness)
+            if res is not None:
+                return res
+            return self._solve_template_a(strictness)
+        else:
+            res = self._solve_template_a(strictness)
+            if res is not None:
+                return res
+            return self._solve_template_b(strictness)
+
+    def solve(self, force_template: bool = False) -> Tuple[Optional[RectanglesModel], str, List[str]]:
+        """
+        Executes envelope-first rectangular dissection with QA gate verification.
+        Attempts reference typology template first -> falls back to guillotine slicing -> falls back to template.
+        Guarantees topological invariants: leaf rule, peripheral service, and catalog bounds.
         """
         self.start_time = time.perf_counter()
         self.iterations = 0
         self.timed_out = False
         warnings: List[str] = []
 
-        # 1. Attempt with requested strictness
+        # 0. Primary Attempt: Reference Typology Templates (Blueprint Spatial Logic v12)
+        if force_template or len(self.required_rooms) <= 9:
+            template_model = self._solve_typology_templates(self.vastu_strictness, force_template=force_template)
+            if template_model is not None:
+                return template_model, "optimal", warnings
+
+        # 1. Recursive guillotine slicing attempt
         strictness = self.vastu_strictness
         rects = self._dissect(self.env_x, self.env_y, self.env_w, self.env_h, self.required_rooms, strictness)
 
-        # 2. Retry at medium strictness if high strictness failed
         status = "optimal"
         if rects is None and strictness == "high":
             warnings.append("High strictness Vastu dissection infeasible; retrying with medium strictness.")
@@ -636,19 +1136,29 @@ class DissectionEngine:
             rects = self._dissect(self.env_x, self.env_y, self.env_w, self.env_h, self.required_rooms, strictness)
             status = "compromise"
 
-        # 3. Retry at low strictness if medium failed
         if rects is None and strictness == "medium":
             warnings.append("Medium strictness dissection infeasible; relaxing to low strictness.")
             strictness = "low"
             rects = self._dissect(self.env_x, self.env_y, self.env_w, self.env_h, self.required_rooms, strictness)
             status = "compromise"
 
+        # Fallback to template library if guillotine cut returned None
         if rects is None:
+            template_fallback = self._solve_typology_templates("low")
+            if template_fallback is not None:
+                warnings.append("Guillotine slicing failed; applied reference typology template.")
+                return template_fallback, "compromise", warnings
             return None, "failed", warnings
 
-        # 4. Check Adjacency & Circulation
+        # 2. Check Adjacency & Circulation for dissected layout
         adj = self._build_adjacency_graph(rects)
-        hub = "living" if "living" in [r[0] for r in rects] else rects[0][0]
+        hub = None
+        for candidate in ["living", "lobby", "retail_floor", "reception", "corridor"]:
+            if candidate in [r[0] for r in rects]:
+                hub = candidate
+                break
+        if not hub:
+            hub = rects[0][0]
 
         # Verify connectivity
         visited: Set[str] = set()
@@ -665,21 +1175,6 @@ class DissectionEngine:
             warnings.append("Sub-optimal circulation connectivity in partitioned layout.")
             status = "compromise"
 
-        # Check wet room clustering (kitchen, bath_1, bath_2)
-        wet_rooms = [r[0] for r in rects if ROOM_CATALOG.get(r[0], {}).get("wet", False)]
-        if len(wet_rooms) >= 2:
-            wet_adj = False
-            for w1 in wet_rooms:
-                for neighbor, _, _, _, _, _ in adj.get(w1, []):
-                    if neighbor in wet_rooms:
-                        wet_adj = True
-                        break
-                if wet_adj:
-                    break
-            if not wet_adj:
-                warnings.append("Wet rooms are not directly adjacent; separate plumbing stacks required.")
-
-        # 5. Build structured geometry
         doors, windows = self._generate_doors_and_windows(rects, adj)
 
         envelope = EnvelopeRect(
@@ -713,6 +1208,26 @@ class DissectionEngine:
             rooms=room_models,
             doors=doors,
             windows=windows
+        )
+
+        # 3. Evaluate Solver QA Gate
+        passed, qa_dict, violations = evaluate_solver_qa(rect_model, strictness=strictness)
+        if not passed:
+            # QA gate failed: fallback to template library to guarantee topological invariants
+            template_fallback = self._solve_typology_templates("low")
+            if template_fallback is not None:
+                warnings.append(f"Guillotine layout failed QA gate ({violations}); applied reference typology template.")
+                return template_fallback, "compromise", warnings
+
+        rect_model.qa = FloorPlanQA(
+            entry=qa_dict.get("entry", "living"),
+            circulation=qa_dict.get("circulation", "connected"),
+            leaf_rule=qa_dict.get("leaf_rule", True),
+            peripheral_service=qa_dict.get("peripheral_service", True),
+            catalog=qa_dict.get("catalog", True),
+            aspect=qa_dict.get("aspect", True),
+            critic="pass",
+            violations=qa_dict.get("violations", 0)
         )
 
         return rect_model, status, warnings

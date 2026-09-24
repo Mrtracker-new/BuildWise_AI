@@ -65,6 +65,9 @@ class RoomBox:
 ROOM_CATALOG: Dict[str, Dict[str, Any]] = {
     "master_bed": {
         "name": "Master Bedroom",
+        "functional_zone": "PRIVATE",
+        "catalog_min_m2": 14.0,
+        "catalog_max_m2": 22.0,
         "area_cells": 12,
         "shapes": [(4, 3), (3, 4)],  # (w, h)
         "canonical_zone": "SW",
@@ -74,6 +77,9 @@ ROOM_CATALOG: Dict[str, Dict[str, Any]] = {
     },
     "living": {
         "name": "Living Room",
+        "functional_zone": "PUBLIC",
+        "catalog_min_m2": 18.0,
+        "catalog_max_m2": 35.0,
         "area_cells": 15,
         "shapes": [(5, 3), (3, 5), (4, 4)],
         "canonical_zone": "Center",
@@ -83,6 +89,9 @@ ROOM_CATALOG: Dict[str, Dict[str, Any]] = {
     },
     "kitchen": {
         "name": "Kitchen",
+        "functional_zone": "SERVICE",
+        "catalog_min_m2": 9.0,
+        "catalog_max_m2": 16.0,
         "area_cells": 8,
         "shapes": [(4, 2), (2, 4), (3, 3)],
         "canonical_zone": "SE",
@@ -92,6 +101,9 @@ ROOM_CATALOG: Dict[str, Dict[str, Any]] = {
     },
     "puja": {
         "name": "Puja Room",
+        "functional_zone": "PUBLIC",
+        "catalog_min_m2": 4.0,
+        "catalog_max_m2": 9.0,
         "area_cells": 4,
         "shapes": [(2, 2), (2, 1), (1, 2)],
         "canonical_zone": "NE",
@@ -100,7 +112,10 @@ ROOM_CATALOG: Dict[str, Dict[str, Any]] = {
         "wet": False
     },
     "bath_1": {
-        "name": "Primary Bath",
+        "name": "Common Bath",
+        "functional_zone": "SERVICE",
+        "catalog_min_m2": 3.5,
+        "catalog_max_m2": 6.0,
         "area_cells": 4,
         "shapes": [(2, 2), (1, 3), (3, 1)],
         "canonical_zone": "NW",
@@ -109,7 +124,10 @@ ROOM_CATALOG: Dict[str, Dict[str, Any]] = {
         "wet": True
     },
     "bath_2": {
-        "name": "Common Bath",
+        "name": "Primary Bath",
+        "functional_zone": "SERVICE",
+        "catalog_min_m2": 3.5,
+        "catalog_max_m2": 6.0,
         "area_cells": 4,
         "shapes": [(2, 2), (1, 3)],
         "canonical_zone": "NW",
@@ -117,8 +135,23 @@ ROOM_CATALOG: Dict[str, Dict[str, Any]] = {
         "prohibited": ["NE"],
         "wet": True
     },
+    "wc": {
+        "name": "Water Closet",
+        "functional_zone": "SERVICE",
+        "catalog_min_m2": 1.5,
+        "catalog_max_m2": 2.5,
+        "area_cells": 2,
+        "shapes": [(2, 1), (1, 2)],
+        "canonical_zone": "NW",
+        "allowed_secondary": ["W", "S"],
+        "prohibited": ["NE"],
+        "wet": True
+    },
     "bed_2": {
         "name": "Bedroom 2",
+        "functional_zone": "PRIVATE",
+        "catalog_min_m2": 10.0,
+        "catalog_max_m2": 18.0,
         "area_cells": 9,
         "shapes": [(3, 3), (4, 3), (3, 4)],
         "canonical_zone": "W",
@@ -128,6 +161,9 @@ ROOM_CATALOG: Dict[str, Dict[str, Any]] = {
     },
     "dining": {
         "name": "Dining Area",
+        "functional_zone": "SERVICE",
+        "catalog_min_m2": 9.0,
+        "catalog_max_m2": 14.0,
         "area_cells": 8,
         "shapes": [(4, 2), (2, 4), (3, 2)],
         "canonical_zone": "W",
@@ -135,8 +171,35 @@ ROOM_CATALOG: Dict[str, Dict[str, Any]] = {
         "prohibited": [],
         "wet": False
     },
+    "study": {
+        "name": "Study Room",
+        "functional_zone": "PRIVATE",
+        "catalog_min_m2": 8.0,
+        "catalog_max_m2": 12.0,
+        "area_cells": 6,
+        "shapes": [(3, 2), (2, 3)],
+        "canonical_zone": "NE",
+        "allowed_secondary": ["N", "W"],
+        "prohibited": ["SW"],
+        "wet": False
+    },
+    "utility": {
+        "name": "Utility",
+        "functional_zone": "SERVICE",
+        "catalog_min_m2": 3.0,
+        "catalog_max_m2": 6.0,
+        "area_cells": 4,
+        "shapes": [(2, 2), (2, 1)],
+        "canonical_zone": "SE",
+        "allowed_secondary": ["NW", "S"],
+        "prohibited": ["NE"],
+        "wet": True
+    },
     "stairs": {
         "name": "Staircase",
+        "functional_zone": "SERVICE",
+        "catalog_min_m2": 6.0,
+        "catalog_max_m2": 10.0,
         "area_cells": 6,
         "shapes": [(3, 2), (2, 3), (2, 2)],
         "canonical_zone": "SW",
@@ -146,6 +209,9 @@ ROOM_CATALOG: Dict[str, Dict[str, Any]] = {
     },
     "corridor": {
         "name": "Circulation Foyer",
+        "functional_zone": "PUBLIC",
+        "catalog_min_m2": 4.0,
+        "catalog_max_m2": 12.0,
         "area_cells": 6,
         "shapes": [(3, 2), (2, 3), (4, 1), (1, 4)],
         "canonical_zone": "Center",
@@ -154,6 +220,53 @@ ROOM_CATALOG: Dict[str, Dict[str, Any]] = {
         "wet": False
     }
 }
+
+
+def normalize_room_identifier(room_id: str) -> str:
+    r = room_id.lower().strip().replace(" ", "_")
+    if r in ("hall", "foyer", "living_room", "family_living"):
+        return "living"
+    if r in ("pooja", "puja_room", "mandir", "prayer"):
+        return "puja"
+    if r in ("master", "master_bedroom", "primary_bedroom", "bed_1"):
+        return "master_bed"
+    if r in ("kitchen_room", "kitchenette", "cook_room"):
+        return "kitchen"
+    if r in ("toilet", "washroom", "restroom", "powder_room"):
+        return "wc"
+    if r in ("primary_bath", "ensuite_bath", "ensuite", "attached_bath"):
+        return "bath_2"
+    if r in ("bathroom", "bath", "common_bath"):
+        return "bath_1"
+    if r in ("bedroom_2", "guest_bed", "bed"):
+        return "bed_2"
+    if r in ("dining_room", "dinning"):
+        return "dining"
+    if r in ("utility_room", "work_area"):
+        return "utility"
+    return r
+
+
+def get_room_catalog_entry(room_id: str) -> Dict[str, Any]:
+    norm = normalize_room_identifier(room_id)
+    if norm in ROOM_CATALOG:
+        return ROOM_CATALOG[norm]
+    # Check prefixes
+    for k, v in ROOM_CATALOG.items():
+        if norm.startswith(k) or k in norm:
+            return v
+    # Fallback generic room
+    return {
+        "name": norm.replace("_", " ").title(),
+        "functional_zone": "PRIVATE",
+        "catalog_min_m2": 8.0,
+        "catalog_max_m2": 16.0,
+        "area_cells": 8,
+        "canonical_zone": "Center",
+        "allowed_secondary": ["N", "S", "E", "W"],
+        "prohibited": [],
+        "wet": False
+    }
 
 
 class SpatialGrid:
