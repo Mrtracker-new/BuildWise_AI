@@ -18,7 +18,14 @@ from app.schemas.floorplan import (
     FloorPlanRequest,
     FloorPlanResponse,
     RoomPlacement,
-    FloorPlanMetrics
+    FloorPlanMetrics,
+    FloorPlanQA
+)
+from app.schemas.room_program import (
+    RoomProgram,
+    RoomSpec,
+    VastuZone,
+    SolverHints
 )
 
 __all__ = [
@@ -38,6 +45,11 @@ __all__ = [
     "FloorPlanRequest",
     "FloorPlanResponse",
     "RoomPlacement",
-    "FloorPlanMetrics"
+    "FloorPlanMetrics",
+    "FloorPlanQA",
+    "RoomProgram",
+    "RoomSpec",
+    "VastuZone",
+    "SolverHints"
 ]
 

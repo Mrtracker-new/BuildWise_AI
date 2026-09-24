@@ -19,11 +19,20 @@ def get_ai_adapter(provider: Optional[str] = "mock") -> BaseExplanationAdapter:
         return OllamaExplanationAdapter()
     return MockExplanationAdapter()
 
+from app.ai.blueprint_program import generate_room_program, FALLBACK_PROGRAMS
+from app.ai.layout_critic import evaluate_layout_critic
+from app.ai.placement_reasoner import reason_placement_sync
+
 __all__ = [
     "BaseExplanationAdapter",
     "MockExplanationAdapter",
     "GroqExplanationAdapter",
     "GeminiExplanationAdapter",
     "OllamaExplanationAdapter",
-    "get_ai_adapter"
+    "get_ai_adapter",
+    "generate_room_program",
+    "FALLBACK_PROGRAMS",
+    "evaluate_layout_critic",
+    "reason_placement_sync"
 ]
+

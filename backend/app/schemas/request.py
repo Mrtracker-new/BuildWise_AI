@@ -12,6 +12,7 @@ class AnalysisRequest(BaseModel):
     override_land_rate_per_sqft: Optional[float] = Field(None, ge=10.0, le=500000.0, description="Optional user-supplied land rate override in INR per sq ft")
     plot_area_sqft: Optional[float] = Field(None, ge=200.0, le=100000.0, description="Site plot area in sq ft; derived from ground coverage if omitted")
     ground_coverage_ratio: Optional[float] = Field(0.60, ge=0.40, le=0.75, description="Ground coverage ratio for plot area derivation (0.40 to 0.75, default 0.60)")
+    client_requirements: Optional[str] = Field(None, max_length=240, description="Optional user requirements / client notes")
 
 class ReportRequest(BaseModel):
     analysis_data: dict = Field(..., description="Complete AnalysisResponse payload for PDF compilation")
