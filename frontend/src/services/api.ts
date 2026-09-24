@@ -1,7 +1,5 @@
 import type {
-  AnalysisRequest,
   AnalysisResponse,
-  HealthResponse,
   SiteVisionRequest,
   SiteVisionResponse,
   FloorPlanRequest,
@@ -10,35 +8,6 @@ import type {
 } from './types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
-export async function fetchHealth(): Promise<HealthResponse> {
-  const resp = await fetch(`${API_BASE_URL}/api/health`);
-  if (!resp.ok) {
-    throw new Error(`Health check failed with status: ${resp.status}`);
-  }
-  return resp.json();
-}
-
-export async function submitAnalysis(
-  request: AnalysisRequest,
-  signal?: AbortSignal
-): Promise<AnalysisResponse> {
-  const resp = await fetch(`${API_BASE_URL}/api/analyze`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(request),
-    signal,
-  });
-
-  if (!resp.ok) {
-    const errorData = await resp.json().catch(() => ({}));
-    throw new Error(errorData.detail || `Analysis request failed with status: ${resp.status}`);
-  }
-
-  return resp.json();
-}
 
 export async function submitSiteVision(
   request: SiteVisionRequest,

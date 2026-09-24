@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import List
 
 from app.schemas.response import (
     FactorScore,

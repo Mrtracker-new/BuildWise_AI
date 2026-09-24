@@ -1,7 +1,6 @@
-import math
-from typing import List, Dict, Tuple, Optional, Any, Set
-from app.services.floorplan.grid_model import RoomBox, SpatialGrid, ROOM_CATALOG
-from app.schemas.floorplan import RectanglesModel, EnvelopeRect, RoomRectangle, DoorGeometry, WindowGeometry
+from typing import List, Dict, Tuple, Optional, Any
+from app.services.floorplan.grid_model import RoomBox, ROOM_CATALOG
+from app.schemas.floorplan import RectanglesModel
 
 # Professional architectural pastel fills (15% opacity is applied in SVG rendering)
 PASTEL_COLORS: Dict[str, str] = {

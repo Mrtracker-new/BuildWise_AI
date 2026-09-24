@@ -242,13 +242,6 @@ export interface AnalysisResponse {
   warnings: string[];
 }
 
-export interface HealthResponse {
-  status: string;
-  version: string;
-  ai_adapters_available: string[];
-  active_default_ai: string;
-}
-
 // ----------------------------------------------------
 // Satellite Vision & Tree Preservation Module
 // ----------------------------------------------------

@@ -21,21 +21,12 @@ export type IconName =
   | 'truck'
   | 'file-text'
   | 'x'
-  | 'chevron-right'
   | 'chevron-down'
   | 'loader'
   | 'activity'
-  | 'waves'
-  | 'cloud-lightning'
   | 'layout-grid'
-  | 'navigation'
-  | 'arrow-up'
-  | 'tag'
   | 'tree'
   | 'satellite'
-  | 'eye'
-  | 'zoom-in'
-  | 'zoom-out'
   | 'maximize'
   | 'sliders'
   | 'blueprint'
@@ -238,12 +229,6 @@ export const Icon: React.FC<IconProps> = ({
           <line x1="6" y1="6" x2="18" y2="18" />
         </svg>
       );
-    case 'chevron-right':
-      return (
-        <svg {...commonProps}>
-          <polyline points="9 18 15 12 9 6" />
-        </svg>
-      );
     case 'chevron-down':
       return (
         <svg {...commonProps}>
@@ -269,21 +254,6 @@ export const Icon: React.FC<IconProps> = ({
           <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
         </svg>
       );
-    case 'waves':
-      return (
-        <svg {...commonProps}>
-          <path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1" />
-          <path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1" />
-          <path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1" />
-        </svg>
-      );
-    case 'cloud-lightning':
-      return (
-        <svg {...commonProps}>
-          <path d="M19 16.9A5 5 0 0 0 18 7h-1.26a8 8 0 1 0-11.62 9" />
-          <polyline points="13 11 9 17 15 17 11 23" />
-        </svg>
-      );
     case 'layout-grid':
       return (
         <svg {...commonProps}>
@@ -291,25 +261,6 @@ export const Icon: React.FC<IconProps> = ({
           <rect width="7" height="7" x="14" y="3" rx="1" />
           <rect width="7" height="7" x="14" y="14" rx="1" />
           <rect width="7" height="7" x="3" y="14" rx="1" />
-        </svg>
-      );
-    case 'navigation':
-      return (
-        <svg {...commonProps}>
-          <polygon points="3 11 22 2 13 21 11 13 3 11" />
-        </svg>
-      );
-    case 'arrow-up':
-      return (
-        <svg {...commonProps}>
-          <line x1="12" y1="19" x2="12" y2="5" />
-          <polyline points="5 12 12 5 19 12" />
-        </svg>
-      );
-    case 'tag':
-      return (
-        <svg {...commonProps}>
-          <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" />
         </svg>
       );
     case 'tree':
@@ -327,30 +278,6 @@ export const Icon: React.FC<IconProps> = ({
           <path d="m8 12 4 4" />
           <path d="m16 8-4-4" />
           <path d="M12 20a8 8 0 1 0-8-8" />
-        </svg>
-      );
-    case 'eye':
-      return (
-        <svg {...commonProps}>
-          <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
-          <circle cx="12" cy="12" r="3" />
-        </svg>
-      );
-    case 'zoom-in':
-      return (
-        <svg {...commonProps}>
-          <circle cx="11" cy="11" r="8" />
-          <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          <line x1="11" y1="8" x2="11" y2="14" />
-          <line x1="8" y1="11" x2="14" y2="11" />
-        </svg>
-      );
-    case 'zoom-out':
-      return (
-        <svg {...commonProps}>
-          <circle cx="11" cy="11" r="8" />
-          <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          <line x1="8" y1="11" x2="14" y2="11" />
         </svg>
       );
     case 'maximize':

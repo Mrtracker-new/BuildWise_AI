@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any
 
 @dataclass(frozen=True)
 class RoomBox:

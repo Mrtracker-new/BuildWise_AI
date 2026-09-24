@@ -124,7 +124,6 @@ This batch script automatically frees stale ports 8000 and 5173, starts Uvicorn,
 | Variable | Default Value | Description |
 | :--- | :--- | :--- |
 | `VITE_API_URL` | `http://localhost:8000` | Base URL of the backend API service accessed by Axios/fetch calls. |
-| `VITE_CARTO_API_KEY` | *(empty)* | Optional. Key for CARTO basemap tiles. Defaults to OpenFreeMap without keys. |
 
 ---
 

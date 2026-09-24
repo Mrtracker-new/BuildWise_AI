@@ -1,7 +1,6 @@
-import math
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, Any, Tuple, Optional, List
+from typing import Dict, Any, Tuple
 
 from app.services.vision.indices import resample_to_shape
 

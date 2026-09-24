@@ -4,7 +4,7 @@ Data-driven codification of Indian residential architectural canon (NBC 2016 & V
 No prose: pure typed structures with hard constraints, forbidden adjacencies, and band rules.
 """
 
-from typing import List, Dict, Set, Optional, Any
+from typing import List, Dict, Any
 from pydantic import BaseModel, Field
 
 

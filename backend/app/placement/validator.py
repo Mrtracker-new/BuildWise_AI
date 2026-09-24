@@ -5,11 +5,10 @@ Enforces that no layout with forbidden adjacencies (e.g. bath adjacent to pooja 
 can ever reach the geometry solver.
 """
 
-from typing import Dict, List, Any, Tuple, Optional
+from typing import Dict, List, Any, Optional
 from pydantic import BaseModel, Field
 
 from app.placement.kb import (
-    PLACEMENT_KB,
     get_placement_rule,
     get_kb_default_placement,
     normalize_room_type,

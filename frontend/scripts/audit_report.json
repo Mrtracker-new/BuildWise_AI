@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-24T07:29:24.321Z",
+  "timestamp": "2026-09-24T18:02:25.048Z",
   "totalViolations": 0,
   "passedAllChecks": true,
   "viewportResults": [
@@ -220,46 +220,46 @@
       "angleResults": [
         {
           "zoom": 12,
-          "bearing": "90.60",
-          "devFromEastWest": "0.60"
+          "bearing": "91.51",
+          "devFromEastWest": "1.51"
         },
         {
           "zoom": 13,
-          "bearing": "90.60",
-          "devFromEastWest": "0.60"
+          "bearing": "91.51",
+          "devFromEastWest": "1.51"
         },
         {
           "zoom": 14,
-          "bearing": "90.60",
-          "devFromEastWest": "0.60"
+          "bearing": "91.51",
+          "devFromEastWest": "1.51"
         },
         {
           "zoom": 15,
-          "bearing": "90.60",
-          "devFromEastWest": "0.60"
+          "bearing": "91.51",
+          "devFromEastWest": "1.51"
         },
         {
           "zoom": 16,
-          "bearing": "90.60",
-          "devFromEastWest": "0.60"
+          "bearing": "91.51",
+          "devFromEastWest": "1.51"
         },
         {
           "zoom": 17,
-          "bearing": "90.60",
-          "devFromEastWest": "0.60"
+          "bearing": "91.51",
+          "devFromEastWest": "1.51"
         },
         {
           "zoom": 18,
-          "bearing": "90.60",
-          "devFromEastWest": "0.60"
+          "bearing": "91.51",
+          "devFromEastWest": "1.51"
         },
         {
           "zoom": 19,
-          "bearing": "90.60",
-          "devFromEastWest": "0.60"
+          "bearing": "91.51",
+          "devFromEastWest": "1.51"
         }
       ],
-      "message": "Long side runs within 5° of East-West on screen at all zooms (bearing: 90.60°, deviation: 0.60°)"
+      "message": "Long side runs within 5° of East-West on screen at all zooms (bearing: 91.51°, deviation: 1.51°)"
     }
   ]
 }

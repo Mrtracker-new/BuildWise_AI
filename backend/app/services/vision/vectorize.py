@@ -63,7 +63,6 @@ def _pixel_to_latlon(
     """
     if affine_transform is not None and crs:
         try:
-            import rasterio
             from rasterio.warp import transform as warp_transform
             # affine_transform * (col, row) yields native CRS (e.g. UTM) coordinates
             x_native, y_native = affine_transform * (col, row)
@@ -72,7 +71,7 @@ def _pixel_to_latlon(
         except Exception:
             pass
 
-    # High-precision geodesic fallback centered on (center_lat, center_lon)
+    # High-precision geographic meter-to-degree geodesic conversion centered on (center_lat, center_lon)
     h, w = grid_shape
     center_c = (w - 1) / 2.0
     center_r = (h - 1) / 2.0
@@ -116,7 +115,7 @@ def vectorize_mask(
     features: List[Dict[str, Any]] = []
 
     try:
-        from shapely.geometry import box, mapping, Polygon, MultiPolygon
+        from shapely.geometry import box, Polygon, MultiPolygon
         from shapely.ops import unary_union
         has_shapely = True
     except ImportError:

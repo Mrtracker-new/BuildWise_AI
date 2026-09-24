@@ -89,8 +89,6 @@ Located in `app/ai/groq_adapter.py`.
   1. User-configured `GROQ_MODEL`
   2. `llama-3.3-70b-versatile`
   3. `llama-3.1-8b-instant`
-  4. `openai/gpt-oss-120b`
-  5. `openai/gpt-oss-20b`
 - **JSON Enforcement:** Sends `"response_format": {"type": "json_object"}`.
 - **Payload Extraction:** Extracts text bounded by the first `{` and last `}` using `re.search(r'\{.*\}', raw_content, re.DOTALL)`.
 - **Latency:** ~0.6s to 1.5s for 70B parameter models.

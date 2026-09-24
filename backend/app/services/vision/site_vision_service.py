@@ -1,7 +1,7 @@
 import time
 import math
 import logging
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List
 import numpy as np
 
 from app.utils.cache_utils import vision_cache
@@ -13,15 +13,13 @@ from app.services.vision.stac_client import (
 )
 from app.services.vision.imagery_fetch import (
     fetch_site_imagery,
-    ImageryFetchError,
-    WINDOW_SIZE_METERS
+    ImageryFetchError
 )
 from app.services.vision.indices import (
     calculate_ndvi,
     calculate_ndwi,
     calculate_ndbi,
     classify_indices,
-    TREE_NDVI_THRESHOLD,
     WATER_NDWI_THRESHOLD
 )
 from app.services.vision.segmentation import (
@@ -29,9 +27,7 @@ from app.services.vision.segmentation import (
     DegradedVisionError
 )
 from app.services.vision.vectorize import (
-    vectorize_mask,
-    _pixel_to_latlon,
-    PIXEL_AREA_SQM
+    vectorize_mask
 )
 from app.schemas.site_vision import (
     SiteVisionResponse,

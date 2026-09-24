@@ -1,5 +1,5 @@
 import time
-from typing import List, Dict, Tuple, Optional, Any
+from typing import List, Dict, Tuple, Optional
 from app.services.floorplan.grid_model import RoomBox, SpatialGrid, ROOM_CATALOG
 from app.services.floorplan.constraints import (
     is_placement_consistent,

@@ -1,7 +1,6 @@
 import time
-import math
 import itertools
-from typing import List, Dict, Tuple, Optional, Any, Set
+from typing import List, Dict, Tuple, Optional, Set
 from collections import deque
 
 from app.schemas.floorplan import (

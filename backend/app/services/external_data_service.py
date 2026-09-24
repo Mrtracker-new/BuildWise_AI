@@ -1,5 +1,5 @@
 import httpx
-from typing import Dict, Any, Tuple, List, Optional
+from typing import Dict, Tuple
 from app.utils.geo_utils import get_cardinal_offsets, calculate_synthetic_elevation
 from app.utils.cache_utils import cache
 

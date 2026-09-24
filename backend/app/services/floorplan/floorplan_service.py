@@ -1,8 +1,7 @@
 import time
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Tuple
 
-from reportlab.graphics.shapes import Drawing, Rect, Line, String, Group
-from reportlab.lib import colors
+from reportlab.graphics.shapes import Drawing
 
 from app.schemas.floorplan import (
     FloorPlanRequest,
@@ -11,7 +10,7 @@ from app.schemas.floorplan import (
     FloorPlanMetrics,
     FloorPlanQA
 )
-from app.services.floorplan.grid_model import SpatialGrid, RoomBox, ROOM_CATALOG
+from app.services.floorplan.grid_model import SpatialGrid, ROOM_CATALOG
 from app.services.floorplan.constraints import (
     evaluate_vastu_compliance,
     evaluate_plumbing_adjacency,
@@ -20,7 +19,7 @@ from app.services.floorplan.constraints import (
 )
 from app.services.floorplan.csp_engine import CSPEngine
 from app.services.floorplan.dissection_engine import DissectionEngine
-from app.services.floorplan.svg_generator import generate_blueprint_svg, generate_blueprint_from_rectangles, PASTEL_COLORS
+from app.services.floorplan.svg_generator import generate_blueprint_svg, generate_blueprint_from_rectangles
 from app.ai.layout_critic import evaluate_layout_critic
 
 
