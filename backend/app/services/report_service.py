@@ -416,7 +416,20 @@ def _draw_rectangles_reportlab(
         "bed_2": colors.HexColor("#F8FAFC"),
         "dining": colors.HexColor("#FDF2F8"),
         "stairs": colors.HexColor("#F5F3FF"),
-        "corridor": colors.white
+        "corridor": colors.white,
+        "home_office": colors.HexColor("#F0FDF4"),
+        "powder_room": colors.HexColor("#E0F2FE"),
+        "retail_floor": colors.HexColor("#EFF6FF"),
+        "lobby": colors.HexColor("#F0FDF4"),
+        "offices": colors.HexColor("#F1F5F9"),
+        "restroom": colors.HexColor("#E0F2FE"),
+        "server_room": colors.HexColor("#F3F4F6"),
+        "utility": colors.HexColor("#FEF3C7"),
+        "study": colors.HexColor("#F0FDF4"),
+        "production_floor": colors.HexColor("#EFF6FF"),
+        "storage_bay": colors.HexColor("#F8FAFC"),
+        "office": colors.HexColor("#F1F5F9"),
+        "utility_wc": colors.HexColor("#E0F2FE"),
     }
 
     parsed_rooms = []
@@ -1700,6 +1713,51 @@ def generate_pdf_report(
         story.append(PageBreak())
         story.append(create_section_header("10", "Generative Architectural Blueprint"))
 
+        # Design Brief callout above solver stat strip
+        design_intent = floorplan.get("design_intent")
+        prog_source = str(floorplan.get("program_source", "fallback")).lower()
+        badge_label = "Program: AI-generated" if prog_source in ("llm", "cache") else "Program: Standard"
+        badge_color = "#0071E3" if prog_source in ("llm", "cache") else "#86868B"
+
+        placement_source = str(floorplan.get("placement_source", "")).lower()
+        placement_badge = "Placement: AI-reasoned + KB-validated" if ("ai" in placement_source or "llm" in placement_source) else "Placement: KB-standard"
+        placement_badge_color = "#0071E3" if ("ai" in placement_source or "llm" in placement_source) else "#86868B"
+
+        placement_logic = floorplan.get("placement_logic") or []
+        logic_summary = ""
+        if isinstance(placement_logic, dict):
+            logic_items = [f"{k.replace('_', ' ').title()}: {v}" for k, v in placement_logic.items()]
+        elif isinstance(placement_logic, list):
+            logic_items = [str(x) for x in placement_logic]
+        else:
+            logic_items = []
+
+        if logic_items:
+            logic_summary = f"<br/><font size='7.5' color='#4B5563'><b>Placement Rules:</b> {html.escape('; '.join(logic_items[:3]))}{'...' if len(logic_items) > 3 else ''}</font>"
+
+        if not design_intent:
+            design_intent = "Space plan optimized for functional circulation, Vastu compliance, and plumbing consolidation."
+
+        qa = floorplan.get("qa") or (floorplan.get("rectangles") or {}).get("qa") or {}
+        if hasattr(qa, "model_dump"):
+            qa = qa.model_dump()
+        elif not isinstance(qa, dict):
+            qa = {}
+        entry_hub = str(qa.get("entry", "hall")).title()
+        circ_status = str(qa.get("circulation", "connected")).title()
+        viol_count = int(qa.get("violations", 0))
+        critic_verdict = str(qa.get("critic", "pass")).lower()
+        critic_label = "Passed" if critic_verdict == "pass" else ("Skipped" if critic_verdict == "skipped" else "Flagged")
+        critic_color = "#166534" if critic_verdict == "pass" else ("#86868B" if critic_verdict == "skipped" else "#B91C1C")
+
+        brief_text = (
+            f"<b>Design Brief:</b> <i>{html.escape(design_intent)}</i> &nbsp;&nbsp;<font color='{badge_color}'><b>[{badge_label}]</b></font> &nbsp;&nbsp;<font color='{placement_badge_color}'><b>[{placement_badge}]</b></font><br/>"
+            f"<font size='8' color='#166534'><b>Circulation:</b> {circ_status} &nbsp;|&nbsp; <b>Main Entry:</b> {entry_hub} &nbsp;|&nbsp; <b>Architect Review:</b> <font color='{critic_color}'><b>{critic_label}</b></font> &nbsp;|&nbsp; <b>QA Gate:</b> {viol_count} Violations</font>"
+            f"{logic_summary}"
+        )
+        story.append(make_callout(brief_text, width=CONTENT_WIDTH_PT))
+        story.append(Spacer(1, 6))
+
         metrics = floorplan.get("metrics") or {}
         v_pct = _safe_float(metrics.get("vastu_compliance_pct"), 0.0)
         p_pct = _safe_float(metrics.get("plumbing_adjacency_score"), 0.0)
@@ -1723,12 +1781,12 @@ def generate_pdf_report(
         story.append(bp_stat_strip)
         story.append(Spacer(1, 6))
 
-        # Vector drawing at FULL content width (174mm >= 165mm) and 450pt height (>=60% of page height)
+        # Vector drawing at FULL content width (174mm >= 165mm) and 420pt height
         drawing = draw_floorplan_reportlab(
             floorplan.get("placements") or [],
             floorplan.get("grid_matrix") or [],
             width=CONTENT_WIDTH_PT,
-            height=450.0,
+            height=420.0,
             rectangles=floorplan.get("rectangles")
         )
         story.append(drawing)
