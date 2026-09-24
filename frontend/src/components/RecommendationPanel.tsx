@@ -11,7 +11,10 @@ interface RecommendationPanelProps {
     provider_used?: string;
     generation_time_ms?: string;
     fallback_reason?: string;
+    parameter_reflection?: string;
+    feasibility_score?: string;
   };
+  parameterReflection?: string;
 }
 
 export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
@@ -19,6 +22,7 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
   recommendations,
   recommendationItems,
   aiMetadata,
+  parameterReflection,
 }) => {
   const [copied, setCopied] = useState(false);
   const [filterSeverity, setFilterSeverity] = useState<string>('all');
@@ -76,6 +80,19 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
           <span>{copied ? 'Copied' : 'Copy'}</span>
         </button>
       </div>
+
+      {/* Parameter Reflection (AI Decision Transparency) */}
+      {(parameterReflection || aiMetadata.parameter_reflection) && (
+        <div className="p-3 bg-[var(--fill)] border border-[var(--hairline)] rounded-[12px] space-y-1">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--accent)] uppercase tracking-wider">
+            <Icon name="check-circle" size={13} />
+            <span>AI Parameter Reflection</span>
+          </div>
+          <p className="text-[12px] text-[var(--text-1)] leading-relaxed italic">
+            "{parameterReflection || aiMetadata.parameter_reflection}"
+          </p>
+        </div>
+      )}
 
       {/* Engineering Narrative Summary */}
       <div className="p-3 bg-[var(--fill)] rounded-[12px] text-[13px] text-[var(--text-2)] leading-[1.5]">

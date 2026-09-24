@@ -142,11 +142,25 @@ class MockExplanationAdapter(BaseExplanationAdapter):
                 "Apply high-albedo solar reflective coating or vegetative thermal roof insulation to minimize heat transfer to top-floor habitable areas."
             ]
 
+        # Compute parameter reflection
+        grade_str = str(analysis_data.get("quality_grade", "standard")).capitalize()
+        built_up_area = float(analysis_data.get("built_up_area_sqft", 2000.0))
+        floors_num = int(analysis_data.get("floors", 1))
+        storeys_str = f"G+{floors_num - 1}" if floors_num > 1 else "G"
+        foundations_type = "deep raft or pile foundations" if floors_num >= 4 else ("isolated RCC footings" if floors_num <= 2 else "reinforced continuous strip footings")
+
+        parameter_reflection = (
+            f"This analysis is directly governed by the {built_up_area:,.0f} sq ft built-up footprint specified with {grade_str} grade finishes. "
+            f"The {storeys_str} storey load profile necessitates {foundations_type} under IS 456, while base construction benchmarks total approximately INR {total_cost:,.0f}."
+        )
+
         duration_ms = round((time.time() - start_time) * 1000.0, 2)
         metadata = {
             "provider_requested": "mock",
             "provider_used": "mock",
-            "generation_time_ms": str(duration_ms)
+            "generation_time_ms": str(duration_ms),
+            "parameter_reflection": parameter_reflection,
+            "feasibility_score": str(round(score))
         }
 
         return executive_summary, recommendations, metadata

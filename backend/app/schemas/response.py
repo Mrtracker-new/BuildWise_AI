@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from pydantic import BaseModel
 
 class FactorScore(BaseModel):
@@ -189,6 +189,11 @@ class AnalysisResponse(BaseModel):
     ai_metadata: Dict[str, str]
     degraded_mode: bool
     warnings: List[str]
+    parameter_reflection: Optional[str] = None
+    feasibility_score: Optional[int] = None
+    structural_recommendations: Optional[List[str]] = None
+    cost_breakdown: Optional[Dict[str, Any]] = None
+    vastu_compliance: Optional[Dict[str, Any]] = None
 
 class HealthResponse(BaseModel):
     status: str

@@ -428,6 +428,7 @@ export const App: React.FC = () => {
             recommendations={analysisData.detailed_recommendations}
             recommendationItems={analysisData.recommendation_items}
             aiMetadata={analysisData.ai_metadata}
+            parameterReflection={analysisData.parameter_reflection}
           />
 
           {/* 10. Download Vector PDF Report */}

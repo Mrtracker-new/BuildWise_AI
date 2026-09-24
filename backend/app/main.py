@@ -1,5 +1,6 @@
 import uuid
 import time
+import json
 import logging
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -268,6 +269,28 @@ async def analyze_site(req: AnalysisRequest, request: Request):
     if ai_meta.get("fallback_reason"):
         warnings.append(f"AI Provider note: {ai_meta.get('fallback_reason')}")
 
+    param_reflection = ai_meta.get("parameter_reflection") or (
+        f"Site analysis reflects {req.built_up_area_sqft:,.0f} sq ft built-up area with {req.quality_grade.capitalize()} "
+        f"specification grade and {f'G+{req.floors-1}' if req.floors > 1 else 'G'} storeys."
+    )
+    feasibility_score_val = int(ai_meta.get("feasibility_score", round(overall_score)))
+
+    ai_cost_bd = None
+    if ai_meta.get("cost_breakdown"):
+        try:
+            ai_cost_bd = json.loads(ai_meta["cost_breakdown"]) if isinstance(ai_meta["cost_breakdown"], str) else ai_meta["cost_breakdown"]
+        except Exception:
+            ai_cost_bd = None
+    cost_breakdown_val = ai_cost_bd or cost_estimate.model_dump()
+
+    ai_vastu_comp = None
+    if ai_meta.get("vastu_compliance"):
+        try:
+            ai_vastu_comp = json.loads(ai_meta["vastu_compliance"]) if isinstance(ai_meta["vastu_compliance"], str) else ai_meta["vastu_compliance"]
+        except Exception:
+            ai_vastu_comp = None
+    vastu_compliance_val = ai_vastu_comp or vastu_advisory.model_dump()
+
     try:
         return AnalysisResponse(
             request_id=request_id,
@@ -288,7 +311,12 @@ async def analyze_site(req: AnalysisRequest, request: Request):
             engineering_summary=summary,
             ai_metadata=ai_meta,
             degraded_mode=is_degraded,
-            warnings=warnings
+            warnings=warnings,
+            parameter_reflection=param_reflection,
+            feasibility_score=feasibility_score_val,
+            structural_recommendations=ai_recs,
+            cost_breakdown=cost_breakdown_val,
+            vastu_compliance=vastu_compliance_val
         )
     except ValidationError as val_err:
         logger.warning(f"Pydantic validation error constructing AnalysisResponse: {val_err}")
@@ -318,7 +346,12 @@ async def analyze_site(req: AnalysisRequest, request: Request):
             engineering_summary=mock_summary,
             ai_metadata=mock_meta,
             degraded_mode=True,
-            warnings=warnings
+            warnings=warnings,
+            parameter_reflection=mock_meta.get("parameter_reflection", param_reflection),
+            feasibility_score=int(round(overall_score)),
+            structural_recommendations=mock_recs,
+            cost_breakdown=cost_estimate.model_dump(),
+            vastu_compliance=vastu_advisory.model_dump()
         )
 
 @app.post("/api/report")

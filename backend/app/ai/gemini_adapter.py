@@ -4,16 +4,112 @@ import re
 import logging
 import httpx
 from typing import Dict, List, Tuple, Any
+from pydantic import ValidationError
+
 from app.ai.base_adapter import BaseExplanationAdapter
 from app.ai.mock_adapter import MockExplanationAdapter
+from app.ai.prompts import CIVIL_ENGINEER_SYSTEM_PROMPT, build_user_prompt
+from app.schemas.analysis import AnalysisResponse
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+
+def to_gemini_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Transforms Pydantic's JSON Schema into Google Gemini's REST Schema proto specification.
+    Removes unsupported keywords ('additionalProperties', 'title', 'default', 'anyOf')
+    which cause HTTP 400 'Invalid JSON payload received. Unknown name additionalProperties'.
+    """
+    clean: Dict[str, Any] = {}
+
+    if "anyOf" in schema:
+        non_null = [s for s in schema["anyOf"] if s.get("type") != "null"]
+        if non_null:
+            sub = to_gemini_schema(non_null[0])
+            clean.update(sub)
+            clean["nullable"] = True
+            return clean
+
+    type_val = schema.get("type")
+    if type_val:
+        clean["type"] = type_val.upper() if isinstance(type_val, str) else type_val
+
+    if "description" in schema:
+        clean["description"] = schema["description"]
+
+    if "nullable" in schema:
+        clean["nullable"] = schema["nullable"]
+
+    if "enum" in schema:
+        clean["enum"] = schema["enum"]
+
+    if "required" in schema and isinstance(schema["required"], list):
+        clean["required"] = schema["required"]
+
+    if "items" in schema and isinstance(schema["items"], dict):
+        clean["items"] = to_gemini_schema(schema["items"])
+
+    if "properties" in schema and isinstance(schema["properties"], dict):
+        clean["properties"] = {}
+        for k, v in schema["properties"].items():
+            if k == "cost_breakdown":
+                clean["properties"][k] = {
+                    "type": "OBJECT",
+                    "description": "CPWD DSR benchmark costs in INR, strictly calculated based on the provided Plinth Area and Specification Grade",
+                    "properties": {
+                        "base_rate_per_sqft": {
+                            "type": "NUMBER",
+                            "description": "Rate in INR per sq ft based on specification grade (e.g. 3500 for Premium, 1600 for Basic)"
+                        },
+                        "total_estimated_cost_inr": {
+                            "type": "NUMBER",
+                            "description": "Total estimated CPWD construction cost in INR (Plinth Area * base_rate_per_sqft)"
+                        },
+                        "civil_structure_inr": {
+                            "type": "NUMBER",
+                            "description": "Structural framing cost (~50% of total base cost)"
+                        },
+                        "finishes_inr": {
+                            "type": "NUMBER",
+                            "description": "Finishes cost (~25% of total base cost)"
+                        },
+                        "mep_services_inr": {
+                            "type": "NUMBER",
+                            "description": "MEP services cost (~15% of total base cost)"
+                        }
+                    },
+                    "required": ["base_rate_per_sqft", "total_estimated_cost_inr"]
+                }
+            elif k == "vastu_compliance":
+                clean["properties"][k] = {
+                    "type": "OBJECT",
+                    "description": "Orientation analysis based on NBC 2016 and the provided Lat/Lon solar path",
+                    "properties": {
+                        "orientation_axis": {
+                            "type": "STRING",
+                            "description": "Optimal longitudinal axis (e.g. East-West)"
+                        },
+                        "primary_entrance": {
+                            "type": "STRING",
+                            "description": "Auspicious entrance direction (e.g. North-East)"
+                        },
+                        "compliance_rating": {
+                            "type": "STRING",
+                            "description": "Compliance level (High, Moderate, or Requires Remedy)"
+                        }
+                    }
+                }
+            else:
+                clean["properties"][k] = to_gemini_schema(v)
+
+    return clean
+
+
 class GeminiExplanationAdapter(BaseExplanationAdapter):
     """
     Adapter for Google Gemini REST API with strict JSON mode,
-    markdown stripping, and automatic deterministic mock fallback.
+    Pydantic response schema enforcement, markdown stripping, and automatic deterministic mock fallback.
     """
     def __init__(self):
         self.mock = MockExplanationAdapter()
@@ -31,57 +127,53 @@ class GeminiExplanationAdapter(BaseExplanationAdapter):
             return summary, recs, meta
 
         start_time = time.time()
-        system_prompt = (
-            "You are an AI assistant for BuildWise. Generate realistic CPWD benchmark costs in INR "
-            "based on the provided plinth area and specification grade. Calculate structural requirements "
-            "based on IS 456 and IS 1893. Output ONLY valid JSON, no markdown formatting."
+
+        # 1. Format User Prompt with explicit user parameters
+        coords = analysis_data.get("coordinates", {})
+        lat = coords.get("latitude", 12.9716)
+        lon = coords.get("longitude", 77.5946)
+        area = analysis_data.get("built_up_area_sqft", 2000.0)
+        grade = analysis_data.get("quality_grade", "standard")
+        typology = analysis_data.get("building_typology", "residential_single")
+        floors_val = analysis_data.get("floors", 1)
+        storeys = f"G+{floors_val - 1}" if isinstance(floors_val, int) and floors_val > 1 else ("G" if floors_val == 1 else str(floors_val))
+        cov_val = analysis_data.get("ground_coverage_ratio", 0.60)
+        coverage = round(cov_val * 100) if cov_val <= 1.0 else round(cov_val)
+
+        user_prompt = build_user_prompt(
+            lat=lat,
+            lon=lon,
+            area=area,
+            grade=grade,
+            typology=typology,
+            storeys=storeys,
+            coverage=coverage
         )
 
-        user_prompt = (
-            f"Analyze the following calculated site parameters and provide a comprehensive engineering evaluation.\n"
-            f"Coordinates: {analysis_data.get('coordinates', {})}\n"
-            f"Built-up Plinth Area: {analysis_data.get('built_up_area_sqft', 2000)} sq ft\n"
-            f"Specification Grade: {analysis_data.get('quality_grade', 'standard')}\n"
-            f"Storeys: {analysis_data.get('floors', 1)}\n"
-            f"Suitability Score: {analysis_data.get('overall_suitability_score', 70)} ({analysis_data.get('suitability_verdict', 'Suitable')})\n"
-            f"Hazard Profile: {analysis_data.get('hazard_profile', {})}\n"
-            f"Cost Estimate: {analysis_data.get('cost_estimate', {})}\n"
-            f"Orientation: {analysis_data.get('orientation', {})}\n"
-            f"Vastu Advisory: {analysis_data.get('vastu_advisory', {})}\n\n"
-            "Return a single strictly valid JSON object with exactly these keys:\n"
-            "{\n"
-            '  "summary": "2-3 paragraph professional civil engineering synthesis evaluating the site feasibility and structural design considerations",\n'
-            '  "recommendations": [\n'
-            '    "Detailed IS 456 / IS 1893 recommendation 1",\n'
-            '    "Detailed CPWD specification recommendation 2",\n'
-            '    "Detailed foundation / geotechnical recommendation 3",\n'
-            '    "Detailed bioclimatic orientation recommendation 4",\n'
-            '    "Detailed Vastu / functional layout recommendation 5"\n'
-            "  ]\n"
-            "}\n"
-            "Do NOT include markdown fences, backticks, or explanatory text outside the JSON object."
-        )
+        gemini_schema = to_gemini_schema(AnalysisResponse.model_json_schema())
 
         candidate_models = [
             "gemini-2.5-flash-lite",
             "gemini-3.5-flash-lite",
-            "gemini-3.6-flash"
+            "gemini-3.6-flash",
+            "gemini-1.5-flash"
         ]
 
         last_error = "Gemini API call failed or timed out"
         for target_model in candidate_models:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={self.api_key}"
             try:
-                async with httpx.AsyncClient(timeout=12.0) as client:
+                async with httpx.AsyncClient(timeout=15.0) as client:
                     payload = {
                         "systemInstruction": {
-                            "parts": [{"text": system_prompt}]
+                            "parts": [{"text": CIVIL_ENGINEER_SYSTEM_PROMPT}]
                         },
                         "contents": [{"parts": [{"text": user_prompt}]}],
                         "generationConfig": {
                             "temperature": 0.2,
-                            "maxOutputTokens": 1200,
-                            "responseMimeType": "application/json"
+                            "maxOutputTokens": 2048,
+                            "responseMimeType": "application/json",
+                            "responseSchema": gemini_schema
                         }
                     }
                     resp = await client.post(url, json=payload)
@@ -91,48 +183,47 @@ class GeminiExplanationAdapter(BaseExplanationAdapter):
                         if candidates:
                             text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
 
-                            # 1. The "Markdown Wrapper" JSON Trap: extract content between first { and last }
+                            # Extract JSON object
                             json_match = re.search(r'\{.*\}', text, re.DOTALL)
                             if not json_match:
                                 raise ValueError(f"No JSON object found in Gemini response: {text[:100]}")
                             cleaned_json = json_match.group(0).strip()
 
+                            # Parse and validate with Pydantic AnalysisResponse
                             try:
-                                parsed = json.loads(cleaned_json)
-                            except (json.JSONDecodeError, Exception) as jerr:
-                                logger.warning(f"Gemini JSONDecodeError on model {target_model}: {jerr}")
-                                raise jerr
+                                report = AnalysisResponse.model_validate_json(cleaned_json)
+                            except ValidationError as val_err:
+                                logger.warning(f"Gemini output failed AnalysisResponse Pydantic validation on model {target_model}: {val_err}")
+                                raise val_err
 
-                            summary = parsed.get("summary") or parsed.get("engineering_summary") or ""
-                            recs = parsed.get("recommendations") or parsed.get("detailed_recommendations") or []
-                            if isinstance(recs, str):
-                                recs = [r.strip() for r in recs.split("\n") if r.strip()]
-
-                            if not summary:
-                                raise ValueError("Empty engineering summary in parsed JSON")
-
-                            if not recs:
-                                recs = [
-                                    "Design ductile RCC frame elements in accordance with IS 13920 and IS 456.",
-                                    "Execute subsurface geotechnical borehole validation prior to foundation cast.",
-                                    "Incorporate perimeter swale and stormwater retention according to CPWD specifications.",
-                                    "Align structural fenestrations to maximize cross-ventilation along the passive axis."
-                                ]
+                            summary = report.engineering_summary or (
+                                f"{report.parameter_reflection}\n\n"
+                                f"Feasibility Score: {report.feasibility_score}/100 based on IS 456 / IS 1893. "
+                                f"Key structural considerations: {'; '.join(report.structural_recommendations[:2])}."
+                            )
+                            recs = report.structural_recommendations or report.detailed_recommendations or []
 
                             duration_ms = round((time.time() - start_time) * 1000.0, 2)
                             return summary, recs, {
                                 "provider_requested": "gemini",
                                 "provider_used": f"gemini ({target_model})",
-                                "generation_time_ms": str(duration_ms)
+                                "generation_time_ms": str(duration_ms),
+                                "parameter_reflection": report.parameter_reflection,
+                                "feasibility_score": str(report.feasibility_score),
+                                "cost_breakdown": json.dumps(report.cost_breakdown),
+                                "vastu_compliance": json.dumps(report.vastu_compliance)
                             }
                     else:
                         last_error = f"Gemini status {resp.status_code} on {target_model}: {resp.text[:100]}"
                         logger.warning(last_error)
+            except ValidationError as v_err:
+                last_error = f"Pydantic ValidationError on model {target_model}: {str(v_err)[:150]}"
+                logger.warning(last_error)
             except Exception as e:
                 last_error = f"Gemini exception on {target_model}: {type(e).__name__} ({str(e)})"
                 logger.warning(last_error)
 
-        # Fallback to deterministic mock on error
+        # Fallback to deterministic mock on error or validation failure
         logger.warning(f"Gemini failed completely. Falling back to deterministic mock. Reason: {last_error}")
         summary, recs, meta = await self.mock.generate_explanation(analysis_data)
         meta["provider_requested"] = "gemini"

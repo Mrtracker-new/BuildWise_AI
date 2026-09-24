@@ -224,11 +224,18 @@ export interface AnalysisResponse {
   recommendation_items?: RecommendationItem[];
   site_vision?: SiteVisionResponse;
   floorplan?: FloorPlanResponse;
+  parameter_reflection?: string;
+  feasibility_score?: number;
+  structural_recommendations?: string[];
+  cost_breakdown?: Record<string, any>;
+  vastu_compliance?: Record<string, any>;
   ai_metadata: {
     provider_requested?: string;
     provider_used?: string;
     generation_time_ms?: string;
     fallback_reason?: string;
+    parameter_reflection?: string;
+    feasibility_score?: string;
   };
   degraded_mode: boolean;
   warnings: string[];

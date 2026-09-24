@@ -1177,6 +1177,23 @@ def generate_pdf_report(
 
     # 8. Categorized & Traceable Action Plan (Upgraded)
     story.append(Paragraph("8. Traceable Civil Engineering Action Plan", section_h1))
+
+    if data.get("parameter_reflection"):
+        param_card = Table(
+            [[Paragraph(f"<b>AI Parameter Calibration:</b> <i>{data.get('parameter_reflection')}</i>", table_text)]],
+            colWidths=[520]
+        )
+        param_card.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
+            ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        story.append(param_card)
+        story.append(Spacer(1, 4))
+
     recs_items = data.get("recommendation_items", [])
     if recs_items:
         rec_headers = [

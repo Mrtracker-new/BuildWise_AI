@@ -5,16 +5,20 @@ import re
 import logging
 import httpx
 from typing import Dict, List, Tuple, Any
+from pydantic import ValidationError
+
 from app.ai.base_adapter import BaseExplanationAdapter
 from app.ai.mock_adapter import MockExplanationAdapter
+from app.ai.prompts import CIVIL_ENGINEER_SYSTEM_PROMPT, build_user_prompt
+from app.schemas.analysis import AnalysisResponse
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 class GroqExplanationAdapter(BaseExplanationAdapter):
     """
-    Adapter for Groq LLM inference with strict JSON enforcement, markdown stripping,
-    and automatic deterministic mock fallback.
+    Adapter for Groq LLM inference with strict JSON enforcement, Pydantic schema validation,
+    markdown stripping, and automatic deterministic mock fallback.
     """
     def __init__(self):
         self.mock = MockExplanationAdapter()
@@ -34,47 +38,55 @@ class GroqExplanationAdapter(BaseExplanationAdapter):
             return summary, recs, meta
 
         start_time = time.time()
-        system_prompt = (
-            "You are an AI assistant for BuildWise. Generate realistic CPWD benchmark costs in INR "
-            "based on the provided plinth area and specification grade. Calculate structural requirements "
-            "based on IS 456 and IS 1893. Output ONLY valid JSON, no markdown formatting."
+
+        # 1. Format User Prompt with explicit parameters
+        coords = analysis_data.get("coordinates", {})
+        lat = coords.get("latitude", 12.9716)
+        lon = coords.get("longitude", 77.5946)
+        area = analysis_data.get("built_up_area_sqft", 2000.0)
+        grade = analysis_data.get("quality_grade", "standard")
+        typology = analysis_data.get("building_typology", "residential_single")
+        floors_val = analysis_data.get("floors", 1)
+        storeys = f"G+{floors_val - 1}" if isinstance(floors_val, int) and floors_val > 1 else ("G" if floors_val == 1 else str(floors_val))
+        cov_val = analysis_data.get("ground_coverage_ratio", 0.60)
+        coverage = round(cov_val * 100) if cov_val <= 1.0 else round(cov_val)
+
+        user_prompt = build_user_prompt(
+            lat=lat,
+            lon=lon,
+            area=area,
+            grade=grade,
+            typology=typology,
+            storeys=storeys,
+            coverage=coverage
         )
 
-        user_prompt = (
-            f"Analyze the following calculated site parameters and provide a comprehensive engineering evaluation.\n"
-            f"Coordinates: {analysis_data.get('coordinates', {})}\n"
-            f"Built-up Plinth Area: {analysis_data.get('built_up_area_sqft', 2000)} sq ft\n"
-            f"Specification Grade: {analysis_data.get('quality_grade', 'standard')}\n"
-            f"Storeys: {analysis_data.get('floors', 1)}\n"
-            f"Suitability Score: {analysis_data.get('overall_suitability_score', 70)} ({analysis_data.get('suitability_verdict', 'Suitable')})\n"
-            f"Hazard Profile: {analysis_data.get('hazard_profile', {})}\n"
-            f"Cost Estimate: {analysis_data.get('cost_estimate', {})}\n"
-            f"Orientation: {analysis_data.get('orientation', {})}\n"
-            f"Vastu Advisory: {analysis_data.get('vastu_advisory', {})}\n\n"
-            "Return a single strictly valid JSON object with exactly these keys:\n"
-            "{\n"
-            '  "summary": "2-3 paragraph professional civil engineering synthesis evaluating the site feasibility and structural design considerations",\n'
-            '  "recommendations": [\n'
-            '    "Detailed IS 456 / IS 1893 recommendation 1",\n'
-            '    "Detailed CPWD specification recommendation 2",\n'
-            '    "Detailed foundation / geotechnical recommendation 3",\n'
-            '    "Detailed bioclimatic orientation recommendation 4",\n'
-            '    "Detailed Vastu / functional layout recommendation 5"\n'
-            "  ]\n"
-            "}\n"
-            "Do NOT include markdown fences, backticks, or explanatory text outside the JSON object."
+        # 2. System prompt with Pydantic JSON schema representation
+        schema_repr = json.dumps(AnalysisResponse.model_json_schema(), indent=2)
+        system_prompt = (
+            f"{CIVIL_ENGINEER_SYSTEM_PROMPT}\n\n"
+            f"You must strictly output a valid JSON object matching this JSON Schema:\n"
+            f"{schema_repr}"
         )
 
         candidate_models = [
-            os.getenv("GROQ_MODEL") or self.model or "openai/gpt-oss-120b",
-            "openai/gpt-oss-120b",
-            "openai/gpt-oss-20b",
+            os.getenv("GROQ_MODEL") or self.model or "llama-3.3-70b-versatile",
             "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant"
+            "llama-3.1-8b-instant",
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b"
         ]
 
+        # Deduplicate while preserving order
+        seen = set()
+        deduped_models = []
+        for m in candidate_models:
+            if m and m not in seen:
+                seen.add(m)
+                deduped_models.append(m)
+
         last_error = "Groq API call failed or timed out"
-        for target_model in candidate_models:
+        for target_model in deduped_models:
             try:
                 async with httpx.AsyncClient(timeout=12.0) as client:
                     headers = {
@@ -89,7 +101,7 @@ class GroqExplanationAdapter(BaseExplanationAdapter):
                             {"role": "user", "content": user_prompt}
                         ],
                         "temperature": 0.2,
-                        "max_tokens": 1200
+                        "max_tokens": 1500
                     }
                     resp = await client.post(
                         "https://api.groq.com/openai/v1/chat/completions",
@@ -100,48 +112,45 @@ class GroqExplanationAdapter(BaseExplanationAdapter):
                         data = resp.json()
                         raw_content = data["choices"][0]["message"]["content"]
 
-                        # 1. The "Markdown Wrapper" JSON Trap: extract content between first { and last }
+                        # Extract JSON object between first { and last }
                         json_match = re.search(r'\{.*\}', raw_content, re.DOTALL)
                         if not json_match:
                             raise ValueError(f"No JSON object found in Groq response: {raw_content[:100]}")
                         cleaned_json = json_match.group(0).strip()
 
+                        # Parse and validate into Pydantic AnalysisResponse
                         try:
-                            parsed = json.loads(cleaned_json)
-                        except (json.JSONDecodeError, Exception) as jerr:
-                            logger.warning(f"Groq JSONDecodeError on model {target_model}: {jerr}")
-                            raise jerr
+                            report = AnalysisResponse.model_validate_json(cleaned_json)
+                        except ValidationError as val_err:
+                            logger.warning(f"Groq output failed AnalysisResponse Pydantic validation on model {target_model}: {val_err}")
+                            raise val_err
 
-                        summary = parsed.get("summary") or parsed.get("engineering_summary") or ""
-                        recs = parsed.get("recommendations") or parsed.get("detailed_recommendations") or []
-                        if isinstance(recs, str):
-                            recs = [r.strip() for r in recs.split("\n") if r.strip()]
-
-                        if not summary:
-                            raise ValueError("Empty engineering summary in parsed JSON")
-
-                        if not recs:
-                            recs = [
-                                "Design ductile RCC frame elements in accordance with IS 13920 and IS 456.",
-                                "Execute subsurface geotechnical borehole validation prior to foundation cast.",
-                                "Incorporate perimeter swale and stormwater retention according to CPWD specifications.",
-                                "Align structural fenestrations to maximize cross-ventilation along the passive axis."
-                            ]
+                        summary = report.engineering_summary or (
+                            f"{report.parameter_reflection}\n\n"
+                            f"Feasibility Score: {report.feasibility_score}/100 based on IS 456 / IS 1893. "
+                            f"Key structural considerations: {'; '.join(report.structural_recommendations[:2])}."
+                        )
+                        recs = report.structural_recommendations or report.detailed_recommendations or []
 
                         duration_ms = round((time.time() - start_time) * 1000.0, 2)
                         return summary, recs, {
                             "provider_requested": "groq",
                             "provider_used": f"groq ({target_model})",
-                            "generation_time_ms": str(duration_ms)
+                            "generation_time_ms": str(duration_ms),
+                            "parameter_reflection": report.parameter_reflection,
+                            "feasibility_score": str(report.feasibility_score)
                         }
                     else:
                         last_error = f"Groq status {resp.status_code}: {resp.text[:100]}"
                         logger.warning(f"Groq API error on model {target_model}: {last_error}")
+            except ValidationError as v_err:
+                last_error = f"Pydantic ValidationError on model {target_model}: {str(v_err)[:150]}"
+                logger.warning(last_error)
             except Exception as e:
                 last_error = f"Groq request exception on model {target_model}: {type(e).__name__} ({str(e)})"
                 logger.warning(last_error)
 
-        # Fallback to deterministic mock on error
+        # Fallback to deterministic mock on error or validation failure
         logger.warning(f"Groq failed completely. Falling back to deterministic mock. Reason: {last_error}")
         summary, recs, meta = await self.mock.generate_explanation(analysis_data)
         meta["provider_requested"] = "groq"
