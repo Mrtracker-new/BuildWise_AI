@@ -16,9 +16,9 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
   const gridMap = new Map((room_grid || []).map((z) => [z.zone, z]));
 
   return (
-    <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-3.5 w-full min-w-0">
+    <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 sm:p-[18px] space-y-3 w-full min-w-0">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 min-w-0">
+      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 min-w-0 sticky top-0 bg-[var(--card-bg-subtle)] z-10">
         <div className="flex items-center gap-2 min-w-0">
           <Icon name="layout-grid" size={15} className="text-[var(--text-2)] shrink-0" />
           <h3 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight">
@@ -38,7 +38,9 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
         </div>
       </div>
 
-      {/* Ranked Entrances */}
+      {/* Scrollable Card Body: balances height with OrientationCompass */}
+      <div className="space-y-3.5 max-h-[460px] overflow-y-auto scrollbar-apple pr-1">
+        {/* Ranked Entrances */}
       <div className="space-y-2">
         <span className="text-[12px] font-normal text-[var(--text-3)] block">
           Ranked entrance portals
@@ -187,6 +189,7 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 };

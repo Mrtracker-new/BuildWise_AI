@@ -19,13 +19,17 @@ export async function fetchHealth(): Promise<HealthResponse> {
   return resp.json();
 }
 
-export async function submitAnalysis(request: AnalysisRequest): Promise<AnalysisResponse> {
+export async function submitAnalysis(
+  request: AnalysisRequest,
+  signal?: AbortSignal
+): Promise<AnalysisResponse> {
   const resp = await fetch(`${API_BASE_URL}/api/analyze`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(request),
+    signal,
   });
 
   if (!resp.ok) {
@@ -36,13 +40,17 @@ export async function submitAnalysis(request: AnalysisRequest): Promise<Analysis
   return resp.json();
 }
 
-export async function submitSiteVision(request: SiteVisionRequest): Promise<SiteVisionResponse> {
+export async function submitSiteVision(
+  request: SiteVisionRequest,
+  signal?: AbortSignal
+): Promise<SiteVisionResponse> {
   const resp = await fetch(`${API_BASE_URL}/api/site-vision`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(request),
+    signal,
   });
 
   if (!resp.ok) {
@@ -53,13 +61,17 @@ export async function submitSiteVision(request: SiteVisionRequest): Promise<Site
   return resp.json();
 }
 
-export async function generateFloorPlan(request: FloorPlanRequest): Promise<FloorPlanResponse> {
+export async function generateFloorPlan(
+  request: FloorPlanRequest,
+  signal?: AbortSignal
+): Promise<FloorPlanResponse> {
   const resp = await fetch(`${API_BASE_URL}/api/generate-floorplan`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(request),
+    signal,
   });
 
   if (!resp.ok) {

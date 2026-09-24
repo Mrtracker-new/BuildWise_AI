@@ -45,7 +45,11 @@ export type IconName =
   | 'badge-check'
   | 'check'
   | 'copy'
-  | 'map';
+  | 'map'
+  | 'arrow-up-right'
+  | 'printer'
+  | 'shield'
+  | 'sparkles';
 
 interface IconProps {
   name: IconName;
@@ -422,6 +426,37 @@ export const Icon: React.FC<IconProps> = ({
           <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6" />
           <line x1="8" y1="2" x2="8" y2="18" />
           <line x1="16" y1="6" x2="16" y2="22" />
+        </svg>
+      );
+    case 'arrow-up-right':
+      return (
+        <svg {...commonProps}>
+          <line x1="7" y1="17" x2="17" y2="7" />
+          <polyline points="7 7 17 7 17 17" />
+        </svg>
+      );
+    case 'printer':
+      return (
+        <svg {...commonProps}>
+          <polyline points="6 9 6 2 18 2 18 9" />
+          <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+          <rect x="6" y="14" width="12" height="8" />
+        </svg>
+      );
+    case 'shield':
+      return (
+        <svg {...commonProps}>
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        </svg>
+      );
+    case 'sparkles':
+      return (
+        <svg {...commonProps}>
+          <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" />
+          <path d="M5 3v4" />
+          <path d="M19 17v4" />
+          <path d="M3 5h4" />
+          <path d="M17 19h4" />
         </svg>
       );
     default:

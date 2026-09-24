@@ -8,6 +8,7 @@ interface SiteVisionCardProps {
   onScan: (modeOverride?: 'segformer' | 'index-only') => void;
   hasCoordinates: boolean;
   className?: string;
+  layout?: 'stack' | 'grid';
 }
 
 export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
@@ -16,7 +17,9 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
   onScan,
   hasCoordinates,
   className = '',
+  layout = 'stack',
 }) => {
+  const isGrid = layout === 'grid';
   // Rank badge styling helper (Sentence case & tinted only)
   const getRankBadge = (rank: PreservationRank) => {
     switch (rank) {
@@ -90,20 +93,11 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
         )}
       </div>
 
-      {/* Loading Skeleton */}
+      {/* Loading State */}
       {isLoading && (
-        <div className="space-y-3 animate-pulse">
-          <div className="flex items-center gap-4 p-3 bg-[var(--fill)] rounded-[12px]">
-            <div className="w-16 h-16 rounded-full bg-[var(--fill-hover)] shrink-0" />
-            <div className="flex-1 space-y-2">
-              <div className="h-4 bg-[var(--fill-hover)] rounded w-1/3" />
-              <div className="h-3 bg-[var(--fill-hover)] rounded w-2/3" />
-            </div>
-          </div>
-          <div className="flex items-center justify-center gap-2 text-[12px] text-[var(--text-2)] py-1">
-            <Icon name="loader" size={14} className="text-[var(--accent)] animate-spin" />
-            <span>Analyzing satellite canopy & ecological inference...</span>
-          </div>
+        <div className="p-4 bg-[var(--fill)] rounded-[14px] flex items-center justify-center gap-2.5 text-[13px] text-[var(--text-2)] font-medium">
+          <div className="ios-spinner-16 shrink-0" aria-hidden="true" />
+          <span>Analyzing satellite canopy & ecological inference...</span>
         </div>
       )}
 
@@ -162,67 +156,100 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
 
       {/* Loaded Analysis Data */}
       {!isLoading && data && data.mode !== 'unavailable' && (
-        <div className="space-y-3.5">
-          {/* Key-Value Rows with Ring Gauge */}
-          <div className="flex items-center gap-4 bg-[var(--fill)] rounded-[12px] p-3.5">
-            {/* SVG Circular Progress Ring */}
-            <div className="relative w-16 h-16 shrink-0 flex items-center justify-center">
-              <svg className="w-16 h-16 -rotate-90 block" viewBox="0 0 80 80">
-                <circle
-                  cx="40"
-                  cy="40"
-                  r={radius}
-                  stroke="var(--fill-hover)"
-                  strokeWidth="6"
-                  fill="transparent"
-                />
-                <circle
-                  cx="40"
-                  cy="40"
-                  r={radius}
-                  stroke="var(--semantic-green)"
-                  strokeWidth="6"
-                  strokeDasharray={circumference}
-                  strokeDashoffset={strokeDashoffset}
-                  strokeLinecap="round"
-                  fill="transparent"
-                  className="transition-all duration-700 ease-out"
-                />
-              </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                <span className="text-[14px] font-bold text-[var(--text-1)] tabular-nums leading-none">
-                  {data.green_cover_pct.toFixed(0)}%
-                </span>
-                <span className="text-[10px] text-[var(--text-3)] font-normal mt-0.5">
-                  Canopy
-                </span>
+        <div className={isGrid ? 'grid grid-cols-1 xl:grid-cols-2 lg:grid-cols-2 gap-5 items-start' : 'space-y-3.5'}>
+          {/* Left Column in Grid mode (Canopy Stats, Water Bodies, Latency) */}
+          <div className="space-y-3.5 min-w-0">
+            {/* Key-Value Rows with Ring Gauge */}
+            <div className="flex items-center gap-4 bg-[var(--fill)] rounded-[12px] p-3.5">
+              {/* SVG Circular Progress Ring */}
+              <div className="relative w-16 h-16 shrink-0 flex items-center justify-center">
+                <svg className="w-16 h-16 -rotate-90 block" viewBox="0 0 80 80">
+                  <circle
+                    cx="40"
+                    cy="40"
+                    r={radius}
+                    stroke="var(--fill-hover)"
+                    strokeWidth="6"
+                    fill="transparent"
+                  />
+                  <circle
+                    cx="40"
+                    cy="40"
+                    r={radius}
+                    stroke="var(--semantic-green)"
+                    strokeWidth="6"
+                    strokeDasharray={circumference}
+                    strokeDashoffset={strokeDashoffset}
+                    strokeLinecap="round"
+                    fill="transparent"
+                    className="transition-all duration-700 ease-out"
+                  />
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+                  <span className="text-[14px] font-bold text-[var(--text-1)] tabular-nums leading-none">
+                    {data.green_cover_pct.toFixed(0)}%
+                  </span>
+                  <span className="text-[10px] text-[var(--text-3)] font-normal mt-0.5">
+                    Canopy
+                  </span>
+                </div>
+              </div>
+
+              {/* Key-Value Rows (No background micro-tiles) */}
+              <div className="flex-1 min-w-0 divide-y divide-[var(--hairline)]">
+                <div className="h-8 flex items-center justify-between">
+                  <span className="text-[12px] font-normal text-[var(--text-2)]">Green canopy cover</span>
+                  <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
+                    {data.green_cover_pct.toFixed(1)}%
+                  </span>
+                </div>
+                <div className="h-8 flex items-center justify-between">
+                  <span className="text-[12px] font-normal text-[var(--text-2)]">Surface water cover</span>
+                  <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
+                    {data.water_cover_pct.toFixed(1)}%
+                  </span>
+                </div>
+                <div className="h-8 flex items-center justify-between">
+                  <span className="text-[12px] font-normal text-[var(--text-2)]">Built-up footprint</span>
+                  <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
+                    {data.built_up_pct.toFixed(1)}%
+                  </span>
+                </div>
               </div>
             </div>
 
-            {/* Key-Value Rows (No background micro-tiles) */}
-            <div className="flex-1 min-w-0 divide-y divide-[var(--hairline)]">
-              <div className="h-8 flex items-center justify-between">
-                <span className="text-[12px] font-normal text-[var(--text-2)]">Green canopy cover</span>
-                <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
-                  {data.green_cover_pct.toFixed(1)}%
-                </span>
+            {/* Water Bodies Callout */}
+            {data.water_bodies.features.length > 0 && (
+              <div className="p-3 bg-[var(--accent-tint)]/40 rounded-[12px] text-[12px] space-y-1">
+                <div className="flex items-center gap-1.5 text-[var(--text-1)] font-semibold">
+                  <Icon name="droplet" size={13} className="text-[var(--accent)] shrink-0" />
+                  <span>Surface water detected on site</span>
+                </div>
+                <p className="text-[12px] text-[var(--text-2)] leading-relaxed">
+                  {data.water_bodies.features.length} water feature
+                  {data.water_bodies.features.length !== 1 ? 's' : ''} detected ({data.water_cover_pct.toFixed(1)}% cover). Maintain statutory drainage buffers.
+                </p>
               </div>
-              <div className="h-8 flex items-center justify-between">
-                <span className="text-[12px] font-normal text-[var(--text-2)]">Surface water cover</span>
-                <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
-                  {data.water_cover_pct.toFixed(1)}%
-                </span>
-              </div>
-              <div className="h-8 flex items-center justify-between">
-                <span className="text-[12px] font-normal text-[var(--text-2)]">Built-up footprint</span>
-                <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
-                  {data.built_up_pct.toFixed(1)}%
-                </span>
-              </div>
+            )}
+
+            {/* Timing & Rescan Bar */}
+            <div className="pt-2 border-t border-[var(--hairline)] flex items-center justify-between text-[11px] text-[var(--text-3)]">
+              <span>
+                {data.timing_ms?.total_ms || data.timing_ms?.total_pipeline_ms
+                  ? `Latency: ${(((data.timing_ms.total_ms || data.timing_ms.total_pipeline_ms) as number) / 1000).toFixed(1)}s`
+                  : 'Satellite scan complete'}
+              </span>
+              <button
+                type="button"
+                onClick={() => onScan()}
+                className="text-[var(--accent)] hover:underline transition-colors cursor-pointer font-medium"
+              >
+                Rescan satellite
+              </button>
             </div>
           </div>
 
-          {/* Tree Preservation Plan List */}
+          {/* Right Column in Grid mode (Tree Preservation Plan List) */}
           <div className="space-y-2 min-w-0">
             <div className="flex items-center justify-between text-[12px] min-w-0">
               <div className="flex items-center gap-1.5 font-semibold text-[var(--text-1)]">
@@ -240,7 +267,7 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
                 No significant tree clusters (≥ 25 m²) detected on the surveyed plot.
               </div>
             ) : (
-              <div className="divide-y divide-[var(--hairline)] max-h-60 overflow-y-auto scrollbar-apple pr-1">
+              <div className="divide-y divide-[var(--hairline)] max-h-72 overflow-y-auto scrollbar-apple pr-1">
                 {data.preservation_plan.map((item) => {
                   const badge = getRankBadge(item.rank);
                   return (
@@ -291,36 +318,6 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
                 })}
               </div>
             )}
-          </div>
-
-          {/* Water Bodies Callout */}
-          {data.water_bodies.features.length > 0 && (
-            <div className="p-3 bg-[var(--accent-tint)]/40 rounded-[12px] text-[12px] space-y-1">
-              <div className="flex items-center gap-1.5 text-[var(--text-1)] font-semibold">
-                <Icon name="droplet" size={13} className="text-[var(--accent)] shrink-0" />
-                <span>Surface water detected on site</span>
-              </div>
-              <p className="text-[12px] text-[var(--text-2)] leading-relaxed">
-                {data.water_bodies.features.length} water feature
-                {data.water_bodies.features.length !== 1 ? 's' : ''} detected ({data.water_cover_pct.toFixed(1)}% cover). Maintain statutory drainage buffers.
-              </p>
-            </div>
-          )}
-
-          {/* Timing & Rescan Bar */}
-          <div className="pt-2 border-t border-[var(--hairline)] flex items-center justify-between text-[11px] text-[var(--text-3)]">
-            <span>
-              {data.timing_ms?.total_ms || data.timing_ms?.total_pipeline_ms
-                ? `Latency: ${(((data.timing_ms.total_ms || data.timing_ms.total_pipeline_ms) as number) / 1000).toFixed(1)}s`
-                : 'Satellite scan complete'}
-            </span>
-            <button
-              type="button"
-              onClick={() => onScan()}
-              className="text-[var(--accent)] hover:underline transition-colors cursor-pointer font-medium"
-            >
-              Rescan satellite
-            </button>
           </div>
         </div>
       )}

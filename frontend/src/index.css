@@ -28,6 +28,7 @@
   --segmented-active-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
   --blueprint-bg: #F4F6F8;
   --card-bg-subtle: #FFFFFF;
+  --sheet-bg: rgba(255, 255, 255, 0.92);
   --map-controls-right: 16px;
 }
 
@@ -56,6 +57,7 @@
   --segmented-active-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
   --blueprint-bg: #0E1726;
   --card-bg-subtle: #2C2C2E;
+  --sheet-bg: rgba(28, 28, 30, 0.92);
   --map-controls-right: 16px;
 }
 
@@ -122,6 +124,86 @@
   -webkit-backdrop-filter: blur(24px) saturate(180%);
   border: var(--panel-border);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 16px rgba(0, 0, 0, 0.08);
+}
+
+/* iOS HUD Vibrancy Surface */
+.vibrancy-hud {
+  background-color: var(--panel);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: var(--panel-border);
+  box-shadow: var(--shadow);
+}
+
+/* iOS Analysis HUD enter & exit animations */
+@keyframes hudEnter {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes hudExit {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.02);
+  }
+}
+
+.animate-hud-enter {
+  animation: hudEnter 250ms cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+}
+
+.animate-hud-exit {
+  animation: hudExit 200ms cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+}
+
+/* iOS Activity Spinner: 20px thin ring, 2px stroke, --accent, rotating 0.8s linear */
+@keyframes iosSpinnerRotate {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.ios-hud-spinner {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--fill);
+  border-top-color: var(--accent);
+  animation: iosSpinnerRotate 0.8s linear infinite;
+}
+
+.ios-spinner-16 {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--fill);
+  border-top-color: var(--accent);
+  animation: iosSpinnerRotate 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ios-hud-spinner,
+  .ios-spinner-16 {
+    animation: none;
+    border-color: var(--accent);
+  }
+  .animate-hud-enter,
+  .animate-hud-exit {
+    animation: none;
+  }
 }
 
 /* iOS Grouped List Container & Rows */
@@ -319,3 +401,89 @@
 .animate-tab-switch {
   animation: tabSwitchFadeSlide 200ms cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
 }
+
+/* Full-Screen Report Sheet Transition (250ms scale 0.98 to 1 + fade) */
+@keyframes sheetScaleFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-sheet-open {
+  animation: sheetScaleFadeIn 250ms cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+  transform-origin: center center;
+}
+
+/* ========================================================================= */
+/* PRINT / PDF MEDIA STYLES                                                  */
+/* ========================================================================= */
+@media print {
+  /* Hide all app chrome, map, drawer, scrim and interactive controls */
+  #center-map-section,
+  header,
+  aside,
+  .map-controls-anchor,
+  .report-sheet-scrim,
+  .report-sheet-header-actions,
+  .report-sheet-tabs-nav,
+  .report-sheet-close-btn,
+  .print-hide {
+    display: none !important;
+  }
+
+  html, body {
+    overflow: visible !important;
+    height: auto !important;
+    background: #ffffff !important;
+    color: #1d1d1f !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Sheet becomes a static full-width clean document */
+  .report-sheet-surface {
+    position: static !important;
+    inset: auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .report-sheet-content {
+    overflow: visible !important;
+    max-width: 100% !important;
+    padding: 16px 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Hide single-tab screen container, show stacked print container */
+  .report-screen-only {
+    display: none !important;
+  }
+
+  .report-print-all {
+    display: block !important;
+  }
+
+  .report-print-section {
+    page-break-inside: avoid;
+    break-inside: avoid;
+    margin-bottom: 2.5rem;
+  }
+}
+

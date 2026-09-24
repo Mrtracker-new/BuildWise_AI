@@ -4,9 +4,11 @@ import { Icon } from './Icon';
 
 interface HazardProfileCardProps {
   hazard: HazardProfile;
+  layout?: 'stack' | 'grid';
 }
 
-export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard }) => {
+export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, layout = 'stack' }) => {
+  const isGrid = layout === 'grid';
   const { seismic, flood, storm_cyclone: storm, overall_hazard_level } = hazard;
 
   const getSeismicSeverity = (): { level: 'low' | 'moderate' | 'high'; label: string } => {
@@ -21,8 +23,11 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard }) 
 
   const seismicSev = getSeismicSeverity();
 
-  // Worst-severity hazard starts expanded (Hydrological by default)
+  // Worst-severity hazard starts expanded in stack mode; all start expanded in grid mode
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
+    if (isGrid) {
+      return { seismic: true, flood: true, storm: true };
+    }
     const scores: Record<string, number> = {
       seismic: seismicSev.level === 'high' ? 3 : seismicSev.level === 'moderate' ? 2 : 1,
       flood: flood.pressure_level === 'high' ? 3 : flood.pressure_level === 'moderate' ? 2 : 1,
@@ -91,8 +96,9 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard }) 
         {getSeverityPill(overall_hazard_level, `${overall_hazard_level} hazard`)}
       </div>
 
-      {/* 1. Seismic Vulnerability Card */}
-      <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-3.5 transition-all">
+      <div className={isGrid ? 'grid grid-cols-1 xl:grid-cols-3 lg:grid-cols-3 gap-4 items-start' : 'space-y-3'}>
+        {/* 1. Seismic Vulnerability Card */}
+        <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-3.5 transition-all">
         <button
           type="button"
           onClick={() => toggleExpand('seismic')}
@@ -351,6 +357,7 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard }) 
             </div>
           </div>
         </div>
+      </div>
       </div>
 
       {allWarnings.length > 0 && (

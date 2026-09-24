@@ -13,23 +13,23 @@ import { MapCanvas } from './components/MapCanvas';
 import { CoordinatesInput } from './components/CoordinatesInput';
 import { AnalysisForm } from './components/AnalysisForm';
 import { ScoreSummaryCard } from './components/ScoreSummaryCard';
-import { HazardProfileCard } from './components/HazardProfileCard';
-import { SiteVisionCard } from './components/SiteVisionCard';
 import { FactorBreakdown } from './components/FactorBreakdown';
-import { OrientationCompass } from './components/OrientationCompass';
-import { VastuAdvisoryCard } from './components/VastuAdvisoryCard';
-import { FloorPlanGeneratorCard } from './components/FloorPlanGeneratorCard';
-import { CostBreakdownTable } from './components/CostBreakdownTable';
-import { LandValueCard } from './components/LandValueCard';
-import { RiskMatrix } from './components/RiskMatrix';
-import { RecommendationPanel } from './components/RecommendationPanel';
-import { DownloadReportButton } from './components/DownloadReportButton';
+import { ReportSheet, type ResultsTab } from './components/ReportSheet';
 import { TelemetryStrip, ErrorBanner } from './components/StatusBanner';
 import { EmptyState } from './components/EmptyState';
-import { LoadingSkeleton } from './components/LoadingSkeleton';
+import { AnalysisHUD } from './components/AnalysisHUD';
 import { MethodologyModal } from './components/MethodologyModal';
-import { DataSourcesDisclosure } from './components/DataSourcesDisclosure';
 import { Icon } from './components/Icon';
+
+const PIPELINE_STAGES = [
+  'Geocoding site address...',
+  'Querying USGS seismic catalogs...',
+  'Analyzing GloFAS river discharge...',
+  'Computing bioclimatic axis...',
+  'Scanning Sentinel-2 canopy...',
+  'Building CPWD cost model...',
+  'Synthesizing report...',
+] as const;
 
 export const App: React.FC = () => {
   // Theme State: 'light' | 'dark'
@@ -55,6 +55,10 @@ export const App: React.FC = () => {
   const [floorPlanData, setFloorPlanData] = useState<FloorPlanResponse | null>(null);
   const [isSiteVisionLoading, setIsSiteVisionLoading] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [currentStageIndex, setCurrentStageIndex] = useState<number>(0);
+  const [hudFallbackMessage, setHudFallbackMessage] = useState<string | null>(null);
+  const [cancelToast, setCancelToast] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [fallbackToast, setFallbackToast] = useState<string | null>(null);
   const [backendConnected, setBackendConnected] = useState<boolean>(false);
@@ -67,7 +71,7 @@ export const App: React.FC = () => {
 
   // Responsive Drawer State: persistent on desktop (>=1024px)
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(true);
-  const [leafletResizeTrigger, setLeafletResizeTrigger] = useState<number>(0);
+  const [mapResizeTrigger, setMapResizeTrigger] = useState<number>(0);
 
   // Telemetry Warnings State
   const [isWarningDismissed, setIsWarningDismissed] = useState<boolean>(false);
@@ -80,16 +84,107 @@ export const App: React.FC = () => {
   const resultsDrawerRef = useRef<HTMLElement>(null);
 
   // Segmented Tabs State: 'overview' | 'hazards' | 'ecology' | 'cost_plan'
-  type ResultsTab = 'overview' | 'hazards' | 'ecology' | 'cost_plan';
   const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('overview');
   const [copiedRef, setCopiedRef] = useState<boolean>(false);
 
-  const handleTabChange = (tab: ResultsTab) => {
-    setActiveResultsTab(tab);
-    if (resultsDrawerRef.current) {
-      resultsDrawerRef.current.scrollTo({ top: 0, behavior: 'instant' });
+  // Full-Screen Report Sheet State
+  const [isReportOpen, setIsReportOpen] = useState<boolean>(false);
+  const openReportCtaRef = useRef<HTMLButtonElement>(null);
+
+  const handleOpenReport = useCallback(() => {
+    setIsReportOpen(true);
+    if (typeof window !== 'undefined' && window.location.hash !== '#report') {
+      window.history.pushState(null, '', '#report');
     }
-  };
+  }, []);
+
+  const handleCloseReport = useCallback(() => {
+    setIsReportOpen(false);
+    if (typeof window !== 'undefined' && window.location.hash === '#report') {
+      window.history.pushState(null, '', window.location.pathname + window.location.search);
+    }
+    setTimeout(() => {
+      openReportCtaRef.current?.focus();
+    }, 50);
+  }, []);
+
+  // Single-source the #report hash:
+  // - page load with '#report' AND existing results -> reopen sheet
+  // - load with '#report' and NO results -> strip hash silently
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    if (window.location.hash === '#report') {
+      if (analysisData) {
+        setIsReportOpen(true);
+      } else {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        setIsReportOpen(false);
+      }
+    }
+  }, [analysisData]);
+
+  // Browser back/forward navigation sync
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleHashChange = () => {
+      if (window.location.hash === '#report') {
+        if (analysisData) {
+          setIsReportOpen(true);
+        } else {
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+          setIsReportOpen(false);
+        }
+      } else {
+        setIsReportOpen(false);
+      }
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [analysisData]);
+
+  // Cycle pipeline stages during analysis
+  useEffect(() => {
+    if (!isLoading) return;
+
+    const interval = setInterval(() => {
+      setCurrentStageIndex((prev) => {
+        if (prev < PIPELINE_STAGES.length - 1) {
+          return prev + 1;
+        }
+        return prev;
+      });
+    }, 700);
+
+    return () => {
+      clearInterval(interval);
+      setCurrentStageIndex(0);
+    };
+  }, [isLoading]);
+
+  // Auto-dismiss cancel toast
+  useEffect(() => {
+    if (!cancelToast) return;
+    const timer = setTimeout(() => setCancelToast(null), 3000);
+    return () => clearTimeout(timer);
+  }, [cancelToast]);
+
+  const handleCancelAnalysis = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsLoading(false);
+    setHudFallbackMessage(null);
+    setCurrentStageIndex(0);
+    setCancelToast('Analysis cancelled');
+    if (typeof window !== 'undefined' && window.location.hash === '#report') {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+    setIsReportOpen(false);
+  }, []);
 
   const handleCopyRef = () => {
     if (!analysisData) return;
@@ -115,9 +210,9 @@ export const App: React.FC = () => {
 
   const warnings = testWarnings !== null ? testWarnings : analysisData?.warnings || [];
 
-  // Invalidate Leaflet helper
+  // Invalidate map helper
   const triggerMapResize = useCallback(() => {
-    setLeafletResizeTrigger((prev) => prev + 1);
+    setMapResizeTrigger((prev) => prev + 1);
   }, []);
 
   // Initial Backend Status & LLM Key Verification
@@ -182,6 +277,12 @@ export const App: React.FC = () => {
   };
 
   const handleClearLocation = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsLoading(false);
+    setHudFallbackMessage(null);
     setHasLocation(false);
     setAnalysisData(null);
     setSiteVisionData(null);
@@ -189,6 +290,10 @@ export const App: React.FC = () => {
     setErrorMessage(null);
     setIsDrawerOpen(false);
     setIsMobileResultsOpen(false);
+    setIsReportOpen(false);
+    if (typeof window !== 'undefined' && window.location.hash === '#report') {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
   };
 
   const handleRequestChange = (updated: Partial<AnalysisRequest>) => {
@@ -196,7 +301,10 @@ export const App: React.FC = () => {
   };
 
   // Run Satellite Vision Analysis
-  const handleRunSiteVision = async (modeOverride?: 'segformer' | 'index-only') => {
+  const handleRunSiteVision = async (
+    modeOverride?: 'segformer' | 'index-only',
+    signal?: AbortSignal
+  ) => {
     if (!hasLocation) return;
     setIsSiteVisionLoading(true);
     try {
@@ -206,9 +314,12 @@ export const App: React.FC = () => {
         plot_area_sqft: overridePlotArea ?? (analysisData?.land_value?.plot_area_sqft ?? 2000),
         mode_override: modeOverride,
         orientation_deg: analysisData?.orientation?.optimal_axis_degrees ?? undefined,
-      });
+      }, signal);
       setSiteVisionData(resp);
     } catch (err: any) {
+      if (err.name === 'AbortError' || err.message?.includes('aborted')) {
+        return;
+      }
       setSiteVisionData({
         mode: 'unavailable',
         green_cover_pct: 0,
@@ -233,7 +344,16 @@ export const App: React.FC = () => {
       return;
     }
 
+    // Cancel any previous in-flight request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setIsLoading(true);
+    setCurrentStageIndex(0);
+    setHudFallbackMessage(null);
     setErrorMessage(null);
     setFallbackToast(null);
     setIsWarningDismissed(false);
@@ -244,18 +364,24 @@ export const App: React.FC = () => {
     setIsMobileControlOpen(false);
     setActiveResultsTab('overview');
 
-    // Concurrently trigger site vision scan
-    handleRunSiteVision();
+    // Concurrently trigger site vision scan with signal
+    handleRunSiteVision(undefined, controller.signal);
 
     try {
       const prevPlotArea = overridePlotArea ?? analysisData?.land_value?.plot_area_sqft;
 
-      const { data: response, fallbackTriggered } = await generateFeasibilityReport(request);
-      setAnalysisData(response);
+      const { data: response, fallbackTriggered } = await generateFeasibilityReport(
+        request,
+        controller.signal
+      );
 
       if (fallbackTriggered) {
+        setHudFallbackMessage('AI unreachable - using deterministic engine');
+        await new Promise((resolve) => setTimeout(resolve, 1200));
         setFallbackToast('AI Engine unreachable, falling back to deterministic mock.');
       }
+
+      setAnalysisData(response);
 
       // STALE-STATE RULE: Retain floorPlanData only when plot dimensions are unchanged
       const newPlotArea = overridePlotArea ?? response.land_value?.plot_area_sqft;
@@ -268,18 +394,33 @@ export const App: React.FC = () => {
       }
 
       setIsDrawerOpen(true);
+      // Auto-open ReportSheet on success
+      handleOpenReport();
     } catch (err: any) {
+      if (err.name === 'AbortError' || err.message?.includes('aborted')) {
+        // Analysis cancelled by user
+        return;
+      }
       setErrorMessage(
         err.message || 'An unexpected error occurred during site feasibility analysis.'
       );
     } finally {
       setIsLoading(false);
+      setHudFallbackMessage(null);
+      abortControllerRef.current = null;
       triggerMapResize();
     }
   };
 
   // Reset entire application
   const handleReset = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsLoading(false);
+    setHudFallbackMessage(null);
+    setCurrentStageIndex(0);
     setRequest({
       latitude: 12.9716,
       longitude: 77.5946,
@@ -299,6 +440,10 @@ export const App: React.FC = () => {
     setIsDrawerOpen(true);
     setIsMobileControlOpen(false);
     setIsMobileResultsOpen(false);
+    setIsReportOpen(false);
+    if (typeof window !== 'undefined' && window.location.hash === '#report') {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
     setIsWarningDismissed(false);
     triggerMapResize();
   };
@@ -315,34 +460,29 @@ export const App: React.FC = () => {
     triggerMapResize();
   };
 
-  // Reusable Results Content Renderer
-  const renderResultsContent = () => {
-    if (isLoading) {
-      return <LoadingSkeleton />;
-    }
+  // Derived report payload for export and sheet
+  const currentEffectiveRate =
+    overrideLandRate !== null
+      ? overrideLandRate
+      : analysisData?.land_value?.indicative_rate_per_sqft ?? null;
 
-    if (analysisData) {
-      const currentEffectiveRate =
-        overrideLandRate !== null
-          ? overrideLandRate
-          : analysisData.land_value?.indicative_rate_per_sqft ?? null;
+  const currentPlotArea =
+    overridePlotArea !== null
+      ? overridePlotArea
+      : analysisData?.land_value?.plot_area_sqft ?? 0;
 
-      const currentPlotArea =
-        overridePlotArea !== null
-          ? overridePlotArea
-          : analysisData.land_value?.plot_area_sqft ?? 0;
+  const currentLandCost =
+    currentEffectiveRate !== null && currentEffectiveRate > 0 && currentPlotArea > 0
+      ? Math.round(currentEffectiveRate * currentPlotArea)
+      : analysisData?.land_value?.land_cost_inr ?? null;
 
-      const currentLandCost =
-        currentEffectiveRate !== null && currentEffectiveRate > 0 && currentPlotArea > 0
-          ? Math.round(currentEffectiveRate * currentPlotArea)
-          : analysisData.land_value?.land_cost_inr ?? null;
+  const currentCombinedTotal =
+    currentLandCost !== null && analysisData
+      ? analysisData.cost_estimate.total_estimated_cost_inr + currentLandCost
+      : null;
 
-      const currentCombinedTotal =
-        currentLandCost !== null
-          ? analysisData.cost_estimate.total_estimated_cost_inr + currentLandCost
-          : null;
-
-      const reportPayload: ReportRequestPayload = {
+  const reportPayload: ReportRequestPayload | null = analysisData
+    ? {
         analysis_data: {
           ...analysisData,
           land_value: analysisData.land_value
@@ -361,8 +501,25 @@ export const App: React.FC = () => {
         },
         site_vision: siteVisionData ?? null,
         floor_plan: floorPlanData ?? null,
-      };
+      }
+    : null;
 
+  // Reusable Results Content Renderer (Summary Preview Only)
+  const renderResultsContent = () => {
+    if (isLoading) {
+      return (
+        <div className="w-full min-w-0">
+          <div className="vibrancy-panel rounded-[14px] p-3.5 border border-[var(--panel-border-color)] flex items-center gap-3 shadow-sm">
+            <div className="ios-spinner-16 shrink-0" aria-hidden="true" />
+            <span className="text-[13px] text-[var(--text-2)] font-medium truncate">
+              {hudFallbackMessage || PIPELINE_STAGES[currentStageIndex]}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    if (analysisData) {
       return (
         <div className="@container w-full min-w-0 space-y-3.5 animate-fade-in">
           {/* Panel Header */}
@@ -388,147 +545,26 @@ export const App: React.FC = () => {
             </button>
           </div>
 
-          {/* Sticky iOS Segmented Control */}
-          <div className="sticky top-0 z-20 py-1.5 bg-[var(--panel)]/95 backdrop-blur-md border-b border-[var(--hairline)]">
-            <div className="bg-[var(--fill)] rounded-[10px] p-[2px] grid grid-cols-4 gap-1 text-[12px] font-medium select-none">
-              {[
-                { id: 'overview', label: 'Overview' },
-                { id: 'hazards', label: 'Hazards' },
-                { id: 'ecology', label: 'Ecology' },
-                { id: 'cost_plan', label: 'Cost & Plan' },
-              ].map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => handleTabChange(tab.id as ResultsTab)}
-                  className={`py-1.5 px-1 rounded-[8px] text-[11px] sm:text-[12px] text-center transition-all truncate cursor-pointer ${
-                    activeResultsTab === tab.id
-                      ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] font-semibold shadow-[var(--segmented-active-shadow)]'
-                      : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-          </div>
+          {/* Score Hero Card (Clicking hero triggers open report) */}
+          <ScoreSummaryCard
+            data={analysisData}
+            variant="panel"
+            onClickHero={handleOpenReport}
+          />
 
-          {/* Tab Content Mapping with 200ms Fade/Slide */}
-          <div key={activeResultsTab} className="animate-tab-switch space-y-3 pt-0.5">
-            {activeResultsTab === 'overview' && (
-              <>
-                {/* 1. ScoreSummaryCard hero */}
-                <ScoreSummaryCard data={analysisData} />
+          {/* Top 3 Factor Breakdown Rows */}
+          <FactorBreakdown factors={analysisData.factors} limit={3} />
 
-                {/* 2. Top 3 FactorBreakdown rows */}
-                <FactorBreakdown factors={analysisData.factors} limit={3} />
-
-                {/* 3. RecommendationPanel summary */}
-                <RecommendationPanel
-                  summary={analysisData.engineering_summary}
-                  recommendations={analysisData.detailed_recommendations}
-                  recommendationItems={analysisData.recommendation_items}
-                  aiMetadata={analysisData.ai_metadata}
-                  parameterReflection={analysisData.parameter_reflection}
-                  summaryOnly={true}
-                />
-
-                {/* 4. Download Vector PDF Report */}
-                <DownloadReportButton payload={reportPayload} />
-              </>
-            )}
-
-            {activeResultsTab === 'hazards' && (
-              <>
-                {/* HazardProfileCard sections */}
-                {analysisData.hazard_profile && (
-                  <HazardProfileCard hazard={analysisData.hazard_profile} />
-                )}
-
-                {/* Risk Mitigation Matrix */}
-                <RiskMatrix risks={analysisData.risks} />
-
-                {/* Consolidated Data Sources & Standards */}
-                <DataSourcesDisclosure category="hazards" />
-              </>
-            )}
-
-            {activeResultsTab === 'ecology' && (
-              <>
-                {/* Ecological Site Vision & Tree Preservation */}
-                <SiteVisionCard
-                  data={siteVisionData}
-                  isLoading={isSiteVisionLoading}
-                  onScan={handleRunSiteVision}
-                  hasCoordinates={hasLocation}
-                />
-
-                {/* Passive Orientation Compass */}
-                <OrientationCompass orientation={analysisData.orientation} />
-
-                {/* Vastu & Functional Planning Advisory */}
-                {analysisData.vastu_advisory && (
-                  <VastuAdvisoryCard advisory={analysisData.vastu_advisory} />
-                )}
-
-                {/* Consolidated Data Sources & Standards */}
-                <DataSourcesDisclosure category="ecology" />
-              </>
-            )}
-
-            {activeResultsTab === 'cost_plan' && (
-              <>
-                {/* Cost Breakdown Table */}
-                <CostBreakdownTable costEstimate={analysisData.cost_estimate} />
-
-                {/* Indicative Land Value & Combined Project Total */}
-                {analysisData.land_value && (
-                  <LandValueCard
-                    landValue={analysisData.land_value}
-                    civilTotalCostInr={analysisData.cost_estimate.total_estimated_cost_inr}
-                    onOverrideChange={(rate, area) => {
-                      setOverrideLandRate(rate);
-                      setOverridePlotArea(area);
-                    }}
-                  />
-                )}
-
-                {/* Generative Floor Plan Engine */}
-                <FloorPlanGeneratorCard
-                  defaultWidthM={
-                    analysisData.land_value?.plot_area_sqft
-                      ? Math.max(
-                          6.0,
-                          Math.min(
-                            60.0,
-                            +Math.sqrt(
-                              (analysisData.land_value.plot_area_sqft * 0.092903) / 1.2
-                            ).toFixed(1)
-                          )
-                        )
-                      : 10.0
-                  }
-                  defaultDepthM={
-                    analysisData.land_value?.plot_area_sqft
-                      ? Math.max(
-                          6.0,
-                          Math.min(
-                            60.0,
-                            +(
-                              Math.sqrt(
-                                (analysisData.land_value.plot_area_sqft * 0.092903) / 1.2
-                              ) * 1.2
-                            ).toFixed(1)
-                          )
-                        )
-                      : 12.0
-                  }
-                  activeFloorPlan={floorPlanData}
-                  onFloorPlanGenerated={(plan) => setFloorPlanData(plan)}
-                />
-              </>
-            )}
-          </div>
+          {/* ONE Primary CTA: "Open Full Report" */}
+          <button
+            ref={openReportCtaRef}
+            type="button"
+            onClick={handleOpenReport}
+            className="w-full h-10 rounded-[12px] bg-[var(--accent)] hover:brightness-[0.98] active:brightness-95 text-white text-[13px] font-semibold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer select-none"
+          >
+            <span>Open Full Report</span>
+            <Icon name="arrow-up-right" size={16} />
+          </button>
         </div>
       );
     }
@@ -558,7 +594,7 @@ export const App: React.FC = () => {
           orientationDegrees={analysisData?.orientation.optimal_axis_degrees}
           plinthAreaSqFt={request.built_up_area_sqft}
           onLocationSelect={handleLocationSelect}
-          invalidateTrigger={leafletResizeTrigger}
+          invalidateTrigger={mapResizeTrigger}
           entranceDirection={analysisData?.vastu_advisory?.ranked_entrances?.[0]?.direction}
           treeClusters={siteVisionData?.tree_clusters}
           waterBodies={siteVisionData?.water_bodies}
@@ -753,11 +789,62 @@ export const App: React.FC = () => {
         {renderResultsContent()}
       </aside>
 
+      {/* Floating Centered iOS Analysis HUD (Over Map Area) */}
+      {isLoading && (
+        <div
+          className={`fixed inset-0 z-[1050] pointer-events-none flex items-center justify-center transition-all duration-300 ${
+            isDrawerOpen ? 'lg:pl-[364px] lg:pr-[384px]' : 'lg:pl-[364px] lg:pr-0'
+          }`}
+        >
+          <AnalysisHUD
+            stageText={hudFallbackMessage || PIPELINE_STAGES[currentStageIndex]}
+            stageIndex={currentStageIndex}
+            totalStages={PIPELINE_STAGES.length}
+            fallbackMessage={hudFallbackMessage}
+            onCancel={handleCancelAnalysis}
+          />
+        </div>
+      )}
+
+      {/* Analysis Cancelled / System Toast */}
+      {cancelToast && (
+        <div className="fixed top-[72px] left-1/2 -translate-x-1/2 z-[1050] pointer-events-auto animate-fade-in">
+          <div className="vibrancy-pill px-4 py-2 rounded-full text-[13px] font-medium text-[var(--text-1)] flex items-center gap-2 shadow-lg border border-[var(--panel-border-color)]">
+            <Icon name="info" size={14} className="text-[var(--accent)]" />
+            <span>{cancelToast}</span>
+          </div>
+        </div>
+      )}
+
       {/* Engineering Methodology Reference Dialog (z-[2000]) */}
       <MethodologyModal
         isOpen={isMethodologyOpen}
         onClose={() => setIsMethodologyOpen(false)}
       />
+
+      {/* Full-Screen Report Sheet (z-[2000]) */}
+      {analysisData && (
+        <ReportSheet
+          isOpen={isReportOpen}
+          onClose={handleCloseReport}
+          analysisData={analysisData}
+          siteVisionData={siteVisionData}
+          isSiteVisionLoading={isSiteVisionLoading}
+          onRunSiteVision={handleRunSiteVision}
+          hasLocation={hasLocation}
+          floorPlanData={floorPlanData}
+          onFloorPlanGenerated={(plan) => setFloorPlanData(plan)}
+          overrideLandRate={overrideLandRate}
+          overridePlotArea={overridePlotArea}
+          onOverrideChange={(rate, area) => {
+            setOverrideLandRate(rate);
+            setOverridePlotArea(area);
+          }}
+          reportPayload={reportPayload!}
+          activeTab={activeResultsTab}
+          onTabChange={setActiveResultsTab}
+        />
+      )}
     </div>
   );
 };

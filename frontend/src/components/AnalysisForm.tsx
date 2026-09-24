@@ -252,17 +252,19 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
         <button
           type="button"
           onClick={onSubmit}
-          disabled={!canSubmit}
+          disabled={!canSubmit || isLoading}
           className={`w-full h-11 px-4 rounded-[12px] font-semibold text-[13px] sm:text-[14px] flex items-center justify-center gap-2 transition-all duration-200 select-none shadow-sm ${
-            canSubmit
+            isLoading
+              ? 'bg-[var(--fill)] text-[var(--text-3)] cursor-not-allowed opacity-90'
+              : canSubmit
               ? 'bg-[var(--accent)] text-white hover:brightness-[0.98] active:brightness-95 cursor-pointer'
               : 'bg-[var(--fill)] text-[var(--text-3)] cursor-not-allowed'
           }`}
         >
           {isLoading ? (
             <>
-              <Icon name="loader" size={16} className="shrink-0 animate-spin" />
-              <span>Synthesizing Site Engineering Data...</span>
+              <div className="ios-spinner-16 shrink-0" aria-hidden="true" />
+              <span>Analyzing...</span>
             </>
           ) : (
             <>

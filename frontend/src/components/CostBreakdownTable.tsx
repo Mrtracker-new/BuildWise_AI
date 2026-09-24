@@ -4,9 +4,13 @@ import { Icon } from './Icon';
 
 interface CostBreakdownTableProps {
   costEstimate: CostEstimate;
+  hideSummaryHeader?: boolean;
 }
 
-export const CostBreakdownTable: React.FC<CostBreakdownTableProps> = ({ costEstimate }) => {
+export const CostBreakdownTable: React.FC<CostBreakdownTableProps> = ({
+  costEstimate,
+  hideSummaryHeader = false,
+}) => {
   const formatINR = (val: number) => {
     return new Intl.NumberFormat('en-IN', {
       style: 'currency',
@@ -30,34 +34,38 @@ export const CostBreakdownTable: React.FC<CostBreakdownTableProps> = ({ costEsti
         </span>
       </div>
 
-      {/* Key-Value Rows (No micro-tile grid; only Topographic/Bioclimatic on Overview) */}
-      <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
-        <div className="h-10 flex items-center justify-between px-0.5">
-          <span className="text-[13px] font-normal text-[var(--text-2)]">Plinth area base rate</span>
-          <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
-            ₹{costEstimate.base_rate_per_sqft.toLocaleString()}/sq ft
-          </span>
-        </div>
-        <div className="h-10 flex items-center justify-between px-0.5">
-          <span className="text-[13px] font-normal text-[var(--text-2)]">Topographic terrain modifier</span>
-          <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
-            {costEstimate.terrain_multiplier.toFixed(2)}x {costEstimate.terrain_surcharge_inr > 0 ? `(+${formatINR(costEstimate.terrain_surcharge_inr)})` : '(Baseline)'}
-          </span>
-        </div>
-      </div>
+      {!hideSummaryHeader && (
+        <>
+          {/* Key-Value Rows */}
+          <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
+            <div className="h-10 flex items-center justify-between px-0.5">
+              <span className="text-[13px] font-normal text-[var(--text-2)]">Plinth area base rate</span>
+              <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
+                ₹{costEstimate.base_rate_per_sqft.toLocaleString()}/sq ft
+              </span>
+            </div>
+            <div className="h-10 flex items-center justify-between px-0.5">
+              <span className="text-[13px] font-normal text-[var(--text-2)]">Topographic terrain modifier</span>
+              <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
+                {costEstimate.terrain_multiplier.toFixed(2)}x {costEstimate.terrain_surcharge_inr > 0 ? `(+${formatINR(costEstimate.terrain_surcharge_inr)})` : '(Baseline)'}
+              </span>
+            </div>
+          </div>
 
-      {/* Total Estimated Civil Budget */}
-      <div className="bg-[var(--fill)] p-3.5 rounded-[12px] space-y-1">
-        <div className="flex items-center justify-between text-[12px] text-[var(--text-3)]">
-          <span className="font-normal">
-            Total estimated civil budget
-          </span>
-          <span className="text-[11px] tabular-nums">Range: {formatINR(costEstimate.cost_range_min_inr)} – {formatINR(costEstimate.cost_range_max_inr)}</span>
-        </div>
-        <div className="text-[24px] font-bold text-[var(--text-1)] tabular-nums tracking-tight">
-          {formatINR(costEstimate.total_estimated_cost_inr)}
-        </div>
-      </div>
+          {/* Total Estimated Civil Budget */}
+          <div className="bg-[var(--fill)] p-3.5 rounded-[12px] space-y-1">
+            <div className="flex items-center justify-between text-[12px] text-[var(--text-3)]">
+              <span className="font-normal">
+                Total estimated civil budget
+              </span>
+              <span className="text-[11px] tabular-nums">Range: {formatINR(costEstimate.cost_range_min_inr)} – {formatINR(costEstimate.cost_range_max_inr)}</span>
+            </div>
+            <div className="text-[24px] font-bold text-[var(--text-1)] tabular-nums tracking-tight">
+              {formatINR(costEstimate.total_estimated_cost_inr)}
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Itemized Table with Hairline Rows */}
       <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">

@@ -34,7 +34,7 @@ export const FactorBreakdown: React.FC<FactorBreakdownProps> = ({ factors, limit
   };
 
   return (
-    <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-3.5 w-full min-w-0">
+    <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 sm:p-[18px] space-y-3.5 w-full min-w-0">
       {/* Section Header */}
       <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
@@ -55,7 +55,7 @@ export const FactorBreakdown: React.FC<FactorBreakdownProps> = ({ factors, limit
           const icon = getFactorIcon(factor.factor_id);
 
           return (
-            <div key={factor.factor_id} className="py-2.5 space-y-1.5 min-w-0 first:pt-0 last:pb-0">
+            <div key={factor.factor_id} className="py-3.5 space-y-2 min-w-0 first:pt-1 last:pb-1">
               <div className="flex items-center justify-between gap-2 min-w-0">
                 <div className="flex items-center gap-2 min-w-0">
                   <Icon name={icon} size={14} className="text-[var(--text-2)] shrink-0" />
