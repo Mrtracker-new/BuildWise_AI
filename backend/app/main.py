@@ -431,6 +431,7 @@ async def create_generative_floorplan(
             typ_label = typology.replace("_", " ").title()
             total_floors = req.multi_storey.total_storeys
             built_up_sqft = req.built_up_area_sqft or (req.multi_storey.total_built_up_area_sqm * 10.764)
+            first_floor = ms_dict["floors"][0] if ms_dict.get("floors") else {}
             fp_payload = {
                 "multi_storey": ms_dict,
                 "metrics": {
@@ -440,7 +441,29 @@ async def create_generative_floorplan(
                     "plot_coverage_pct": (req.ground_coverage_ratio or 0.6) * 100,
                     "total_built_up_sqm": req.multi_storey.total_built_up_area_sqm,
                     "circulation_efficiency_pct": 88.0,
-                }
+                },
+                "rectangles": {
+                    "envelope": first_floor.get("envelope", {}),
+                    "rooms": first_floor.get("rooms", []),
+                    "doors": first_floor.get("doors", []),
+                    "windows": first_floor.get("windows", []),
+                },
+                "placements": [
+                    {
+                        "room_id": r.get("room_id", ""),
+                        "room_name": r.get("room_name", ""),
+                        "row": 0,
+                        "col": 0,
+                        "width": int(r.get("width_m", 1)),
+                        "height": int(r.get("depth_m", 1)),
+                        "area_sqm": r.get("area_sqm", 0),
+                        "width_m": r.get("width_m", 0),
+                        "depth_m": r.get("depth_m", 0),
+                        "zone": r.get("zone", ""),
+                        "vastu_compliant": r.get("vastu_compliant", True),
+                    }
+                    for r in first_floor.get("rooms", [])
+                ]
             }
             mock_analysis = {
                 "request_id": f"BW-FP-{int(time.time())}",
@@ -457,7 +480,8 @@ async def create_generative_floorplan(
             }
             pdf_stream = generate_pdf_report(
                 mock_analysis,
-                floor_plan=fp_payload
+                floor_plan=fp_payload,
+                dossier_only=True
             )
             return StreamingResponse(
                 pdf_stream,
@@ -517,7 +541,8 @@ async def create_generative_floorplan(
             }
             pdf_stream = generate_pdf_report(
                 mock_analysis,
-                floor_plan=response.model_dump()
+                floor_plan=response.model_dump(),
+                dossier_only=True
             )
             return StreamingResponse(
                 pdf_stream,

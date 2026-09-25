@@ -1159,7 +1159,8 @@ def make_floorplan_legend(floorplan_data: Dict[str, Any], width: float = CONTENT
 def generate_pdf_report(
     data: Dict[str, Any],
     site_vision: Optional[Dict[str, Any]] = None,
-    floor_plan: Optional[Dict[str, Any]] = None
+    floor_plan: Optional[Dict[str, Any]] = None,
+    dossier_only: bool = False
 ) -> io.BytesIO:
     """
     Generates a formal, Apple-designed vector PDF engineering report from an AnalysisResponse payload.
@@ -1264,8 +1265,10 @@ def generate_pdf_report(
         logo_d.add(String(14, 8.5, "BW", fontName=FONT_BOLD, fontSize=11.5, textAnchor="middle", fillColor=colors.white))
         logo_element = logo_d
 
+    is_dossier_only = dossier_only or bool(data.get("dossier_only"))
     app_brand_p = Paragraph(f'<font color="{COLOR_ACCENT.hexval()}" size="11"><b>BuildWise AI</b></font>', ParagraphStyle('Brand', fontName=FONT_SEMIBOLD, leading=12))
-    app_title_p = Paragraph('<font color="#1D1D1F" size="15"><b>Site Feasibility &amp; Engineering Advisory</b></font>', ParagraphStyle('DocTitle', fontName=FONT_BOLD, leading=17))
+    doc_title_text = "Architectural Floor Plan Dossier" if is_dossier_only else "Site Feasibility &amp; Engineering Advisory"
+    app_title_p = Paragraph(f'<font color="#1D1D1F" size="15"><b>{doc_title_text}</b></font>', ParagraphStyle('DocTitle', fontName=FONT_BOLD, leading=17))
 
     title_box = Table([[logo_element, Table([[app_brand_p], [app_title_p]], colWidths=[270])]], colWidths=[34, 276])
     title_box.setStyle(TableStyle([
@@ -1314,201 +1317,284 @@ def generate_pdf_report(
     story.append(top_band)
     story.append(Spacer(1, 10))
 
-    # -------------------------------------------------------------------------
-    # PAGE 1: HERO BAND (SCORE & 2x2 SPEC GRID)
-    # -------------------------------------------------------------------------
-    score = _safe_float(data.get("overall_suitability_score"), 0.0)
-    score = max(0.0, min(100.0, score))
-    verdict = str(data.get("suitability_verdict") or "Feasible")
+    if not is_dossier_only:
+        # -------------------------------------------------------------------------
+        # PAGE 1: HERO BAND (SCORE & 2x2 SPEC GRID)
+        # -------------------------------------------------------------------------
+        score = _safe_float(data.get("overall_suitability_score"), 0.0)
+        score = max(0.0, min(100.0, score))
+        verdict = str(data.get("suitability_verdict") or "Feasible")
 
-    if score >= 75.0:
-        verdict_color = COLOR_GREEN_TEXT
-        verdict_tint = COLOR_GREEN_TINT
-        ring_color = COLOR_GREEN_BORDER
-    elif score >= 50.0:
-        verdict_color = COLOR_AMBER_TEXT
-        verdict_tint = COLOR_AMBER_TINT
-        ring_color = COLOR_AMBER_BORDER
-    else:
-        verdict_color = COLOR_RED_TEXT
-        verdict_tint = COLOR_RED_TINT
-        ring_color = COLOR_RED_BORDER
-
-    # Gauge ring 26mm diameter (~73.7 pt)
-    gauge_d = Drawing(74, 74)
-    gauge_d.add(Circle(37, 37, 30, fillColor=None, strokeColor=COLOR_TRACK_GRAY, strokeWidth=4.5))
-    gauge_arc = ArcPath(strokeColor=ring_color, strokeWidth=4.5, fillColor=None)
-    gauge_arc.addArc(37, 37, 30, 90, 90 - (score / 100.0) * 360.0)
-    gauge_d.add(gauge_arc)
-    gauge_d.add(String(37, 32, f"{score:.0f}", fontName=FONT_BOLD, fontSize=15, textAnchor="middle", fillColor=COLOR_TEXT_PRIMARY))
-
-    # Middle: Score 40pt/700 + /100 11pt + verdict pill
-    score_p = Paragraph(f'<font size="32"><b>{score:.1f}</b></font><font size="11" color="{COLOR_TEXT_TERTIARY.hexval()}"> / 100</font>', ParagraphStyle('HeroScore', fontName=FONT_BOLD, leading=34))
-    verdict_pill = make_pill(verdict.upper(), verdict_tint, verdict_color, width=130)
-    mid_hero = Table([[score_p], [Spacer(1, 4)], [verdict_pill]], colWidths=[140])
-    mid_hero.setStyle(TableStyle([
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-    ]))
-
-    # Right: 2x2 spec grid
-    cost_data = data.get("cost_estimate") or {}
-    base_cost = _safe_float(cost_data.get("base_cost_inr"), 0.0)
-    base_rate = _safe_float(cost_data.get("base_rate_per_sqft"), 1.0)
-    built_area = base_cost / max(base_rate, 1.0) if base_cost > 0 else _safe_float(data.get("built_up_area_sqft"), 2000.0)
-
-    quality_grade = str(data.get("quality_grade") or "Standard")
-    floors_count = _safe_int(data.get("floors"), 2)
-    storeys_str = f"G+{floors_count-1} Storeys" if floors_count > 1 else "Ground Floor"
-
-    slope_val = next((f.get('raw_value') for f in (data.get('factors') or []) if f.get('factor_id') == 'slope' and f.get('raw_value') is not None), 0)
-    slope_str = f"{_safe_float(slope_val):.1f}% Slope" if slope_val is not None else "0% Slope"
-
-    c_area = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="7.5">Built-up Area</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{built_area:,.0f} sq ft</b></font>', kv_style)
-    c_grade = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="7.5">Specification Grade</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(quality_grade.capitalize())} Grade</b></font>', kv_style)
-    c_storeys = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="7.5">Storeys</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(storeys_str)}</b></font>', kv_style)
-    c_cov = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="7.5">Ground Coverage</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>60.0% ({slope_str})</b></font>', kv_style)
-
-    spec_grid = Table([[c_area, c_grade], [c_storeys, c_cov]], colWidths=[130, 130])
-    spec_grid.setStyle(TableStyle([
-        ('TOPPADDING', (0, 0), (-1, -1), 2.0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2.0),
-        ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
-    ]))
-
-    hero_card = Table([[gauge_d, mid_hero, spec_grid]], colWidths=[80, 145, 268.2])
-    hero_card.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, -1), COLOR_BG_SUBTLE),
-        ('ROUNDEDCORNERS', [8, 8, 8, 8]),
-        ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 8.0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 8.0),
-        ('LEFTPADDING', (0, 0), (-1, -1), 8.0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 8.0),
-    ]))
-    story.append(hero_card)
-    story.append(Spacer(1, 6))
-
-    # Below hero: site address 10pt/500 + WGS84 coordinate row mono 8.5pt
-    address_p = Paragraph(f"<b>Site Address:</b> {html.escape(address)}", ParagraphStyle('SiteAddr', fontName=FONT_MEDIUM, fontSize=10.0, leading=13.0, textColor=COLOR_TEXT_PRIMARY, alignment=0))
-    coords_p = Paragraph(f"WGS84 Reference: {lat:.5f}° N, {lon:.5f}° E • Elevation: ~920m AMSL • Survey Benchmark CPWD/NBC Aligned", ParagraphStyle('SiteCoords', fontName=FONT_REGULAR, fontSize=8.5, leading=11.0, textColor=COLOR_TEXT_SECONDARY, alignment=0))
-    story.append(address_p)
-    story.append(Spacer(1, 2))
-    story.append(coords_p)
-    story.append(Spacer(1, 6))
-
-    # =========================================================================
-    # TAB 1: OVERVIEW
-    # =========================================================================
-
-    # --- Section 01: Multi-Criteria Land Suitability Assessment ---
-    story.append(create_section_header("01", "Multi-Criteria Land Suitability Assessment"))
-    factor_headers = [
-        Paragraph("Evaluation factor", table_header),
-        Paragraph("Weight", table_header_right),
-        Paragraph("Field value", table_header),
-        Paragraph("Score", table_header_right),
-        Paragraph("Rating", table_header),
-        Paragraph("Engineering assessment", table_header)
-    ]
-    factor_rows = [factor_headers]
-
-    for f in (data.get("factors") or []):
-        st = str(f.get("status") or "Optimal").capitalize()
-        weight_val = _safe_float(f.get("weight"), 0.0)
-        score_val = _safe_float(f.get("score"), 0.0)
-        raw_val = f.get("raw_value") if f.get("raw_value") is not None else 0
-
-        if score_val >= 75:
-            pill = make_pill(st, COLOR_GREEN_TINT, COLOR_GREEN_TEXT, width=65)
-        elif score_val >= 50:
-            pill = make_pill(st, COLOR_AMBER_TINT, COLOR_AMBER_TEXT, width=65)
+        if score >= 75.0:
+            verdict_color = COLOR_GREEN_TEXT
+            verdict_tint = COLOR_GREEN_TINT
+            ring_color = COLOR_GREEN_BORDER
+        elif score >= 50.0:
+            verdict_color = COLOR_AMBER_TEXT
+            verdict_tint = COLOR_AMBER_TINT
+            ring_color = COLOR_AMBER_BORDER
         else:
-            pill = make_pill(st, COLOR_RED_TINT, COLOR_RED_TEXT, width=65)
+            verdict_color = COLOR_RED_TEXT
+            verdict_tint = COLOR_RED_TINT
+            ring_color = COLOR_RED_BORDER
 
-        factor_rows.append([
-            Paragraph(f"<b>{html.escape(str(f.get('name', '')))}</b>", table_text),
-            Paragraph(f"{weight_val*100:.0f}%", table_num),
-            Paragraph(f"{html.escape(str(raw_val))} {html.escape(str(f.get('unit', '')))}", table_text),
-            Paragraph(f"{score_val:.1f}/100", table_num),
-            pill,
-            Paragraph(html.escape(str(f.get("details", ""))), table_text)
-        ])
+        # Gauge ring 26mm diameter (~73.7 pt)
+        gauge_d = Drawing(74, 74)
+        gauge_d.add(Circle(37, 37, 30, fillColor=None, strokeColor=COLOR_TRACK_GRAY, strokeWidth=4.5))
+        gauge_arc = ArcPath(strokeColor=ring_color, strokeWidth=4.5, fillColor=None)
+        gauge_arc.addArc(37, 37, 30, 90, 90 - (score / 100.0) * 360.0)
+        gauge_d.add(gauge_arc)
+        gauge_d.add(String(37, 32, f"{score:.0f}", fontName=FONT_BOLD, fontSize=15, textAnchor="middle", fillColor=COLOR_TEXT_PRIMARY))
 
-    factor_table = Table(factor_rows, colWidths=[95, 45, 70, 50, 75, 158.2])
-    factor_table.setStyle(TableStyle([
-        ('LINEBELOW', (0, 0), (-1, 0), 0.5, COLOR_HAIRLINE),
-        ('LINEBELOW', (0, 1), (-1, -1), 0.5, COLOR_HAIRLINE),
-        ('TOPPADDING', (0, 0), (-1, -1), 4.0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4.0),
-        ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-    ]))
-    story.append(factor_table)
+        # Middle: Score 40pt/700 + /100 11pt + verdict pill
+        score_p = Paragraph(f'<font size="32"><b>{score:.1f}</b></font><font size="11" color="{COLOR_TEXT_TERTIARY.hexval()}"> / 100</font>', ParagraphStyle('HeroScore', fontName=FONT_BOLD, leading=34))
+        verdict_pill = make_pill(verdict.upper(), verdict_tint, verdict_color, width=130)
+        mid_hero = Table([[score_p], [Spacer(1, 4)], [verdict_pill]], colWidths=[140])
+        mid_hero.setStyle(TableStyle([
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
 
-    # --- Section 02: Engineering Commentary & Action Plan ---
-    story.append(create_section_header("02", "Engineering Commentary & Action Plan"))
+        # Right: 2x2 spec grid
+        cost_data = data.get("cost_estimate") or {}
+        base_cost = _safe_float(cost_data.get("base_cost_inr"), 0.0)
+        base_rate = _safe_float(cost_data.get("base_rate_per_sqft"), 1.0)
+        built_area = base_cost / max(base_rate, 1.0) if base_cost > 0 else _safe_float(data.get("built_up_area_sqft"), 2000.0)
 
-    # Render AI Parameter Calibration ONCE as an accent callout at the top of Action Plan
-    param_reflection = data.get("parameter_reflection")
-    if param_reflection:
-        calib_text = f"<b>AI Parameter Calibration:</b> {html.escape(str(param_reflection))}"
-        story.append(make_callout(calib_text, width=CONTENT_WIDTH_PT))
+        quality_grade = str(data.get("quality_grade") or "Standard")
+        floors_count = _safe_int(data.get("floors"), 2)
+        storeys_str = f"G+{floors_count-1} Storeys" if floors_count > 1 else "Ground Floor"
+
+        slope_val = next((f.get('raw_value') for f in (data.get('factors') or []) if f.get('factor_id') == 'slope' and f.get('raw_value') is not None), 0)
+        slope_str = f"{_safe_float(slope_val):.1f}% Slope" if slope_val is not None else "0% Slope"
+
+        c_area = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="7.5">Built-up Area</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{built_area:,.0f} sq ft</b></font>', kv_style)
+        c_grade = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="7.5">Specification Grade</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(quality_grade.capitalize())} Grade</b></font>', kv_style)
+        c_storeys = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="7.5">Storeys</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(storeys_str)}</b></font>', kv_style)
+        c_cov = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="7.5">Ground Coverage</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>60.0% ({slope_str})</b></font>', kv_style)
+
+        spec_grid = Table([[c_area, c_grade], [c_storeys, c_cov]], colWidths=[130, 130])
+        spec_grid.setStyle(TableStyle([
+            ('TOPPADDING', (0, 0), (-1, -1), 2.0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2.0),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
+        ]))
+
+        hero_card = Table([[gauge_d, mid_hero, spec_grid]], colWidths=[80, 145, 268.2])
+        hero_card.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), COLOR_BG_SUBTLE),
+            ('ROUNDEDCORNERS', [8, 8, 8, 8]),
+            ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 8.0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8.0),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8.0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8.0),
+        ]))
+        story.append(hero_card)
         story.append(Spacer(1, 6))
 
-    eng_summary = data.get("engineering_summary")
-    if eng_summary:
-        summary_callout = make_callout(f"<b>Executive Synthesis:</b> {html.escape(str(eng_summary))}", width=CONTENT_WIDTH_PT)
-        story.append(summary_callout)
+        # Below hero: site address 10pt/500 + WGS84 coordinate row mono 8.5pt
+        address_p = Paragraph(f"<b>Site Address:</b> {html.escape(address)}", ParagraphStyle('SiteAddr', fontName=FONT_MEDIUM, fontSize=10.0, leading=13.0, textColor=COLOR_TEXT_PRIMARY, alignment=0))
+        coords_p = Paragraph(f"WGS84 Reference: {lat:.5f}° N, {lon:.5f}° E • Elevation: ~920m AMSL • Survey Benchmark CPWD/NBC Aligned", ParagraphStyle('SiteCoords', fontName=FONT_REGULAR, fontSize=8.5, leading=11.0, textColor=COLOR_TEXT_SECONDARY, alignment=0))
+        story.append(address_p)
+        story.append(Spacer(1, 2))
+        story.append(coords_p)
         story.append(Spacer(1, 6))
 
-    # Action Plan Table: Unique rule IDs only
-    recs_items = data.get("recommendation_items") or []
-    if recs_items:
-        seen_rules = set()
-        unique_recs = []
-        for item in recs_items:
-            rid = str(item.get("rule_id", "REC") or "REC")
-            if rid not in seen_rules:
-                seen_rules.add(rid)
-                unique_recs.append(item)
+        # =========================================================================
+        # TAB 1: OVERVIEW
+        # =========================================================================
 
-        rec_headers = [
-            Paragraph("Category & rule ID", table_header),
-            Paragraph("Severity", table_header),
-            Paragraph("Trigger & standard reference", table_header),
-            Paragraph("Prescribed engineering action", table_header)
+        # --- Section 01: Multi-Criteria Land Suitability Assessment ---
+        story.append(create_section_header("01", "Multi-Criteria Land Suitability Assessment"))
+        factor_headers = [
+            Paragraph("Evaluation factor", table_header),
+            Paragraph("Weight", table_header_right),
+            Paragraph("Field value", table_header),
+            Paragraph("Score", table_header_right),
+            Paragraph("Rating", table_header),
+            Paragraph("Engineering assessment", table_header)
         ]
-        rec_rows = [rec_headers]
+        factor_rows = [factor_headers]
 
-        for item in unique_recs:
-            sev = str(item.get("severity", "advisory") or "advisory").upper()
-            rule_id = str(item.get("rule_id", "REC") or "REC")
-            cat_label = str(item.get("category_label", "Engineering") or "Engineering")
-            trig = str(item.get("trigger_condition", "") or "")
-            src_ref = str(item.get("source_data_ref", "") or "")
+        for f in (data.get("factors") or []):
+            st = str(f.get("status") or "Optimal").capitalize()
+            weight_val = _safe_float(f.get("weight"), 0.0)
+            score_val = _safe_float(f.get("score"), 0.0)
+            raw_val = f.get("raw_value") if f.get("raw_value") is not None else 0
 
-            if sev == "CRITICAL":
-                sev_pill = make_pill(sev, COLOR_RED_TINT, COLOR_RED_TEXT, width=65)
-            elif sev in ("HIGH", "ADVISORY"):
-                sev_pill = make_pill(sev, COLOR_AMBER_TINT, COLOR_AMBER_TEXT, width=65)
+            if score_val >= 75:
+                pill = make_pill(st, COLOR_GREEN_TINT, COLOR_GREEN_TEXT, width=65)
+            elif score_val >= 50:
+                pill = make_pill(st, COLOR_AMBER_TINT, COLOR_AMBER_TEXT, width=65)
             else:
-                sev_pill = make_pill(sev, COLOR_GREEN_TINT, COLOR_GREEN_TEXT, width=65)
+                pill = make_pill(st, COLOR_RED_TINT, COLOR_RED_TEXT, width=65)
 
-            rec_rows.append([
-                Paragraph(f"<b>{html.escape(cat_label)}</b><br/><font color='{COLOR_TEXT_TERTIARY.hexval()}'>{html.escape(rule_id)}</font>", table_text),
-                sev_pill,
-                Paragraph(f"<b>{html.escape(trig)}</b><br/><font color='{COLOR_TEXT_TERTIARY.hexval()}'>{html.escape(src_ref)}</font>", table_text),
-                Paragraph(html.escape(str(item.get("recommendation_text", ""))), table_text)
+            factor_rows.append([
+                Paragraph(f"<b>{html.escape(str(f.get('name', '')))}</b>", table_text),
+                Paragraph(f"{weight_val*100:.0f}%", table_num),
+                Paragraph(f"{html.escape(str(raw_val))} {html.escape(str(f.get('unit', '')))}", table_text),
+                Paragraph(f"{score_val:.1f}/100", table_num),
+                pill,
+                Paragraph(html.escape(str(f.get("details", ""))), table_text)
             ])
 
-        rec_table = Table(rec_rows, colWidths=[110, 75, 135, 173.2])
-        rec_table.setStyle(TableStyle([
+        factor_table = Table(factor_rows, colWidths=[95, 45, 70, 50, 75, 158.2])
+        factor_table.setStyle(TableStyle([
+            ('LINEBELOW', (0, 0), (-1, 0), 0.5, COLOR_HAIRLINE),
+            ('LINEBELOW', (0, 1), (-1, -1), 0.5, COLOR_HAIRLINE),
+            ('TOPPADDING', (0, 0), (-1, -1), 4.0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4.0),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        story.append(factor_table)
+
+        # --- Section 02: Engineering Commentary & Action Plan ---
+        story.append(create_section_header("02", "Engineering Commentary & Action Plan"))
+
+        # Render AI Parameter Calibration ONCE as an accent callout at the top of Action Plan
+        param_reflection = data.get("parameter_reflection")
+        if param_reflection:
+            calib_text = f"<b>AI Parameter Calibration:</b> {html.escape(str(param_reflection))}"
+            story.append(make_callout(calib_text, width=CONTENT_WIDTH_PT))
+            story.append(Spacer(1, 6))
+
+        eng_summary = data.get("engineering_summary")
+        if eng_summary:
+            summary_callout = make_callout(f"<b>Executive Synthesis:</b> {html.escape(str(eng_summary))}", width=CONTENT_WIDTH_PT)
+            story.append(summary_callout)
+            story.append(Spacer(1, 6))
+
+        # Action Plan Table: Unique rule IDs only
+        recs_items = data.get("recommendation_items") or []
+        if recs_items:
+            seen_rules = set()
+            unique_recs = []
+            for item in recs_items:
+                rid = str(item.get("rule_id", "REC") or "REC")
+                if rid not in seen_rules:
+                    seen_rules.add(rid)
+                    unique_recs.append(item)
+
+            rec_headers = [
+                Paragraph("Category & rule ID", table_header),
+                Paragraph("Severity", table_header),
+                Paragraph("Trigger & standard reference", table_header),
+                Paragraph("Prescribed engineering action", table_header)
+            ]
+            rec_rows = [rec_headers]
+
+            for item in unique_recs:
+                sev = str(item.get("severity", "advisory") or "advisory").upper()
+                rule_id = str(item.get("rule_id", "REC") or "REC")
+                cat_label = str(item.get("category_label", "Engineering") or "Engineering")
+                trig = str(item.get("trigger_condition", "") or "")
+                src_ref = str(item.get("source_data_ref", "") or "")
+
+                if sev == "CRITICAL":
+                    sev_pill = make_pill(sev, COLOR_RED_TINT, COLOR_RED_TEXT, width=65)
+                elif sev in ("HIGH", "ADVISORY"):
+                    sev_pill = make_pill(sev, COLOR_AMBER_TINT, COLOR_AMBER_TEXT, width=65)
+                else:
+                    sev_pill = make_pill(sev, COLOR_GREEN_TINT, COLOR_GREEN_TEXT, width=65)
+
+                rec_rows.append([
+                    Paragraph(f"<b>{html.escape(cat_label)}</b><br/><font color='{COLOR_TEXT_TERTIARY.hexval()}'>{html.escape(rule_id)}</font>", table_text),
+                    sev_pill,
+                    Paragraph(f"<b>{html.escape(trig)}</b><br/><font color='{COLOR_TEXT_TERTIARY.hexval()}'>{html.escape(src_ref)}</font>", table_text),
+                    Paragraph(html.escape(str(item.get("recommendation_text", ""))), table_text)
+                ])
+
+            rec_table = Table(rec_rows, colWidths=[110, 75, 135, 173.2])
+            rec_table.setStyle(TableStyle([
+                ('LINEBELOW', (0, 0), (-1, 0), 0.5, COLOR_HAIRLINE),
+                ('LINEBELOW', (0, 1), (-1, -1), 0.5, COLOR_HAIRLINE),
+                ('TOPPADDING', (0, 0), (-1, -1), 4.0),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4.0),
+                ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ]))
+            story.append(rec_table)
+        else:
+            for idx, rec in enumerate(data.get("detailed_recommendations") or [], 1):
+                story.append(Paragraph(f"<b>{idx}.</b> {html.escape(str(rec))}", body_style))
+                story.append(Spacer(1, 2))
+
+        # =========================================================================
+        # TAB 2: HAZARDS
+        # =========================================================================
+
+        # --- Section 03: Hazard History & Climate Stress Profile ---
+        hazard = data.get("hazard_profile") or {}
+        if hazard:
+            story.append(create_section_header("03", "Hazard History & Climate Stress Profile"))
+            seismic = hazard.get("seismic") or {}
+            flood = hazard.get("flood") or {}
+            storm = hazard.get("storm_cyclone") or {}
+
+            ratio = flood.get("discharge_peak_to_mean_ratio")
+            ratio_val = _safe_float(ratio, None)
+            ratio_display = f"{ratio_val:.1f}x" if ratio_val is not None else "N/A (<0.1 m³/s)"
+            z_factor = seismic.get("zone_factor")
+            z_val = _safe_float(z_factor, None)
+            z_str = f"{z_val:.2f}" if z_val is not None else "0.16"
+            max_gust = _safe_float(storm.get("max_annual_gust_kmh"), 0.0)
+            rain_days = _safe_float(storm.get("extreme_rainfall_days"), 0.0)
+
+            c_seis = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">BIS IS 1893 Seismic Zone</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(str(seismic.get("zone", "Zone III")))} (Z = {z_str})</b></font>', kv_style)
+            c_usgs = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">USGS 50-Yr Seismicity (250km)</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(str(seismic.get("event_count_display", "0")))} events (Max M{html.escape(str(seismic.get("max_magnitude") or "N/A"))})</b></font>', kv_style)
+
+            c_flood = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">River Discharge Ratio (ERA5)</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{ratio_display} ({html.escape(str(flood.get("pressure_level", "low")).capitalize())} pressure)</b></font>', kv_style)
+            c_ndma = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">NDMA Flood Prone Basin</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{"Yes (Mitigation Recommended)" if flood.get("ndma_flood_prone") else "No (Low Inundation Risk)"}</b></font>', kv_style)
+
+            c_gust = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Mean Annual Gust (ERA5)</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{max_gust:.1f} km/h</b></font>', kv_style)
+            c_rain = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Heavy Rain Days (≥50mm)</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{rain_days:.1f} days/yr (Cyclone: {"Yes" if storm.get("ndma_cyclone_prone") else "No"})</b></font>', kv_style)
+
+            haz_table = Table([[c_seis, c_usgs], [c_flood, c_ndma], [c_gust, c_rain]], colWidths=[246.6, 246.6])
+            haz_table.setStyle(TableStyle([
+                ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+                ('TOPPADDING', (0, 0), (-1, -1), 5.0),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 5.0),
+                ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
+            ]))
+            story.append(haz_table)
+
+        # --- Section 04: Site Constraints & Risk Mitigation Matrix ---
+        story.append(create_section_header("04", "Site Constraints & Risk Mitigation Matrix"))
+        risk_headers = [
+            Paragraph("Risk classification", table_header),
+            Paragraph("Severity", table_header),
+            Paragraph("Observed constraint", table_header),
+            Paragraph("Prescribed mitigation measure", table_header)
+        ]
+        risk_rows = [risk_headers]
+
+        for r in (data.get("risks") or []):
+            sev = str(r.get("severity") or "").upper()
+            if sev == "CRITICAL":
+                pill = make_pill(sev, COLOR_RED_TINT, COLOR_RED_TEXT, width=60)
+            elif sev in ("HIGH", "MODERATE"):
+                pill = make_pill(sev, COLOR_AMBER_TINT, COLOR_AMBER_TEXT, width=60)
+            else:
+                pill = make_pill(sev, COLOR_GREEN_TINT, COLOR_GREEN_TEXT, width=60)
+
+            risk_rows.append([
+                Paragraph(f"<b>{html.escape(str(r.get('title', '')))}</b>", table_text),
+                pill,
+                Paragraph(html.escape(str(r.get("description", ""))), table_text),
+                Paragraph(html.escape(str(r.get("mitigation_strategy", ""))), table_text)
+            ])
+
+        risk_table = Table(risk_rows, colWidths=[115, 68, 145, 165.2])
+        risk_table.setStyle(TableStyle([
             ('LINEBELOW', (0, 0), (-1, 0), 0.5, COLOR_HAIRLINE),
             ('LINEBELOW', (0, 1), (-1, -1), 0.5, COLOR_HAIRLINE),
             ('TOPPADDING', (0, 0), (-1, -1), 4.0),
@@ -1517,317 +1603,235 @@ def generate_pdf_report(
             ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ]))
-        story.append(rec_table)
-    else:
-        for idx, rec in enumerate(data.get("detailed_recommendations") or [], 1):
-            story.append(Paragraph(f"<b>{idx}.</b> {html.escape(str(rec))}", body_style))
-            story.append(Spacer(1, 2))
+        story.append(risk_table)
 
-    # =========================================================================
-    # TAB 2: HAZARDS
-    # =========================================================================
+        # =========================================================================
+        # TAB 3: ECOLOGY
+        # =========================================================================
 
-    # --- Section 03: Hazard History & Climate Stress Profile ---
-    hazard = data.get("hazard_profile") or {}
-    if hazard:
-        story.append(create_section_header("03", "Hazard History & Climate Stress Profile"))
-        seismic = hazard.get("seismic") or {}
-        flood = hazard.get("flood") or {}
-        storm = hazard.get("storm_cyclone") or {}
+        # --- Section 05: Ecological Site Vision & Tree Preservation Plan ---
+        vision = site_vision if site_vision is not None else data.get("site_vision")
+        if hasattr(vision, "model_dump"):
+            vision = vision.model_dump()
 
-        ratio = flood.get("discharge_peak_to_mean_ratio")
-        ratio_val = _safe_float(ratio, None)
-        ratio_display = f"{ratio_val:.1f}x" if ratio_val is not None else "N/A (<0.1 m³/s)"
-        z_factor = seismic.get("zone_factor")
-        z_val = _safe_float(z_factor, None)
-        z_str = f"{z_val:.2f}" if z_val is not None else "0.16"
-        max_gust = _safe_float(storm.get("max_annual_gust_kmh"), 0.0)
-        rain_days = _safe_float(storm.get("extreme_rainfall_days"), 0.0)
+        if vision and isinstance(vision, dict) and vision.get("mode") != "unavailable":
+            story.append(create_section_header("05", "Ecological Site Vision & Tree Preservation Plan"))
 
-        c_seis = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">BIS IS 1893 Seismic Zone</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(str(seismic.get("zone", "Zone III")))} (Z = {z_str})</b></font>', kv_style)
-        c_usgs = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">USGS 50-Yr Seismicity (250km)</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(str(seismic.get("event_count_display", "0")))} events (Max M{html.escape(str(seismic.get("max_magnitude") or "N/A"))})</b></font>', kv_style)
+            green_pct = _safe_float(vision.get("green_cover_pct"), 0.0)
+            water_pct = _safe_float(vision.get("water_cover_pct"), 0.0)
+            built_pct = _safe_float(vision.get("built_up_pct"), 0.0)
+            clusters = (vision.get("tree_clusters") or {}).get("features") or []
+            cluster_count = len(clusters) if isinstance(clusters, list) else 0
+            scene_meta = vision.get("scene_metadata") or {}
+            img_date = scene_meta.get("datetime", "Recent")[:10] if scene_meta.get("datetime") else "N/A"
+            mode_label = str(vision.get("mode") or "index-only").upper()
 
-        c_flood = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">River Discharge Ratio (ERA5)</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{ratio_display} ({html.escape(str(flood.get("pressure_level", "low")).capitalize())} pressure)</b></font>', kv_style)
-        c_ndma = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">NDMA Flood Prone Basin</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{"Yes (Mitigation Recommended)" if flood.get("ndma_flood_prone") else "No (Low Inundation Risk)"}</b></font>', kv_style)
+            t1 = make_stat_tile("Green Cover", f"{green_pct:.1f}%", width=94.0)
+            t2 = make_stat_tile("Canopy Clusters", f"{cluster_count}", width=94.0)
+            t3 = make_stat_tile("Water Cover", f"{water_pct:.1f}%", width=94.0)
+            t4 = make_stat_tile("Built-up Ratio", f"{built_pct:.1f}%", width=94.0)
+            t5 = make_stat_tile("Acquisition", html.escape(img_date), width=94.0)
 
-        c_gust = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Mean Annual Gust (ERA5)</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{max_gust:.1f} km/h</b></font>', kv_style)
-        c_rain = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Heavy Rain Days (≥50mm)</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{rain_days:.1f} days/yr (Cyclone: {"Yes" if storm.get("ndma_cyclone_prone") else "No"})</b></font>', kv_style)
+            stat_strip = Table([[t1, t2, t3, t4, t5]], colWidths=[98.64, 98.64, 98.64, 98.64, 98.64])
+            stat_strip.setStyle(TableStyle([
+                ('LEFTPADDING', (0, 0), (-1, -1), 2.0),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 2.0),
+                ('TOPPADDING', (0, 0), (-1, -1), 0),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+            ]))
+            story.append(stat_strip)
+            story.append(Spacer(1, 4))
 
-        haz_table = Table([[c_seis, c_usgs], [c_flood, c_ndma], [c_gust, c_rain]], colWidths=[246.6, 246.6])
-        haz_table.setStyle(TableStyle([
+            meta_line = f"Copernicus Sentinel-2 Multispectral • Mode: {html.escape(mode_label)} • Ground Sample: 10m Multi-band Surface Reflectance Telemetry"
+            story.append(Paragraph(meta_line, ParagraphStyle('EcoMeta', fontName=FONT_REGULAR, fontSize=8.0, leading=10.0, textColor=COLOR_TEXT_TERTIARY, alignment=0)))
+            story.append(Spacer(1, 6))
+
+            plan = vision.get("preservation_plan") or []
+            if plan:
+                top_items = [p.model_dump() if hasattr(p, "model_dump") else p for p in plan[:3]]
+                plan_headers = [
+                    Paragraph("Cluster ID", table_header),
+                    Paragraph("Canopy area", table_header_right),
+                    Paragraph("Action rank", table_header),
+                    Paragraph("Prescribed ecological measure", table_header)
+                ]
+                plan_rows = [plan_headers]
+                for p in top_items:
+                    cid = str(p.get("cluster_id") or "cluster")
+                    area_val = _safe_float(p.get('area_sqm'), 0.0)
+                    area = f"{area_val:.0f} m²"
+                    rank = str(p.get("rank") or "context").upper()
+                    action = str(p.get("action") or "")
+
+                    if rank in ("PRESERVE", "HIGH"):
+                        rank_pill = make_pill(rank, COLOR_GREEN_TINT, COLOR_GREEN_TEXT, width=70)
+                    elif rank in ("RELOCATE", "TRANSPLANT"):
+                        rank_pill = make_pill(rank, COLOR_AMBER_TINT, COLOR_AMBER_TEXT, width=70)
+                    else:
+                        rank_pill = make_pill(rank, COLOR_ACCENT_TINT, COLOR_ACCENT, width=70)
+
+                    plan_rows.append([
+                        Paragraph(f"<b>{html.escape(cid)}</b>", table_text),
+                        Paragraph(area, table_num),
+                        rank_pill,
+                        Paragraph(html.escape(action), table_text)
+                    ])
+
+                plan_table = Table(plan_rows, colWidths=[90, 75, 78, 250.2])
+                plan_table.setStyle(TableStyle([
+                    ('LINEBELOW', (0, 0), (-1, 0), 0.5, COLOR_HAIRLINE),
+                    ('LINEBELOW', (0, 1), (-1, -1), 0.5, COLOR_HAIRLINE),
+                    ('TOPPADDING', (0, 0), (-1, -1), 4.0),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 4.0),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ]))
+                story.append(plan_table)
+
+        # --- Section 06: Passive Solar & Aerodynamic Orientation Strategy ---
+        story.append(create_section_header("06", "Passive Solar & Aerodynamic Orientation Strategy"))
+        orient = data.get("orientation") or {}
+        opt_axis = _safe_int(orient.get('optimal_axis_degrees'), 90)
+        wind_az = orient.get('prevailing_wind_direction_degrees')
+        wind_az_val = _safe_float(wind_az, 240.0)
+        axis_lbl = str(orient.get("axis_label") or "East-West")
+        vent_rating = str(orient.get("cross_ventilation_rating") or "Good")
+
+        c_axis = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Recommended Solar Axis</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{opt_axis}° ({html.escape(axis_lbl)})</b></font>', kv_style)
+        c_wind = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Prevailing Wind Direction</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{wind_az_val:.0f}° Azimuth</b></font>', kv_style)
+        c_vent = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Cross-Ventilation Index</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(vent_rating)}</b></font>', kv_style)
+        c_fen = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Solar Fenestration Apertures</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>Principal Glazing on North / South</b></font>', kv_style)
+
+        orient_table = Table([[c_axis, c_wind], [c_vent, c_fen]], colWidths=[246.6, 246.6])
+        orient_table.setStyle(TableStyle([
             ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
             ('TOPPADDING', (0, 0), (-1, -1), 5.0),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 5.0),
             ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
             ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
         ]))
-        story.append(haz_table)
-
-    # --- Section 04: Site Constraints & Risk Mitigation Matrix ---
-    story.append(create_section_header("04", "Site Constraints & Risk Mitigation Matrix"))
-    risk_headers = [
-        Paragraph("Risk classification", table_header),
-        Paragraph("Severity", table_header),
-        Paragraph("Observed constraint", table_header),
-        Paragraph("Prescribed mitigation measure", table_header)
-    ]
-    risk_rows = [risk_headers]
-
-    for r in (data.get("risks") or []):
-        sev = str(r.get("severity") or "").upper()
-        if sev == "CRITICAL":
-            pill = make_pill(sev, COLOR_RED_TINT, COLOR_RED_TEXT, width=60)
-        elif sev in ("HIGH", "MODERATE"):
-            pill = make_pill(sev, COLOR_AMBER_TINT, COLOR_AMBER_TEXT, width=60)
-        else:
-            pill = make_pill(sev, COLOR_GREEN_TINT, COLOR_GREEN_TEXT, width=60)
-
-        risk_rows.append([
-            Paragraph(f"<b>{html.escape(str(r.get('title', '')))}</b>", table_text),
-            pill,
-            Paragraph(html.escape(str(r.get("description", ""))), table_text),
-            Paragraph(html.escape(str(r.get("mitigation_strategy", ""))), table_text)
-        ])
-
-    risk_table = Table(risk_rows, colWidths=[115, 68, 145, 165.2])
-    risk_table.setStyle(TableStyle([
-        ('LINEBELOW', (0, 0), (-1, 0), 0.5, COLOR_HAIRLINE),
-        ('LINEBELOW', (0, 1), (-1, -1), 0.5, COLOR_HAIRLINE),
-        ('TOPPADDING', (0, 0), (-1, -1), 4.0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4.0),
-        ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-    ]))
-    story.append(risk_table)
-
-    # =========================================================================
-    # TAB 3: ECOLOGY
-    # =========================================================================
-
-    # --- Section 05: Ecological Site Vision & Tree Preservation Plan ---
-    vision = site_vision if site_vision is not None else data.get("site_vision")
-    if hasattr(vision, "model_dump"):
-        vision = vision.model_dump()
-
-    if vision and isinstance(vision, dict) and vision.get("mode") != "unavailable":
-        story.append(create_section_header("05", "Ecological Site Vision & Tree Preservation Plan"))
-
-        green_pct = _safe_float(vision.get("green_cover_pct"), 0.0)
-        water_pct = _safe_float(vision.get("water_cover_pct"), 0.0)
-        built_pct = _safe_float(vision.get("built_up_pct"), 0.0)
-        clusters = (vision.get("tree_clusters") or {}).get("features") or []
-        cluster_count = len(clusters) if isinstance(clusters, list) else 0
-        scene_meta = vision.get("scene_metadata") or {}
-        img_date = scene_meta.get("datetime", "Recent")[:10] if scene_meta.get("datetime") else "N/A"
-        mode_label = str(vision.get("mode") or "index-only").upper()
-
-        t1 = make_stat_tile("Green Cover", f"{green_pct:.1f}%", width=94.0)
-        t2 = make_stat_tile("Canopy Clusters", f"{cluster_count}", width=94.0)
-        t3 = make_stat_tile("Water Cover", f"{water_pct:.1f}%", width=94.0)
-        t4 = make_stat_tile("Built-up Ratio", f"{built_pct:.1f}%", width=94.0)
-        t5 = make_stat_tile("Acquisition", html.escape(img_date), width=94.0)
-
-        stat_strip = Table([[t1, t2, t3, t4, t5]], colWidths=[98.64, 98.64, 98.64, 98.64, 98.64])
-        stat_strip.setStyle(TableStyle([
-            ('LEFTPADDING', (0, 0), (-1, -1), 2.0),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 2.0),
-            ('TOPPADDING', (0, 0), (-1, -1), 0),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-        ]))
-        story.append(stat_strip)
+        story.append(orient_table)
         story.append(Spacer(1, 4))
+        if orient.get('passive_design_rationale'):
+            story.append(make_callout(f"<b>Passive Design Rationale:</b> {html.escape(str(orient.get('passive_design_rationale')))}", width=CONTENT_WIDTH_PT))
 
-        meta_line = f"Copernicus Sentinel-2 Multispectral • Mode: {html.escape(mode_label)} • Ground Sample: 10m Multi-band Surface Reflectance Telemetry"
-        story.append(Paragraph(meta_line, ParagraphStyle('EcoMeta', fontName=FONT_REGULAR, fontSize=8.0, leading=10.0, textColor=COLOR_TEXT_TERTIARY, alignment=0)))
-        story.append(Spacer(1, 6))
+        # --- Section 07: Vastu Shastra & Functional Planning Advisory ---
+        vastu = data.get("vastu_advisory") or {}
+        if vastu:
+            story.append(create_section_header("07", "Vastu Shastra & Functional Planning Advisory"))
+            road_approach = vastu.get("road_approach") or {}
+            road_side = str(road_approach.get("approach_side") or "unknown")
+            slope_rd = vastu.get("slope_reading") or {}
+            ranked_ents = vastu.get("ranked_entrances") or []
+            ent_desc = ", ".join([f"{e.get('direction')} ({_safe_float(e.get('score'), 0.0):.0f}/100)" for e in ranked_ents]) if ranked_ents else "Evaluated from road frontage"
 
-        plan = vision.get("preservation_plan") or []
-        if plan:
-            top_items = [p.model_dump() if hasattr(p, "model_dump") else p for p in plan[:3]]
-            plan_headers = [
-                Paragraph("Cluster ID", table_header),
-                Paragraph("Canopy area", table_header_right),
-                Paragraph("Action rank", table_header),
-                Paragraph("Prescribed ecological measure", table_header)
-            ]
-            plan_rows = [plan_headers]
-            for p in top_items:
-                cid = str(p.get("cluster_id") or "cluster")
-                area_val = _safe_float(p.get('area_sqm'), 0.0)
-                area = f"{area_val:.0f} m²"
-                rank = str(p.get("rank") or "context").upper()
-                action = str(p.get("action") or "")
+            c_road = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Approach Road Orientation</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(road_side.upper())} frontage access</b></font>', kv_style)
+            c_ents = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Ranked Entrance Locations</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(ent_desc)}</b></font>', kv_style)
+            c_drain = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Topographic Drainage Vector</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>Toward {html.escape(str(slope_rd.get("drainage_direction") or "Neutral"))} ({html.escape(str(slope_rd.get("auspiciousness") or "neutral").capitalize())})</b></font>', kv_style)
+            c_comp = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Vastu Compliance Status</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(str(vastu.get("overall_compliance_rating", "Favourable")))}</b></font>', kv_style)
 
-                if rank in ("PRESERVE", "HIGH"):
-                    rank_pill = make_pill(rank, COLOR_GREEN_TINT, COLOR_GREEN_TEXT, width=70)
-                elif rank in ("RELOCATE", "TRANSPLANT"):
-                    rank_pill = make_pill(rank, COLOR_AMBER_TINT, COLOR_AMBER_TEXT, width=70)
-                else:
-                    rank_pill = make_pill(rank, COLOR_ACCENT_TINT, COLOR_ACCENT, width=70)
-
-                plan_rows.append([
-                    Paragraph(f"<b>{html.escape(cid)}</b>", table_text),
-                    Paragraph(area, table_num),
-                    rank_pill,
-                    Paragraph(html.escape(action), table_text)
-                ])
-
-            plan_table = Table(plan_rows, colWidths=[90, 75, 78, 250.2])
-            plan_table.setStyle(TableStyle([
-                ('LINEBELOW', (0, 0), (-1, 0), 0.5, COLOR_HAIRLINE),
-                ('LINEBELOW', (0, 1), (-1, -1), 0.5, COLOR_HAIRLINE),
-                ('TOPPADDING', (0, 0), (-1, -1), 4.0),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 4.0),
+            vastu_table = Table([[c_road, c_ents], [c_drain, c_comp]], colWidths=[246.6, 246.6])
+            vastu_table.setStyle(TableStyle([
+                ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+                ('TOPPADDING', (0, 0), (-1, -1), 5.0),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 5.0),
                 ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
                 ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ]))
-            story.append(plan_table)
+            story.append(vastu_table)
+            story.append(Spacer(1, 4))
+            remedy_msg = slope_rd.get("remedy_notes") or "Natural site drainage and orientation align with standard architectural layout guidelines."
+            story.append(make_callout(f"<b>Remedy &amp; Planning Note:</b> {html.escape(str(remedy_msg))}", width=CONTENT_WIDTH_PT))
 
-    # --- Section 06: Passive Solar & Aerodynamic Orientation Strategy ---
-    story.append(create_section_header("06", "Passive Solar & Aerodynamic Orientation Strategy"))
-    orient = data.get("orientation") or {}
-    opt_axis = _safe_int(orient.get('optimal_axis_degrees'), 90)
-    wind_az = orient.get('prevailing_wind_direction_degrees')
-    wind_az_val = _safe_float(wind_az, 240.0)
-    axis_lbl = str(orient.get("axis_label") or "East-West")
-    vent_rating = str(orient.get("cross_ventilation_rating") or "Good")
+        # =========================================================================
+        # TAB 4: COST & PLAN
+        # =========================================================================
 
-    c_axis = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Recommended Solar Axis</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{opt_axis}° ({html.escape(axis_lbl)})</b></font>', kv_style)
-    c_wind = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Prevailing Wind Direction</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{wind_az_val:.0f}° Azimuth</b></font>', kv_style)
-    c_vent = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Cross-Ventilation Index</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(vent_rating)}</b></font>', kv_style)
-    c_fen = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Solar Fenestration Apertures</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>Principal Glazing on North / South</b></font>', kv_style)
+        # --- Section 08: Preliminary Construction Cost Estimate ---
+        story.append(create_section_header("08", "Preliminary Construction Cost Estimate"))
+        cost = data.get("cost_estimate") or {}
+        cost_headers = [
+            Paragraph("Cost category", table_header),
+            Paragraph("Amount (INR)", table_header_right),
+            Paragraph("Share (%)", table_header),
+            Paragraph("Scope of civil works", table_header)
+        ]
+        cost_rows = [cost_headers]
 
-    orient_table = Table([[c_axis, c_wind], [c_vent, c_fen]], colWidths=[246.6, 246.6])
-    orient_table.setStyle(TableStyle([
-        ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
-        ('TOPPADDING', (0, 0), (-1, -1), 5.0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 5.0),
-        ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
-    ]))
-    story.append(orient_table)
-    story.append(Spacer(1, 4))
-    if orient.get('passive_design_rationale'):
-        story.append(make_callout(f"<b>Passive Design Rationale:</b> {html.escape(str(orient.get('passive_design_rationale')))}", width=CONTENT_WIDTH_PT))
+        for c in (cost.get("breakdown") or []):
+            amt = _safe_float(c.get('amount_inr'), 0.0)
+            pct = _safe_float(c.get('percentage'), 0.0)
+            cost_rows.append([
+                Paragraph(f"<b>{html.escape(str(c.get('category', '')))}</b>", table_text),
+                Paragraph(f"INR {amt:,.0f}", table_num),
+                make_share_cell(pct, bar_width=100.0),
+                Paragraph(html.escape(str(c.get("description", ""))), table_text)
+            ])
 
-    # --- Section 07: Vastu Shastra & Functional Planning Advisory ---
-    vastu = data.get("vastu_advisory") or {}
-    if vastu:
-        story.append(create_section_header("07", "Vastu Shastra & Functional Planning Advisory"))
-        road_approach = vastu.get("road_approach") or {}
-        road_side = str(road_approach.get("approach_side") or "unknown")
-        slope_rd = vastu.get("slope_reading") or {}
-        ranked_ents = vastu.get("ranked_entrances") or []
-        ent_desc = ", ".join([f"{e.get('direction')} ({_safe_float(e.get('score'), 0.0):.0f}/100)" for e in ranked_ents]) if ranked_ents else "Evaluated from road frontage"
+        tot_inr = _safe_float(cost.get("total_estimated_cost_inr"), 0.0)
+        c_min = _safe_float(cost.get("cost_range_min_inr"), 0.0)
+        c_max = _safe_float(cost.get("cost_range_max_inr"), 0.0)
 
-        c_road = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Approach Road Orientation</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(road_side.upper())} frontage access</b></font>', kv_style)
-        c_ents = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Ranked Entrance Locations</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(ent_desc)}</b></font>', kv_style)
-        c_drain = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Topographic Drainage Vector</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>Toward {html.escape(str(slope_rd.get("drainage_direction") or "Neutral"))} ({html.escape(str(slope_rd.get("auspiciousness") or "neutral").capitalize())})</b></font>', kv_style)
-        c_comp = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Vastu Compliance Status</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(str(vastu.get("overall_compliance_rating", "Favourable")))}</b></font>', kv_style)
-
-        vastu_table = Table([[c_road, c_ents], [c_drain, c_comp]], colWidths=[246.6, 246.6])
-        vastu_table.setStyle(TableStyle([
-            ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
-            ('TOPPADDING', (0, 0), (-1, -1), 5.0),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 5.0),
-            ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
-        ]))
-        story.append(vastu_table)
-        story.append(Spacer(1, 4))
-        remedy_msg = slope_rd.get("remedy_notes") or "Natural site drainage and orientation align with standard architectural layout guidelines."
-        story.append(make_callout(f"<b>Remedy &amp; Planning Note:</b> {html.escape(str(remedy_msg))}", width=CONTENT_WIDTH_PT))
-
-    # =========================================================================
-    # TAB 4: COST & PLAN
-    # =========================================================================
-
-    # --- Section 08: Preliminary Construction Cost Estimate ---
-    story.append(create_section_header("08", "Preliminary Construction Cost Estimate"))
-    cost = data.get("cost_estimate") or {}
-    cost_headers = [
-        Paragraph("Cost category", table_header),
-        Paragraph("Amount (INR)", table_header_right),
-        Paragraph("Share (%)", table_header),
-        Paragraph("Scope of civil works", table_header)
-    ]
-    cost_rows = [cost_headers]
-
-    for c in (cost.get("breakdown") or []):
-        amt = _safe_float(c.get('amount_inr'), 0.0)
-        pct = _safe_float(c.get('percentage'), 0.0)
         cost_rows.append([
-            Paragraph(f"<b>{html.escape(str(c.get('category', '')))}</b>", table_text),
-            Paragraph(f"INR {amt:,.0f}", table_num),
-            make_share_cell(pct, bar_width=100.0),
-            Paragraph(html.escape(str(c.get("description", ""))), table_text)
+            Paragraph("<b>TOTAL ESTIMATED BUDGET</b>", table_text),
+            Paragraph(f"<b>INR {tot_inr:,.0f}</b>", table_num),
+            make_share_cell(100.0, bar_width=100.0),
+            Paragraph("", table_text)
+        ])
+        cost_rows.append([
+            "",
+            Paragraph(f"Range: INR {c_min:,.0f} – INR {c_max:,.0f} (±7.5% variation based on site conditions)", ParagraphStyle('CostRange', fontName=FONT_REGULAR, fontSize=8.5, leading=11.0, textColor=COLOR_TEXT_SECONDARY, alignment=2)),
+            "",
+            ""
         ])
 
-    tot_inr = _safe_float(cost.get("total_estimated_cost_inr"), 0.0)
-    c_min = _safe_float(cost.get("cost_range_min_inr"), 0.0)
-    c_max = _safe_float(cost.get("cost_range_max_inr"), 0.0)
-
-    cost_rows.append([
-        Paragraph("<b>TOTAL ESTIMATED BUDGET</b>", table_text),
-        Paragraph(f"<b>INR {tot_inr:,.0f}</b>", table_num),
-        make_share_cell(100.0, bar_width=100.0),
-        Paragraph("", table_text)
-    ])
-    cost_rows.append([
-        "",
-        Paragraph(f"Range: INR {c_min:,.0f} – INR {c_max:,.0f} (±7.5% variation based on site conditions)", ParagraphStyle('CostRange', fontName=FONT_REGULAR, fontSize=8.5, leading=11.0, textColor=COLOR_TEXT_SECONDARY, alignment=2)),
-        "",
-        ""
-    ])
-
-    cost_table = Table(cost_rows, colWidths=[120, 95, 140, 138.2])
-    cost_table.setStyle(TableStyle([
-        ('LINEBELOW', (0, 0), (-1, 0), 0.5, COLOR_HAIRLINE),
-        ('LINEBELOW', (0, 1), (-1, -3), 0.5, COLOR_HAIRLINE),
-        ('LINEABOVE', (0, -2), (-1, -2), 1.5, COLOR_TEXT_PRIMARY),  # 1.5pt rule above TOTAL
-        ('SPAN', (1, -1), (3, -1)),  # Span +/- range line across right columns
-        ('TOPPADDING', (0, 0), (-1, -1), 4.0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4.0),
-        ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-    ]))
-    story.append(cost_table)
-
-    # --- Section 09: Indicative Land Valuation & Project Outlay ---
-    land = data.get("land_value") or {}
-    if land:
-        story.append(create_section_header("09", "Indicative Land Valuation & Project Outlay"))
-        ind_rate = _safe_float(land.get("indicative_rate_per_sqft"), None)
-        land_cost = _safe_float(land.get("land_cost_inr"), None)
-        comb_tot = _safe_float(land.get("combined_project_total_inr"), None)
-        source_label = str(land.get("source_publication") or "Published Circle Rates")
-        loc_mult_val = _safe_float(land.get("locality_multiplier"), 1.0)
-        plot_area = _safe_float(land.get("plot_area_sqft"), 0.0)
-
-        rate_str = f"INR {ind_rate:,.0f} /sq ft {'(User-Supplied)' if land.get('is_user_override') else ''}" if ind_rate is not None and ind_rate > 0 else "Unlisted / Verification Required"
-        cost_str = f"INR {land_cost:,.0f} ({plot_area:,.0f} sq ft plot)" if land_cost is not None else "Pending Rate Input"
-        tot_str = f"INR {comb_tot:,.0f} (Land + Construction)" if comb_tot is not None else f"INR {tot_inr:,.0f} (Civil Construction Only)"
-
-        c_rate = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Indicative Land Circle Rate</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{rate_str}</b></font>', kv_style)
-        c_loc = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Locality &amp; Access Multiplier</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{loc_mult_val:.2f}x (Road + Facility factors)</b></font>', kv_style)
-        c_lcost = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Estimated Land Cost</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{cost_str}</b></font>', kv_style)
-        c_outlay = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Total Combined Project Outlay</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{tot_str}</b></font>', kv_style)
-
-        land_table = Table([[c_rate, c_loc], [c_lcost, c_outlay]], colWidths=[246.6, 246.6])
-        land_table.setStyle(TableStyle([
-            ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
-            ('TOPPADDING', (0, 0), (-1, -1), 5.0),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 5.0),
+        cost_table = Table(cost_rows, colWidths=[120, 95, 140, 138.2])
+        cost_table.setStyle(TableStyle([
+            ('LINEBELOW', (0, 0), (-1, 0), 0.5, COLOR_HAIRLINE),
+            ('LINEBELOW', (0, 1), (-1, -3), 0.5, COLOR_HAIRLINE),
+            ('LINEABOVE', (0, -2), (-1, -2), 1.5, COLOR_TEXT_PRIMARY),  # 1.5pt rule above TOTAL
+            ('SPAN', (1, -1), (3, -1)),  # Span +/- range line across right columns
+            ('TOPPADDING', (0, 0), (-1, -1), 4.0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4.0),
             ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
             ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ]))
-        story.append(land_table)
-        story.append(Spacer(1, 4))
-        disc_text = f"<b>Valuation Source &amp; Methodology:</b> {html.escape(source_label)}. <i>{html.escape(str(land.get('disclaimer', '')))}</i>"
-        story.append(make_callout(disc_text, width=CONTENT_WIDTH_PT))
+        story.append(cost_table)
+
+        # --- Section 09: Indicative Land Valuation & Project Outlay ---
+        land = data.get("land_value") or {}
+        if land:
+            story.append(create_section_header("09", "Indicative Land Valuation & Project Outlay"))
+            ind_rate = _safe_float(land.get("indicative_rate_per_sqft"), None)
+            land_cost = _safe_float(land.get("land_cost_inr"), None)
+            comb_tot = _safe_float(land.get("combined_project_total_inr"), None)
+            source_label = str(land.get("source_publication") or "Published Circle Rates")
+            loc_mult_val = _safe_float(land.get("locality_multiplier"), 1.0)
+            plot_area = _safe_float(land.get("plot_area_sqft"), 0.0)
+
+            rate_str = f"INR {ind_rate:,.0f} /sq ft {'(User-Supplied)' if land.get('is_user_override') else ''}" if ind_rate is not None and ind_rate > 0 else "Unlisted / Verification Required"
+            cost_str = f"INR {land_cost:,.0f} ({plot_area:,.0f} sq ft plot)" if land_cost is not None else "Pending Rate Input"
+            tot_str = f"INR {comb_tot:,.0f} (Land + Construction)" if comb_tot is not None else f"INR {tot_inr:,.0f} (Civil Construction Only)"
+
+            c_rate = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Indicative Land Circle Rate</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{rate_str}</b></font>', kv_style)
+            c_loc = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Locality &amp; Access Multiplier</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{loc_mult_val:.2f}x (Road + Facility factors)</b></font>', kv_style)
+            c_lcost = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Estimated Land Cost</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{cost_str}</b></font>', kv_style)
+            c_outlay = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Total Combined Project Outlay</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{tot_str}</b></font>', kv_style)
+
+            land_table = Table([[c_rate, c_loc], [c_lcost, c_outlay]], colWidths=[246.6, 246.6])
+            land_table.setStyle(TableStyle([
+                ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+                ('TOPPADDING', (0, 0), (-1, -1), 5.0),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 5.0),
+                ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
+            ]))
+            story.append(land_table)
+            story.append(Spacer(1, 4))
+            disc_text = f"<b>Valuation Source &amp; Methodology:</b> {html.escape(source_label)}. <i>{html.escape(str(land.get('disclaimer', '')))}</i>"
+            story.append(make_callout(disc_text, width=CONTENT_WIDTH_PT))
 
     # --- Section 10: Generative Architectural Blueprint / Multi-Storey Dossier ---
     floorplan = floor_plan if floor_plan is not None else (data.get("floor_plan") or data.get("floorplan"))
@@ -1857,7 +1861,8 @@ def generate_pdf_report(
         # =========================================================================
         # SHEET 10.0: MULTI-STOREY ARCHITECTURAL DOSSIER & CORE STACKING ANALYSIS
         # =========================================================================
-        story.append(PageBreak())
+        if not is_dossier_only:
+            story.append(PageBreak())
         story.append(create_section_header("10.0", "Multi-Storey Architectural Dossier & Core Stacking Analysis"))
 
         typology_raw = str(multi_storey.get("building_typology", "T1_SINGLE_FAMILY"))
@@ -2167,9 +2172,56 @@ def generate_pdf_report(
             legend_table = make_floorplan_legend({"rectangles": floor_rects}, width=CONTENT_WIDTH_PT)
             story.append(legend_table)
 
-    elif floorplan and isinstance(floorplan, dict) and (floorplan.get("rectangles") or floorplan.get("grid_matrix") or floorplan.get("placements") or floorplan.get("svg_blueprint")):
+    elif floorplan and isinstance(floorplan, dict):
+        if not floorplan.get("rectangles") and not floorplan.get("placements") and ms_floors:
+            first_fl = ms_floors[0]
+            floor_env = _get(first_fl, "envelope", {}) or {}
+            floorplan["rectangles"] = {
+                "envelope": {
+                    "x": _safe_float(_get(floor_env, "x", 1.0), 1.0),
+                    "y": _safe_float(_get(floor_env, "y", 1.0), 1.0),
+                    "width": _safe_float(_get(floor_env, "width", 10.0), 10.0),
+                    "height": _safe_float(_get(floor_env, "depth", _get(floor_env, "height", 10.0)), 10.0),
+                },
+                "rooms": [
+                    {
+                        "room_id": str(_get(r, "room_id", "")),
+                        "room_name": str(_get(r, "room_name", "")),
+                        "x": _safe_float(_get(r, "x", 0.0)),
+                        "y": _safe_float(_get(r, "y", 0.0)),
+                        "width": _safe_float(_get(r, "width_m", _get(r, "width", 0.0))),
+                        "height": _safe_float(_get(r, "depth_m", _get(r, "height", 0.0))),
+                        "area_sqm": _safe_float(_get(r, "area_sqm", 0.0)),
+                        "zone": str(_get(r, "zone", "General")),
+                        "vastu_compliant": bool(_get(r, "vastu_compliant", True)),
+                        "is_vertical_core": bool(_get(r, "is_vertical_core", False)),
+                    }
+                    for r in _get(first_fl, "rooms", [])
+                ],
+                "doors": _get(first_fl, "doors", []),
+                "windows": _get(first_fl, "windows", [])
+            }
+            if not floorplan.get("placements"):
+                floorplan["placements"] = [
+                    {
+                        "room_id": str(_get(r, "room_id", "")),
+                        "room_name": str(_get(r, "room_name", "")),
+                        "row": 0,
+                        "col": 0,
+                        "width": max(1, int(round(_safe_float(_get(r, "width_m", _get(r, "width", 0.0)))))),
+                        "height": max(1, int(round(_safe_float(_get(r, "depth_m", _get(r, "height", 0.0)))))),
+                        "area_sqm": _safe_float(_get(r, "area_sqm", 0.0)),
+                        "width_m": _safe_float(_get(r, "width_m", _get(r, "width", 0.0))),
+                        "depth_m": _safe_float(_get(r, "depth_m", _get(r, "height", 0.0))),
+                        "zone": str(_get(r, "zone", "General")),
+                        "vastu_compliant": bool(_get(r, "vastu_compliant", True)),
+                    }
+                    for r in _get(first_fl, "rooms", [])
+                ]
+
         # Section 10 on its own dedicated full page (Single Floor Mode)
-        story.append(PageBreak())
+        if not is_dossier_only:
+            story.append(PageBreak())
         story.append(create_section_header("10", "Generative Architectural Blueprint"))
 
         # Design Brief callout above solver stat strip
