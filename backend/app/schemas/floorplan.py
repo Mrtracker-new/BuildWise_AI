@@ -1,6 +1,7 @@
 from typing import List, Dict, Optional, Literal, Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 from app.schemas.room_program import RoomProgram
+from app.schemas.multi_floor_plan import MultiStoreyBuildingModel, ExtractedClientConstraints
 
 class FloorPlanRequest(BaseModel):
     plot_width_m: float = Field(..., ge=6.0, le=60.0, description="Plot frontage width in meters")
@@ -26,6 +27,10 @@ class FloorPlanRequest(BaseModel):
     top_vastu_entrances: Optional[List[str]] = Field(default=None, description="Top ranked auspicious entrance orientations")
     program_source: Optional[str] = Field(default=None, description="Pre-computed program source: llm, cache, or fallback")
     bypass_cache: Optional[bool] = Field(default=False, description="Whether to bypass room program cache for fresh generation")
+    extracted_constraints: Optional[ExtractedClientConstraints] = Field(
+        default=None,
+        description="Optional pre-parsed structured client constraints"
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -163,5 +168,13 @@ class FloorPlanResponse(BaseModel):
     qa: Optional[FloorPlanQA] = Field(
         default_factory=lambda: FloorPlanQA(entry="hall", circulation="connected", violations=0),
         description="Architectural spatial logic QA gate verification stats"
+    )
+    multi_storey: Optional[MultiStoreyBuildingModel] = Field(
+        default=None,
+        description="Full multi-storey building model synthesizing all floor plates and vertical cores"
+    )
+    client_constraints: Optional[ExtractedClientConstraints] = Field(
+        default=None,
+        description="Structured design constraints parsed from client requirements"
     )
 

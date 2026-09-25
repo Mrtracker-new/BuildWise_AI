@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import ValidationError
+from typing import Optional
+from pydantic import BaseModel, ValidationError
 
 from app.config import settings
 
@@ -25,6 +26,7 @@ from app.schemas.floorplan import (
     FloorPlanRequest,
     FloorPlanResponse
 )
+from app.schemas.multi_floor_plan import ExtractedClientConstraints
 from app.services import (
     fetch_reverse_geocode,
     fetch_elevation_and_slope,
@@ -452,4 +454,23 @@ async def create_generative_floorplan(req: FloorPlanRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Floor plan generation error: {str(e)}")
+
+
+class ParseRequirementsRequest(BaseModel):
+    requirements_text: str
+    ai_provider: Optional[str] = "groq"
+
+
+@app.post("/api/parse-requirements", response_model=ExtractedClientConstraints)
+async def parse_requirements_endpoint(req: ParseRequirementsRequest):
+    """
+    Extracts structured architectural design constraints from free-text client notes.
+    """
+    try:
+        from app.ai.requirements_parser import parse_client_requirements
+        return await parse_client_requirements(req.requirements_text, req.ai_provider)
+    except Exception as e:
+        logger.warning(f"Error parsing requirements: {e}")
+        from app.ai.requirements_parser import parse_client_requirements_fallback
+        return parse_client_requirements_fallback(req.requirements_text)
 

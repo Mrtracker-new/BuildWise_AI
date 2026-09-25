@@ -27,6 +27,19 @@ from app.schemas.room_program import (
     VastuZone,
     SolverHints
 )
+from app.schemas.multi_floor_plan import (
+    MultiStoreyBuildingModel,
+    SingleFloorPlanModel,
+    VerticalCoreSpec,
+    DuctShaftSpec,
+    MultiFloorRoomRectangle,
+    MultiFloorDoorGeometry,
+    MultiFloorWindowGeometry,
+    StructuralGridSpec,
+    ExtractedClientConstraints,
+    SpatialAdjacencyConstraint,
+    OrientationPreferenceConstraint
+)
 
 __all__ = [
     "AnalysisRequest",
@@ -50,6 +63,18 @@ __all__ = [
     "RoomProgram",
     "RoomSpec",
     "VastuZone",
-    "SolverHints"
+    "SolverHints",
+    "MultiStoreyBuildingModel",
+    "SingleFloorPlanModel",
+    "VerticalCoreSpec",
+    "DuctShaftSpec",
+    "MultiFloorRoomRectangle",
+    "MultiFloorDoorGeometry",
+    "MultiFloorWindowGeometry",
+    "StructuralGridSpec",
+    "ExtractedClientConstraints",
+    "SpatialAdjacencyConstraint",
+    "OrientationPreferenceConstraint"
 ]
+
 

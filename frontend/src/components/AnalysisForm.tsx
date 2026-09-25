@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type { AnalysisRequest } from '../services/types';
 import { Icon } from './Icon';
 import { IosSelect } from './IosSelect';
+import { ConstraintChips } from './ConstraintChips';
+import { parseRequirements, parseRequirementsClientFallback } from '../services/api';
 
 interface AnalysisFormProps {
   request: AnalysisRequest;
@@ -18,6 +20,47 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
   onChange,
   onSubmit,
 }) => {
+  const [isParsingConstraints, setIsParsingConstraints] = useState(false);
+  const lastParsedTextRef = useRef<string | null>(null);
+
+  // Auto-parse client requirements into editable constraint chips
+  useEffect(() => {
+    const text = (request.client_requirements || '').trim();
+    if (!text) {
+      if (lastParsedTextRef.current !== null && request.extracted_constraints) {
+        lastParsedTextRef.current = null;
+        onChange({ extracted_constraints: undefined });
+      }
+      return;
+    }
+
+    if (text === lastParsedTextRef.current) {
+      return;
+    }
+
+    // Immediately provide synchronous fallback chips for instantaneous UI feedback
+    if (!request.extracted_constraints) {
+      const immediate = parseRequirementsClientFallback(text);
+      onChange({ extracted_constraints: immediate });
+    }
+
+    const timer = setTimeout(async () => {
+      lastParsedTextRef.current = text;
+      setIsParsingConstraints(true);
+      try {
+        const parsed = await parseRequirements(text, request.ai_provider);
+        onChange({ extracted_constraints: parsed });
+      } catch {
+        const fallback = parseRequirementsClientFallback(text);
+        onChange({ extracted_constraints: fallback });
+      } finally {
+        setIsParsingConstraints(false);
+      }
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [request.client_requirements, request.ai_provider]);
+
   const isAreaValid = request.built_up_area_sqft >= 500 && request.built_up_area_sqft <= 50000;
   const canSubmit = hasCoordinates && isAreaValid && !isLoading;
 
@@ -252,6 +295,17 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
           placeholder="e.g. home office, 2 baths, north-facing study, open kitchen"
           className="w-full bg-[var(--fill)] border border-[var(--separator)] rounded-[10px] p-2.5 text-[13px] text-[var(--text-1)] placeholder-[var(--text-3)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)] resize-none transition-all duration-200"
         />
+
+        {/* Interactive Constraint Chips */}
+        {request.extracted_constraints && (
+          <div className="pt-1">
+            <ConstraintChips
+              constraints={request.extracted_constraints}
+              onChange={(updated) => onChange({ extracted_constraints: updated })}
+              isLoading={isParsingConstraints}
+            />
+          </div>
+        )}
       </div>
 
       {/* Technical Explanation Generator */}

@@ -5,6 +5,7 @@ import type {
   FloorPlanRequest,
   FloorPlanResponse,
   ReportRequestPayload,
+  ExtractedClientConstraints,
 } from './types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -100,4 +101,88 @@ export async function downloadPdfReport(
   link.click();
   link.remove();
   window.URL.revokeObjectURL(downloadUrl);
+}
+
+export async function parseRequirements(
+  requirementsText: string,
+  aiProvider: string = 'groq',
+  signal?: AbortSignal
+): Promise<ExtractedClientConstraints> {
+  try {
+    const resp = await fetch(`${API_BASE_URL}/api/parse-requirements`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        requirements_text: requirementsText,
+        ai_provider: aiProvider,
+      }),
+      signal,
+    });
+
+    if (resp.ok) {
+      return await resp.json();
+    }
+  } catch (err) {
+    // Network or server error: fall through to client-side fallback
+  }
+
+  // Client-side fallback if backend unreachable
+  return parseRequirementsClientFallback(requirementsText);
+}
+
+export function parseRequirementsClientFallback(text: string): ExtractedClientConstraints {
+  const clean = text.toLowerCase();
+
+  // Bedroom count
+  const bedMatch = clean.match(/(\d+)\s*(?:bhk|bed|bedroom|br)/);
+  let bedCount = bedMatch ? parseInt(bedMatch[1], 10) : 2;
+  bedCount = Math.max(1, Math.min(6, bedCount));
+
+  // Bathroom count
+  const bathMatch = clean.match(/(\d+)\s*(?:bath|bathroom|toilet|wc)/);
+  let bathCount = bathMatch ? parseInt(bathMatch[1], 10) : (bedCount >= 2 ? 2 : 1);
+  if (clean.includes('powder room') || clean.includes('powder') || clean.includes('guest toilet')) {
+    bathCount += 1;
+  }
+  bathCount = Math.max(1, Math.min(6, bathCount));
+
+  // Specialized spaces
+  const spaces: string[] = [];
+  if (clean.includes('office') || clean.includes('wfh') || clean.includes('work from home')) spaces.push('home_office');
+  if (clean.includes('study') || clean.includes('library')) spaces.push('study');
+  if ((clean.includes('pooja') || clean.includes('puja') || clean.includes('mandir')) && !clean.includes('no puja') && !clean.includes('no pooja')) spaces.push('pooja_room');
+  if (clean.includes('powder') || clean.includes('guest bath')) spaces.push('powder_room');
+  if (clean.includes('utility') || clean.includes('laundry') || clean.includes('wash area')) spaces.push('utility_room');
+  if (clean.includes('servant') || clean.includes('maid')) spaces.push('servant_room');
+  if (clean.includes('gym') || clean.includes('fitness')) spaces.push('gym');
+  if (clean.includes('theatre') || clean.includes('theater')) spaces.push('home_theatre');
+  if ((clean.includes('balcony') || clean.includes('deck')) && !clean.includes('no balcony')) spaces.push('balcony');
+  if (clean.includes('terrace')) spaces.push('terrace');
+  if (clean.includes('open kitchen')) spaces.push('open_kitchen');
+
+  const adjacencies: { room_a: string; room_b: string; relationship: 'connected' | 'adjacent' | 'separated' }[] = [];
+  if (spaces.includes('open_kitchen') || clean.includes('open kitchen')) {
+    adjacencies.push({ room_a: 'kitchen', room_b: 'dining', relationship: 'connected' });
+  }
+
+  const orientations: { space: string; preferred_facing: 'North' | 'East' | 'South' | 'West' | 'North-East' | 'South-East' | 'South-West' | 'North-West' }[] = [];
+  if (clean.includes('north') && (clean.includes('study') || clean.includes('office'))) {
+    orientations.push({ space: 'study', preferred_facing: 'North' });
+  }
+  if (clean.includes('east') && clean.includes('kitchen')) {
+    orientations.push({ space: 'kitchen', preferred_facing: 'East' });
+  }
+
+  return {
+    target_bedroom_count: bedCount,
+    target_bathroom_count: bathCount,
+    specialized_spaces: Array.from(new Set(spaces)),
+    spatial_adjacencies: adjacencies,
+    orientation_preferences: orientations,
+    explicit_exclusions: clean.includes('no puja') ? ['no_pooja'] : [],
+    raw_notes: text,
+    extraction_source: 'regex_fallback',
+  };
 }
