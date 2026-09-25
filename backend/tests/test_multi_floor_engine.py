@@ -192,7 +192,7 @@ def test_solver_performance_and_svg_generation():
 
 
 def test_floorplan_service_integration_multi_storey():
-    """Verifies that generate_floor_plan automatically populates multi_storey when floors >= 2."""
+    """Verifies that generate_floor_plan automatically populates multi_storey when floors >= 1."""
     from app.services.floorplan.floorplan_service import generate_floor_plan
 
     req = FloorPlanRequest(
@@ -206,3 +206,220 @@ def test_floorplan_service_integration_multi_storey():
     assert resp.multi_storey.total_storeys == 2
     assert len(resp.multi_storey.floors) == 2
     assert resp.multi_storey.global_metrics["stacking_invariant_verified"] is True
+
+
+# =====================================================================
+# 6. Typology Matrix Tests (4 Typologies x 1-4 Storeys x 3 Vastu Strictness)
+# =====================================================================
+
+TYPOLOGIES = [
+    "T1_SINGLE_FAMILY",
+    "T2_FAMILY_APARTMENT",
+    "T3_LARGE_COMPLEX",
+    "T4_WAREHOUSE",
+]
+STOREYS = [1, 2, 3, 4]
+STRICTNESS_LEVELS = ["high", "medium", "low"]
+
+
+@pytest.mark.parametrize("typology", TYPOLOGIES)
+@pytest.mark.parametrize("floors_count", STOREYS)
+@pytest.mark.parametrize("strictness", STRICTNESS_LEVELS)
+def test_typology_matrix(typology, floors_count, strictness):
+    """
+    Validates complete matrix: 4 Typologies x 1-4 Storeys x 3 Strictness levels (48 combinations).
+    Verifies:
+    - total_storeys and floor count matches request
+    - Stacking invariants hold (<0.001m drift)
+    - Circulation connectivity (100% BFS reachability)
+    - Valid non-zero built-up and carpet area on every floor
+    - Valid CAD & Paper SVG output
+    """
+    plot_w = 24.0 if typology == "T4_WAREHOUSE" else 15.0
+    plot_d = 30.0 if typology == "T4_WAREHOUSE" else 18.0
+
+    req = FloorPlanRequest(
+        plot_width_m=plot_w,
+        plot_depth_m=plot_d,
+        floors=floors_count,
+        building_typology=typology,
+        vastu_strictness=strictness,
+        ground_coverage_ratio=0.60,
+    )
+    solver = MultiFloorSolver(req)
+    building = solver.solve()
+
+    assert building.total_storeys == floors_count
+    assert len(building.floors) == floors_count
+    assert building.qa_report["status"] == "pass"
+    assert building.qa_report["stacking_invariants"] == "pass"
+    assert building.global_metrics["stacking_invariant_verified"] is True
+    assert building.global_metrics["vastu_compliance_score"] > 0
+
+    # Verify every floor plate
+    f0 = building.floors[0]
+    f0_core = next(r for r in f0.rooms if r.is_vertical_core)
+
+    for z, floor in enumerate(building.floors):
+        assert floor.floor_index == z
+        assert floor.built_up_area_sqm > 0.0
+        assert floor.carpet_area_sqm > 0.0
+        assert floor.circulation_status == "connected"
+        assert len(floor.rooms) >= 3
+        assert floor.svg_blueprint_cad.startswith("<svg")
+        assert floor.svg_blueprint_paper.startswith("<svg")
+
+        # Stacking check against floor 0 core (< 0.001m drift)
+        fz_core = next(r for r in floor.rooms if r.is_vertical_core)
+        assert abs(fz_core.x - f0_core.x) < 0.001
+        assert abs(fz_core.y - f0_core.y) < 0.001
+        assert abs(fz_core.width_m - f0_core.width_m) < 0.001
+        assert abs(fz_core.depth_m - f0_core.depth_m) < 0.001
+
+
+# =====================================================================
+# 7. Edge Case EC-04: Conflicting Constraints
+# =====================================================================
+
+def test_ec04_conflicting_constraints_kitchen_ne_override():
+    """
+    EC-04: Client requests Kitchen in North-East (taboo zone in Vastu).
+    With strictness='high', solver must relocate Kitchen to South-East (Agni zone)
+    and emit an explicit diagnostic warning detailing the override.
+    """
+    from app.schemas.multi_floor_plan import SpaceOrientationPreference
+    constraints = ExtractedClientConstraints(
+        orientation_preferences=[
+            SpaceOrientationPreference(space="kitchen", preferred_facing="North-East")
+        ]
+    )
+    req = FloorPlanRequest(
+        plot_width_m=14.0,
+        plot_depth_m=18.0,
+        floors=2,
+        building_typology="T1_SINGLE_FAMILY",
+        vastu_strictness="high",
+        extracted_constraints=constraints,
+    )
+    solver = MultiFloorSolver(req)
+    building = solver.solve()
+
+    assert any("EC-04 Vastu rule override" in w for w in building.warnings)
+    assert any("Kitchen" in w and "South-East" in w for w in building.warnings)
+
+    # Verify that Kitchen is placed in SE on ground floor
+    f0 = building.floors[0]
+    kitchen = next(r for r in f0.rooms if "kitchen" in r.room_id)
+    assert kitchen.zone == "SE"
+    assert kitchen.vastu_compliant is True
+
+
+def test_ec04_conflicting_constraints_master_bed_ne_override():
+    """
+    EC-04: Client requests Master Bedroom in North-East.
+    With strictness='high', solver overrides and relocates to South-West (Nairutya).
+    """
+    from app.schemas.multi_floor_plan import SpaceOrientationPreference
+    constraints = ExtractedClientConstraints(
+        orientation_preferences=[
+            SpaceOrientationPreference(space="master bedroom", preferred_facing="North")
+        ]
+    )
+    req = FloorPlanRequest(
+        plot_width_m=14.0,
+        plot_depth_m=18.0,
+        floors=2,
+        building_typology="T1_SINGLE_FAMILY",
+        vastu_strictness="high",
+        extracted_constraints=constraints,
+    )
+    solver = MultiFloorSolver(req)
+    building = solver.solve()
+
+    assert any("EC-04 Vastu rule override" in w for w in building.warnings)
+    assert any("Master Bedroom" in w and "South-West" in w for w in building.warnings)
+
+    # Verify Master Bedroom placement on first floor
+    f1 = building.floors[1]
+    m_bed = next(r for r in f1.rooms if "master" in r.room_id)
+    assert m_bed.zone == "SW"
+
+
+def test_ec04_low_strictness_lenient_handling():
+    """With low Vastu strictness, user preferences are not sternly overridden."""
+    from app.schemas.multi_floor_plan import SpaceOrientationPreference
+    constraints = ExtractedClientConstraints(
+        orientation_preferences=[
+            SpaceOrientationPreference(space="kitchen", preferred_facing="North-East")
+        ]
+    )
+    req = FloorPlanRequest(
+        plot_width_m=14.0,
+        plot_depth_m=18.0,
+        floors=2,
+        building_typology="T1_SINGLE_FAMILY",
+        vastu_strictness="low",
+        extracted_constraints=constraints,
+    )
+    solver = MultiFloorSolver(req)
+    building = solver.solve()
+
+    # In low strictness, EC-04 override warning is suppressed
+    assert not any("EC-04 Vastu rule override" in w for w in building.warnings)
+
+
+# =====================================================================
+# 8. Typology Catalogs, Adjacency Graphs & Normalization
+# =====================================================================
+
+def test_typology_catalogs_and_normalization():
+    """Verifies that all 4 typologies have valid catalogs, adjacency graphs, and solvers."""
+    from app.services.floorplan.typologies import (
+        normalize_typology,
+        get_typology_solver,
+        get_typology_catalog,
+        get_typology_adjacency_graph,
+        TYPOLOGY_T1,
+        TYPOLOGY_T2,
+        TYPOLOGY_T3,
+        TYPOLOGY_T4,
+    )
+
+    # Test normalization of aliases
+    assert normalize_typology("villa") == TYPOLOGY_T1
+    assert normalize_typology("residential_single") == TYPOLOGY_T1
+    assert normalize_typology("apartment") == TYPOLOGY_T2
+    assert normalize_typology("commercial") == TYPOLOGY_T3
+    assert normalize_typology("industrial") == TYPOLOGY_T4
+    assert normalize_typology(None) == TYPOLOGY_T1
+
+    # Verify each typology catalog has NBC minimum areas and valid adjacency graphs
+    for typ in [TYPOLOGY_T1, TYPOLOGY_T2, TYPOLOGY_T3, TYPOLOGY_T4]:
+        cat = get_typology_catalog(typ)
+        assert len(cat) >= 5
+        for space_id, meta in cat.items():
+            assert "min_area_sqm" in meta
+            assert meta["min_area_sqm"] > 0
+            assert "min_width_m" in meta
+            assert meta["min_width_m"] > 0
+
+        graph = get_typology_adjacency_graph(typ)
+        assert len(graph) >= 5
+
+        solver_cls = get_typology_solver(typ)
+        assert hasattr(solver_cls, "synthesize_floor_rooms")
+
+
+def test_t4_warehouse_subminimum_plot_ec03():
+    """EC-03: Verifies that warehouse typology on sub-minimum plot triggers graceful rejection."""
+    req = FloorPlanRequest(
+        plot_width_m=6.0,
+        plot_depth_m=7.0,
+        floors=1,
+        building_typology="T4_WAREHOUSE",
+    )
+    solver = MultiFloorSolver(req)
+    building = solver.solve()
+    assert building.qa_report["status"] == "failed"
+    assert any("EC-03" in w for w in building.warnings)
+

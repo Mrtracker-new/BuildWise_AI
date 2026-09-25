@@ -118,6 +118,7 @@ class SingleFloorPlanModel(BaseModel):
     windows: List[MultiFloorWindowGeometry] = Field(default_factory=list)
     circulation_status: Literal["connected", "disconnected"] = "connected"
     vastu_score_pct: float = 0.0
+    vastu_compliance_pct: float = 0.0
     plumbing_stack_alignment_pct: float = 100.0
     built_up_area_sqm: float = 0.0
     carpet_area_sqm: float = 0.0
@@ -169,6 +170,10 @@ class OrientationPreferenceConstraint(BaseModel):
         "North", "East", "South", "West",
         "North-East", "South-East", "South-West", "North-West"
     ]
+
+
+# Alias for backward and test compatibility
+SpaceOrientationPreference = OrientationPreferenceConstraint
 
 
 class ExtractedClientConstraints(BaseModel):

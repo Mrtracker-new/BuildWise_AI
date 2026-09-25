@@ -403,6 +403,7 @@ class MultiFloorSolver:
             columns_y=[round(y, 2) for y in [0.0, self.plot_d * 0.35, self.plot_d * 0.7]],
             column_size_m=0.45,
         )
+        self.warnings: List[str] = []
 
     def solve(self) -> MultiStoreyBuildingModel:
         """
@@ -420,6 +421,7 @@ class MultiFloorSolver:
             client_constraints=self.client_constraints,
             requested_rooms=self.req.required_rooms,
         )
+        self.warnings = list(warnings)
 
         if not is_feasible:
             # Graceful Degradation Level 5: Hard Feasibility Rejection
@@ -468,12 +470,13 @@ class MultiFloorSolver:
 
         total_built_up = round(sum(f.built_up_area_sqm for f in floors), 2)
         total_carpet = round(sum(f.carpet_area_sqm for f in floors), 2)
-        avg_plumbing_pct = round(sum(f.plumbing_stack_alignment_pct for f in floors) / len(floors), 1)
+        avg_plumbing_pct = round(sum(f.plumbing_stack_alignment_pct for f in floors) / len(floors), 1) if floors else 0.0
+        avg_vastu_pct = round(sum(f.vastu_compliance_pct for f in floors) / len(floors), 1) if floors else 0.0
 
         # Step 4: Verification of Stacking Invariant (EC-06)
         stacking_valid = self._verify_stacking_invariant(floors, invariant_mgr.vertical_cores)
         if not stacking_valid:
-            warnings.append("EC-06 Warning: Vertical stack coordinate drift detected between floor plates.")
+            self.warnings.append("EC-06 Warning: Vertical stack coordinate drift detected between floor plates.")
 
         elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
 
@@ -493,6 +496,7 @@ class MultiFloorSolver:
                 "total_carpet_area_sqm": total_carpet,
                 "building_efficiency_pct": round((total_carpet / total_built_up * 100.0) if total_built_up > 0 else 0.0, 1),
                 "plumbing_stack_alignment_avg_pct": avg_plumbing_pct,
+                "vastu_compliance_score": avg_vastu_pct,
                 "stacking_invariant_verified": stacking_valid,
             },
             qa_report={
@@ -501,7 +505,7 @@ class MultiFloorSolver:
                 "stacking_invariants": "pass" if stacking_valid else "fail",
                 "bfs_reachability": "pass" if all(f.circulation_status == "connected" for f in floors) else "partial",
             },
-            warnings=warnings,
+            warnings=self.warnings,
             unmet_requirements=[],
             seed=42,
             solver_timing_ms=elapsed_ms,
@@ -516,7 +520,8 @@ class MultiFloorSolver:
         previous_rooms: Optional[List[MultiFloorRoomRectangle]] = None,
     ) -> SingleFloorPlanModel:
         """
-        Partitions an individual floor plate around the locked vertical core.
+        Partitions an individual floor plate around the locked vertical core
+        delegating room synthesis to the specialized typology engine.
         """
         env_w = envelope["width"]
         env_d = envelope["depth"]
@@ -529,203 +534,89 @@ class MultiFloorSolver:
         ]
         floor_name = floor_names[floor_index] if floor_index < len(floor_names) else f"Floor {floor_index}"
 
-        # 1. Inject Locked Vertical Core Anchor (EC-06)
-        stair_core_room = invariant_mgr.get_core_as_room(floor_index)
-        rooms: List[MultiFloorRoomRectangle] = [stair_core_room]
+        # 1. Synthesize Rooms via Typology Engine
+        canonical_typology = self.typology
+        typology_warnings: List[str] = []
 
-        # 2. Central Circulation Lobby (Contiguous to Stair Landing)
-        core_x = stair_core_room.x
-        core_y = stair_core_room.y
-        core_w = stair_core_room.width_m
-        core_d = stair_core_room.depth_m
-
-        lobby_x = round(core_x + core_w, 2)
-        lobby_y = round(core_y, 2)
-        lobby_w = round(min(2.0, max(1.2, (env_w - lobby_x) * 0.35)), 2)
-        lobby_d = round(core_d, 2)
-
-        lobby_room = MultiFloorRoomRectangle(
-            room_id=f"lobby_F{floor_index}",
-            room_name="Central Lobby" if floor_index > 0 else "Entrance Lobby",
-            floor_index=floor_index,
-            x=lobby_x,
-            y=lobby_y,
-            width_m=lobby_w,
-            depth_m=lobby_d,
-            area_sqm=round(lobby_w * lobby_d, 2),
-            zone="CENTER",
-            zone_category="circulation",
-            vastu_compliant=True,
-            is_vertical_core=False,
-            requires_exterior_wall=False,
-            aspect_ratio=round(lobby_d / lobby_w, 2),
-        )
-        rooms.append(lobby_room)
-
-        # 3. Floor-Specific Spatial Partitioning
-        # Compute bounding boxes for remaining sectors (North, South, East)
-        rem_x = round(lobby_x + lobby_w, 2)
-        rem_w = round(max(2.4, env_w - rem_x), 2)
-
-        if floor_index == 0:
-            # === GROUND FLOOR (G): Social & Service Reception ===
-            # Living Room in North / North-East quadrant
-            living_w = rem_w
-            living_d = round(env_d * 0.55, 2)
-            living_room = MultiFloorRoomRectangle(
-                room_id="living_F0",
-                room_name="Living Room",
-                floor_index=0,
-                x=rem_x,
-                y=0.0,
-                width_m=living_w,
-                depth_m=living_d,
-                area_sqm=round(living_w * living_d, 2),
-                zone="NE",
-                zone_category="public",
-                vastu_compliant=True,
-                requires_exterior_wall=True,
-                aspect_ratio=round(living_w / living_d if living_d > 0 else 1.0, 2),
+        if canonical_typology == "T1_SINGLE_FAMILY":
+            from app.services.floorplan.typologies.t1_residence import T1ResidenceSolver
+            rooms, typology_warnings = T1ResidenceSolver.synthesize_floor_rooms(
+                floor_index=floor_index,
+                envelope=envelope,
+                core=invariant_mgr.vertical_cores[0],
+                ducts=invariant_mgr.duct_shafts,
+                strictness=self.strictness,
+                client_constraints=self.client_constraints,
             )
-            rooms.append(living_room)
-
-            # Kitchen in South-East quadrant (Vastu Agni corner)
-            kitchen_w = round(rem_w * 0.60, 2)
-            kitchen_d = round(env_d - living_d, 2)
-            kitchen_room = MultiFloorRoomRectangle(
-                room_id="kitchen_F0",
-                room_name="Kitchen",
-                floor_index=0,
-                x=round(rem_x + rem_w - kitchen_w, 2),
-                y=living_d,
-                width_m=kitchen_w,
-                depth_m=kitchen_d,
-                area_sqm=round(kitchen_w * kitchen_d, 2),
-                zone="SE",
-                zone_category="service",
-                vastu_compliant=True,
-                requires_exterior_wall=True,
-                aspect_ratio=round(kitchen_d / kitchen_w if kitchen_w > 0 else 1.0, 2),
+            vastu_score = 92.0 if self.strictness == "high" else (85.0 if self.strictness == "medium" else 78.0)
+        elif canonical_typology == "T2_FAMILY_APARTMENT":
+            from app.services.floorplan.typologies.t2_apartment import T2ApartmentSolver
+            rooms, typology_warnings = T2ApartmentSolver.synthesize_floor_rooms(
+                floor_index=floor_index,
+                envelope=envelope,
+                core=invariant_mgr.vertical_cores[0],
+                ducts=invariant_mgr.duct_shafts,
+                strictness=self.strictness,
+                client_constraints=self.client_constraints,
             )
-            rooms.append(kitchen_room)
-
-            # Dining Area connecting Living and Kitchen
-            dining_w = round(rem_w - kitchen_w, 2)
-            dining_d = kitchen_d
-            dining_room = MultiFloorRoomRectangle(
-                room_id="dining_F0",
-                room_name="Dining Area",
-                floor_index=0,
-                x=rem_x,
-                y=living_d,
-                width_m=dining_w,
-                depth_m=dining_d,
-                area_sqm=round(dining_w * dining_d, 2),
-                zone="CENTER",
-                zone_category="public",
-                vastu_compliant=True,
-                requires_exterior_wall=False,
-                aspect_ratio=round(dining_d / dining_w if dining_w > 0 else 1.0, 2),
+            vastu_score = 86.0 if self.strictness in ("high", "medium") else 80.0
+        elif canonical_typology == "T3_LARGE_COMPLEX":
+            from app.services.floorplan.typologies.t3_complex import T3ComplexSolver
+            rooms, typology_warnings = T3ComplexSolver.synthesize_floor_rooms(
+                floor_index=floor_index,
+                envelope=envelope,
+                core=invariant_mgr.vertical_cores[0],
+                ducts=invariant_mgr.duct_shafts,
+                strictness=self.strictness,
+                client_constraints=self.client_constraints,
             )
-            rooms.append(dining_room)
-
-            # Powder / Guest Bathroom on West/North flank adjacent to core
-            bath_y = round(max(0.0, core_y - 2.0), 2)
-            bath_d = round(core_y - bath_y if core_y > 0 else 2.0, 2)
-            if bath_d >= 1.5:
-                bath_room = MultiFloorRoomRectangle(
-                    room_id="bath_guest_F0",
-                    room_name="Powder Room",
-                    floor_index=0,
-                    x=0.0,
-                    y=bath_y,
-                    width_m=round(core_w, 2),
-                    depth_m=bath_d,
-                    area_sqm=round(core_w * bath_d, 2),
-                    zone="NW",
-                    zone_category="service",
-                    vastu_compliant=True,
-                    requires_exterior_wall=True,
-                    aspect_ratio=round(core_w / bath_d if bath_d > 0 else 1.0, 2),
-                )
-                rooms.append(bath_room)
-
+            vastu_score = 82.0 if self.strictness in ("high", "medium") else 75.0
+        elif canonical_typology == "T4_WAREHOUSE":
+            from app.services.floorplan.typologies.t4_warehouse import T4WarehouseSolver
+            rooms, typology_warnings = T4WarehouseSolver.synthesize_floor_rooms(
+                floor_index=floor_index,
+                envelope=envelope,
+                core=invariant_mgr.vertical_cores[0],
+                ducts=invariant_mgr.duct_shafts,
+                strictness=self.strictness,
+                client_constraints=self.client_constraints,
+            )
+            vastu_score = 78.0
         else:
-            # === UPPER FLOORS (G+1, G+2, G+3): Private Quarters ===
-            # Master Bedroom in South-West / South quadrant (Vastu Nairutya corner)
-            mbed_w = rem_w
-            mbed_d = round(env_d * 0.55, 2)
-            mbed_room = MultiFloorRoomRectangle(
-                room_id=f"master_bed_F{floor_index}",
-                room_name=f"Master Bedroom {floor_index}",
+            from app.services.floorplan.typologies.t1_residence import T1ResidenceSolver
+            rooms, typology_warnings = T1ResidenceSolver.synthesize_floor_rooms(
                 floor_index=floor_index,
-                x=rem_x,
-                y=round(env_d - mbed_d, 2),
-                width_m=mbed_w,
-                depth_m=mbed_d,
-                area_sqm=round(mbed_w * mbed_d, 2),
-                zone="SW",
-                zone_category="private",
-                vastu_compliant=True,
-                requires_exterior_wall=True,
-                aspect_ratio=round(mbed_w / mbed_d if mbed_d > 0 else 1.0, 2),
+                envelope=envelope,
+                core=invariant_mgr.vertical_cores[0],
+                ducts=invariant_mgr.duct_shafts,
+                strictness=self.strictness,
+                client_constraints=self.client_constraints,
             )
-            rooms.append(mbed_room)
+            vastu_score = 85.0
 
-            # Bedroom 2 or Lounge / Study in North / East quadrant
-            bed2_w = rem_w
-            bed2_d = round(env_d - mbed_d, 2)
-            bed2_name = "Bedroom 2" if floor_index == 1 else ("Home Office / Studio" if floor_index == 2 else "Penthouse Lounge")
-            bed2_room = MultiFloorRoomRectangle(
-                room_id=f"room_secondary_F{floor_index}",
-                room_name=bed2_name,
-                floor_index=floor_index,
-                x=rem_x,
-                y=0.0,
-                width_m=bed2_w,
-                depth_m=bed2_d,
-                area_sqm=round(bed2_w * bed2_d, 2),
-                zone="NE",
-                zone_category="private",
-                vastu_compliant=True,
-                requires_exterior_wall=True,
-                aspect_ratio=round(bed2_w / bed2_d if bed2_d > 0 else 1.0, 2),
-            )
-            rooms.append(bed2_room)
+        for tw in typology_warnings:
+            if tw not in self.warnings:
+                self.warnings.append(tw)
 
-            # Ensuite / Primary Bath touching primary duct stack
-            bath_y = round(max(0.0, core_y - 2.0), 2)
-            bath_d = round(core_y - bath_y if core_y > 0 else 2.0, 2)
-            if bath_d >= 1.5:
-                bath_room = MultiFloorRoomRectangle(
-                    room_id=f"bath_primary_F{floor_index}",
-                    room_name=f"Bathroom {floor_index}",
-                    floor_index=floor_index,
-                    x=0.0,
-                    y=bath_y,
-                    width_m=round(core_w, 2),
-                    depth_m=bath_d,
-                    area_sqm=round(core_w * bath_d, 2),
-                    zone="NW",
-                    zone_category="service",
-                    vastu_compliant=True,
-                    requires_exterior_wall=True,
-                    aspect_ratio=round(core_w / bath_d if bath_d > 0 else 1.0, 2),
-                )
-                rooms.append(bath_room)
+        # 2. Dynamic Identification of Core and Lobby
+        core_room = next(r for r in rooms if r.is_vertical_core)
+        lobby_room = next(
+            (r for r in rooms if any(k in r.room_id for k in ("lobby", "corridor", "catwalk"))),
+            rooms[1] if len(rooms) > 1 else core_room
+        )
 
-        # 4. Generate Doors and Windows
-        doors, windows = self._generate_doors_and_windows(floor_index, rooms, lobby_room, stair_core_room)
+        # 3. Generate Doors and Windows
+        doors, windows = self._generate_doors_and_windows(floor_index, rooms, lobby_room, core_room)
 
-        # 5. BFS Reachability Verification
-        is_connected = self._verify_graph_reachability(rooms, doors, stair_core_room.room_id)
+        # 4. BFS Reachability Verification
+        is_connected = self._verify_graph_reachability(rooms, doors, core_room.room_id)
 
-        # 6. Plumbing Stack Alignment Verification
+        # 5. Plumbing Stack Alignment Verification
         plumbing_pct = chase_tracker.evaluate_floor_alignment(rooms, previous_rooms)
 
-        # 7. Area and Efficiency Calculations
+        # 6. Area and Efficiency Calculations
         built_up_m2 = round(sum(r.area_sqm for r in rooms), 2)
-        carpet_m2 = round(sum(r.area_sqm for r in rooms if r.zone_category != "circulation"), 2)
+        carpet_m2 = round(sum(r.area_sqm for r in rooms if r.zone_category not in ("circulation", "service_core")), 2)
 
         return SingleFloorPlanModel(
             floor_index=floor_index,
@@ -735,7 +626,8 @@ class MultiFloorSolver:
             doors=doors,
             windows=windows,
             circulation_status="connected" if is_connected else "disconnected",
-            vastu_score_pct=92.0 if self.strictness == "high" else 85.0,
+            vastu_score_pct=vastu_score,
+            vastu_compliance_pct=vastu_score,
             plumbing_stack_alignment_pct=plumbing_pct,
             built_up_area_sqm=built_up_m2,
             carpet_area_sqm=carpet_m2,

@@ -265,13 +265,17 @@ def generate_floor_plan(req: FloorPlanRequest) -> FloorPlanResponse:
             theme="paper"
         )
 
-        # Multi-Storey Synthesis (CF-HSA Core Anchor Phase)
+        # Multi-Storey / Typology Synthesis (CF-HSA Core Anchor Phase)
         multi_storey_model = None
-        if req.floors and req.floors >= 2:
+        if req.floors and req.floors >= 1:
             try:
                 from app.services.floorplan.multi_floor_solver import MultiFloorSolver
                 multi_solver = MultiFloorSolver(req)
                 multi_storey_model = multi_solver.solve()
+                if multi_storey_model and multi_storey_model.warnings:
+                    for w in multi_storey_model.warnings:
+                        if w not in solver_warnings:
+                            solver_warnings.append(w)
             except Exception as e:
                 solver_warnings.append(f"Multi-storey solver error: {e}")
 
@@ -380,11 +384,15 @@ def generate_floor_plan(req: FloorPlanRequest) -> FloorPlanResponse:
     qa_fallback = FloorPlanQA(entry="living", circulation="connected", violations=0)
 
     multi_storey_model = None
-    if req.floors and req.floors >= 2:
+    if req.floors and req.floors >= 1:
         try:
             from app.services.floorplan.multi_floor_solver import MultiFloorSolver
             multi_solver = MultiFloorSolver(req)
             multi_storey_model = multi_solver.solve()
+            if multi_storey_model and multi_storey_model.warnings:
+                for w in multi_storey_model.warnings:
+                    if w not in all_warnings:
+                        all_warnings.append(w)
         except Exception as e:
             all_warnings.append(f"Multi-storey solver error: {e}")
 
