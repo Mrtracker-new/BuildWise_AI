@@ -1,5 +1,7 @@
+import io
 import time
 import pytest
+import pypdf
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 from app.main import app
@@ -480,3 +482,66 @@ def test_full_user_journey_unified_report(mock_external_http):
 
     # Assert unified page count is greater than or equal to baseline page count
     assert len(reader_full.pages) >= len(reader_base.pages)
+
+
+def test_generate_floorplan_pdf_streaming(mock_external_http):
+    """
+    Verifies that /api/generate-floorplan streams a multi-page PDF dossier when format='pdf',
+    and /api/report includes multi-storey Sheet 10.0 and floor sheets when multi_storey is present.
+    """
+    # 1. Test /api/generate-floorplan?format=pdf directly
+    fp_payload = {
+        "plot_width_m": 22.0,
+        "plot_depth_m": 18.0,
+        "floors": 4,
+        "building_typology": "T2_FAMILY_APARTMENT",
+        "vastu_strictness": "medium",
+        "required_rooms": ["living", "kitchen", "master_bed", "bath_1", "dining", "stairs", "lift"]
+    }
+    pdf_resp = client.post("/api/generate-floorplan?format=pdf", json=fp_payload)
+    assert pdf_resp.status_code == 200
+    assert pdf_resp.headers["content-type"] == "application/pdf"
+    assert pdf_resp.content.startswith(b"%PDF")
+
+    reader = pypdf.PdfReader(io.BytesIO(pdf_resp.content))
+    assert len(reader.pages) >= 5
+    full_text = "".join(page.extract_text() or "" for page in reader.pages)
+    assert "10.0" in full_text
+    assert "Multi-Storey Architectural Dossier" in full_text
+    assert "10.1" in full_text
+    assert "10.2" in full_text
+    assert "10.3" in full_text
+    assert "10.4" in full_text
+
+    # 2. Test /api/report with multi_storey floor plan payload
+    json_resp = client.post("/api/generate-floorplan", json=fp_payload)
+    assert json_resp.status_code == 200
+    fp_json = json_resp.json()
+    assert "multi_storey" in fp_json
+    assert len(fp_json["multi_storey"]["floors"]) == 4
+
+    analyze_resp = client.post("/api/analyze", json={
+        "latitude": 12.9716,
+        "longitude": 77.5946,
+        "built_up_area_sqft": 4000.0,
+        "quality_grade": "premium",
+        "building_typology": "T2_FAMILY_APARTMENT",
+        "floors": 4,
+        "ai_provider": "mock"
+    })
+    analysis_data = analyze_resp.json()
+
+    report_resp = client.post("/api/report", json={
+        "analysis_data": analysis_data,
+        "floor_plan": fp_json
+    })
+    assert report_resp.status_code == 200
+    assert report_resp.headers["content-type"] == "application/pdf"
+    assert report_resp.content.startswith(b"%PDF")
+
+    rep_reader = pypdf.PdfReader(io.BytesIO(report_resp.content))
+    rep_text = "".join(page.extract_text() or "" for page in rep_reader.pages)
+    assert "Multi-Storey Architectural Dossier & Core Stacking Analysis" in rep_text
+    assert "Sheet 10.1" in rep_text
+    assert "100% Locked" in rep_text or "Vertical Cores Locked" in rep_text
+

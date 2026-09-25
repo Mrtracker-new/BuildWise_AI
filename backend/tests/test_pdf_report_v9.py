@@ -292,3 +292,67 @@ def test_pdf_report_edge_cases():
     buf5 = generate_pdf_report({"request_id": "TEST-FP-NONE"}, floor_plan=fp_none)
     assert buf5.getvalue().startswith(b"%PDF")
 
+
+def test_pdf_report_multi_storey_dossier():
+    """
+    Verifies that multi-storey floor plan generates Sheet 10.0 (Stacking Analysis)
+    and dedicated A4 sheets for each floor level (10.1, 10.2, etc.) with exact Page X of Y footers.
+    """
+    fp_req = FloorPlanRequest(
+        plot_width_m=20.0,
+        plot_depth_m=18.0,
+        floors=4,
+        building_typology="T2_FAMILY_APARTMENT",
+        vastu_strictness="medium",
+        required_rooms=["living", "kitchen", "master_bed", "bath_1", "dining", "stairs", "lift"]
+    )
+    fp_res = generate_floor_plan(fp_req)
+    assert fp_res.multi_storey is not None
+    assert len(fp_res.multi_storey.floors) == 4
+
+    payload = {
+        "request_id": "BW-2026-MULTI-STOREY-TEST",
+        "timestamp": "2026-09-25 12:00:00 UTC",
+        "coordinates": {"latitude": 12.9716, "longitude": 77.5946},
+        "formatted_address": "Bengaluru Multi-Storey Test Site",
+        "overall_suitability_score": 88.0,
+        "suitability_verdict": "Optimal Development Suitability",
+        "built_up_area_sqft": 4800.0,
+        "quality_grade": "premium",
+        "floors": 4,
+        "building_typology": "T2_FAMILY_APARTMENT",
+        "engineering_summary": "4-storey residential apartment with continuous locked core shafts.",
+    }
+
+    pdf_buf = generate_pdf_report(payload, floor_plan=fp_res.model_dump())
+    pdf_bytes = pdf_buf.getvalue()
+    assert pdf_bytes.startswith(b"%PDF")
+
+    reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+    num_pages = len(reader.pages)
+    # Minimal payload (1 page) + Sheet 10.0 + 4 floor sheets = exactly 6 pages
+    assert num_pages == 6, f"Expected exactly 6 pages (1 base + 5 floorplan sheets), got {num_pages}"
+
+    pages_text = [page.extract_text() for page in reader.pages]
+    full_text = "\n--- PAGE ---\n".join(pages_text)
+
+    # 1. Verify Sheet 10.0 Stacking Analysis
+    assert "10.0" in full_text
+    assert "Multi-Storey Architectural Dossier & Core Stacking Analysis" in full_text
+    assert "Vertical Cores Locked" in full_text or "100% Locked" in full_text
+    assert "NBC 2016" in full_text
+
+    # 2. Verify all 4 floor sheets exist
+    assert "10.1" in full_text
+    assert "10.2" in full_text
+    assert "10.3" in full_text
+    assert "10.4" in full_text
+    assert "Ground Floor" in full_text or "GROUND FLOOR" in full_text
+    assert "Elevation" in full_text
+
+    # 3. Verify running footer consistency on all pages
+    for idx, pt in enumerate(pages_text):
+        expected_footer = f"Page {idx+1} of {num_pages}"
+        assert expected_footer in pt, f"Footer '{expected_footer}' missing on page {idx+1}"
+
+
