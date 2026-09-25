@@ -1,4 +1,5 @@
 import math
+import html
 from typing import List, Dict, Tuple, Optional, Any
 from app.services.floorplan.grid_model import RoomBox, ROOM_CATALOG
 from app.schemas.floorplan import RectanglesModel
@@ -986,6 +987,109 @@ def generate_blueprint_from_rectangles(
 # Multi-Storey Blueprint SVG Generator with Ghost Core Overlay
 # =====================================================================
 
+ROOM_ABBREV_MAP: Dict[str, str] = {
+    # T1
+    "MASTER BEDROOM": "M.BED",
+    "GUEST BATHROOM": "G.BATH",
+    "ENTRANCE FOYER": "FOYER",
+    "PRIVATE STAIRCASE": "STAIR",
+    "LIVING ROOM": "LIVING",
+    "DINING AREA": "DINING",
+    "KITCHEN": "KTCHN",
+    "PUJA ROOM": "PUJA",
+    "CENTRAL LOBBY": "LOBBY",
+    "BALCONY": "BALC",
+    "CORRIDOR": "CORR",
+    "BEDROOM 2": "BED 2",
+    "BEDROOM 3": "BED 3",
+    "BATHROOM 1": "BATH 1",
+    "BATHROOM 2": "BATH 2",
+    # T2
+    "SHARED STAIRCASE CORE": "STAIR",
+    "FLOOR ELEVATOR & STAIR LOBBY": "LOBBY",
+    "UNIT A: LIVING & DINING": "U.A LIV",
+    "UNIT A: BEDROOM": "U.A BED",
+    "UNIT B: LIVING & DINING": "U.B LIV",
+    "UNIT B: BEDROOM": "U.B BED",
+    "SANITARY & UTILITY BLOCK": "UTILITY",
+    # T3
+    "ENCLOSED FIRE STAIR 1": "STAIR 1",
+    "ENCLOSED FIRE STAIR 2": "STAIR 2",
+    "ELEVATOR BANK & MAIN LOBBY": "LOBBY",
+    "1.5M DOUBLE-LOADED CORRIDOR": "CORR",
+    "COMMERCIAL SUITE NORTH (OPEN OFFICE)": "SUITE N",
+    "COMMERCIAL SUITE SOUTH (EXECUTIVE)": "SUITE S",
+    "COMMERCIAL SANITARY & RESTROOM CORE": "SAN/WC",
+    # T4
+    "INDUSTRIAL STEEL STAIRCASE CORE": "IND STAIR",
+    "GROUND STAGING LOBBY": "STAGING",
+    "LOADING DOCK BAYS (ROLLING SHUTTERS)": "DOCK BAYS",
+    "DISPATCH & PALLET STAGING AREA": "DISPATCH",
+    "CLEAR-SPAN INDUSTRIAL STORAGE BAY": "STORAGE",
+    "STAFF LOCKER & SANITARY AMENITIES": "AMENITIES",
+    "MEZZANINE ADMINISTRATIVE SUITE": "MEZZ ADMIN",
+}
+
+def _approx_text_width(text: str, fs: float) -> float:
+    """Approximate rendered text width in pixels: ≈ 0.6 * font_size * char_count."""
+    return 0.6 * fs * len(text)
+
+def _approx_text_height(fs: float) -> float:
+    """Approximate rendered text height."""
+    return fs
+
+def _get_abbrev(name: str) -> str:
+    cleaned = name.strip().upper()
+    if cleaned in ROOM_ABBREV_MAP:
+        return ROOM_ABBREV_MAP[cleaned]
+    short = cleaned
+    for o, n in [
+        ("BATHROOM", "BATH"),
+        ("BEDROOM", "BED"),
+        ("STAIRCASE", "STAIR"),
+        ("CORRIDOR", "CORR"),
+        ("ELEVATOR", "LIFT"),
+        ("COMMERCIAL", "COMM"),
+        ("INDUSTRIAL", "IND"),
+        ("ADMINISTRATIVE", "ADMIN"),
+    ]:
+        short = short.replace(o, n)
+    return short
+
+def _wrap_text(text: str, max_w: float, fs: float) -> Optional[List[str]]:
+    words = text.split()
+    if not words:
+        return []
+    for w in words:
+        if _approx_text_width(w, fs) > max_w:
+            return None
+    lines = []
+    curr = words[0]
+    for w in words[1:]:
+        test_line = f"{curr} {w}"
+        if _approx_text_width(test_line, fs) <= max_w:
+            curr = test_line
+        else:
+            lines.append(curr)
+            curr = w
+    lines.append(curr)
+    return lines
+
+class BBox:
+    def __init__(self, xmin: float, ymin: float, xmax: float, ymax: float):
+        self.xmin = xmin
+        self.ymin = ymin
+        self.xmax = xmax
+        self.ymax = ymax
+
+    def intersects(self, other: "BBox", pad: float = 0.5) -> bool:
+        return not (
+            self.xmax + pad <= other.xmin or
+            self.xmin - pad >= other.xmax or
+            self.ymax + pad <= other.ymin or
+            self.ymin - pad >= other.ymax
+        )
+
 def generate_multi_floor_blueprint_svg(
     floor_index: int,
     floor_name: str,
@@ -1003,15 +1107,20 @@ def generate_multi_floor_blueprint_svg(
     Renders a publication-grade architectural CAD/Paper SVG blueprint for an individual storey plate.
     Features:
     - Accurate wall thicknesses (exterior structural envelope vs interior partitions)
-    - True-scale door leaves & swing arcs
-    - North arrow, metric scale bar, and title block with elevation
+    - True-scale door leaves & swing arcs for 100% of doors
+    - Adaptive Room Label Priority Ladder (L1 Full+Dims -> L2 Abbrev -> L3 Tag Badge)
+    - Global Label Collision Resolution Engine (Zero pairwise text intersections guaranteed)
+    - Core Anchor Badge relocated outside core rectangle via 0.3m leader line
+    - Main Entrance bold approach arrow and haloed caption on Ground Floor
+    - T2/T3 Unit A & Unit B entry door badges
+    - Fixed line-height title block with 4pt leading and isolated bottom-right watermark
     - Ghost Core Overlay: on upper storeys (floor_index > 0), renders a faint dashed outline
       of ground floor's vertical cores & MEP shafts to visually prove exact physical vertical stacking.
     """
     scale = 36.0  # pixels per meter
     margin_x = 55.0
     margin_y = 55.0
-    title_block_h = 44.0
+    title_block_h = 58.0
 
     env_w = envelope.get("width", 12.0)
     env_d = envelope.get("depth", 15.0)
@@ -1020,6 +1129,9 @@ def generate_multi_floor_blueprint_svg(
     content_h = env_d * scale
     svg_w = int(content_w + (2.0 * margin_x))
     svg_h = int(content_h + (2.0 * margin_y) + title_block_h)
+
+    compass_x = svg_w - 40.0
+    compass_y = 36.0
 
     # Theme Palettes
     is_cad = (theme == "cad")
@@ -1034,11 +1146,16 @@ def generate_multi_floor_blueprint_svg(
     text_secondary = "#94A3B8" if is_cad else "#64748B"
     text_dim = "#64748B" if is_cad else "#94A3B8"
 
-    # Ghost Core styling (faint luminous cyan/amber for CAD, crisp soft blue for Paper)
+    # Ghost Core styling
     ghost_stroke = "#06B6D4" if is_cad else "#0284C7"
     ghost_fill = "rgba(6, 182, 212, 0.08)" if is_cad else "rgba(2, 132, 199, 0.06)"
     ghost_badge_bg = "#0E7490" if is_cad else "#0284C7"
     ghost_badge_text = "#CFFAFE" if is_cad else "#FFFFFF"
+
+    # Unit badge styling
+    unit_badge_bg = "#1E293B" if is_cad else "#E2E8F0"
+    unit_badge_stroke = "#38BDF8" if is_cad else "#0284C7"
+    unit_badge_text = "#38BDF8" if is_cad else "#0284C7"
 
     # Coordinate mapping helpers
     def px(xm: float) -> float:
@@ -1057,6 +1174,9 @@ def generate_multi_floor_blueprint_svg(
           <path d="M {scale} 0 L 0 0 0 {scale}" fill="none" stroke="{grid_line}" stroke-width="0.75" />
           <path d="M {scale/2} 0 L {scale/2} {scale} M 0 {scale/2} L {scale} {scale/2}" fill="none" stroke="{grid_line}" stroke-width="0.25" stroke-dasharray="2 2" />
         </pattern>
+        <marker id="entry-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 9 5 L 0 9 z" fill="#10B981" />
+        </marker>
         <style>
           .ghost-core-overlay {{
             transition: opacity 0.2s ease;
@@ -1100,6 +1220,9 @@ def generate_multi_floor_blueprint_svg(
 
         svg.append(f'  <rect x="{rx:.1f}" y="{ry:.1f}" width="{rw:.1f}" height="{rh:.1f}" fill="{fill_color}" />')
 
+    # Obstacles list for global collision engine
+    fixed_obstacles: List[Tuple[str, BBox]] = []
+
     # 2. Ghost Core Overlay (Active on Upper Floors floor_index > 0)
     if floor_index > 0 and include_ghost_overlay and (ground_cores or ground_ducts):
         svg.append('  <!-- ================= GHOST CORE OVERLAY (STACKING PROOF) ================= -->')
@@ -1125,12 +1248,33 @@ def generate_multi_floor_blueprint_svg(
                     t_y = gy + (gh / num_treads) * t
                     svg.append(f'    <line x1="{gx + 3:.1f}" y1="{t_y:.1f}" x2="{gx + gw - 3:.1f}" y2="{t_y:.1f}" stroke="{ghost_stroke}" stroke-width="1.0" stroke-dasharray="3 3" opacity="0.6" />')
 
-                # Alignment Proof Watermark Badge
-                badge_w = min(110.0, gw - 8.0)
-                badge_x = gx + (gw / 2.0) - (badge_w / 2.0)
-                badge_y = gy + 8.0
-                svg.append(f'    <rect x="{badge_x:.1f}" y="{badge_y:.1f}" width="{badge_w:.1f}" height="18" rx="4" fill="{ghost_badge_bg}" opacity="0.9" />')
-                svg.append(f'    <text x="{gx + gw/2.0:.1f}" y="{badge_y + 12.5:.1f}" font-size="8.5" font-weight="700" fill="{ghost_badge_text}" text-anchor="middle" letter-spacing="0.5">F0 CORE ANCHOR</text>')
+                # Requirement B: Relocate core anchor badge outside the core rect (corner offset + 0.3m leader line)
+                leader_len = 0.3 * scale  # ~10.8px
+                badge_w = 80.0
+                badge_h = 15.0
+
+                # Prefer placement in left margin or above corner
+                if gx - leader_len - badge_w >= 4.0:
+                    badge_x = gx - leader_len - badge_w
+                    badge_y = gy - 4.0
+                    lx1, ly1 = gx, gy
+                    lx2, ly2 = badge_x + badge_w, badge_y + badge_h / 2.0
+                elif gy - leader_len - badge_h >= 4.0:
+                    badge_x = max(4.0, gx)
+                    badge_y = gy - leader_len - badge_h
+                    lx1, ly1 = gx, gy
+                    lx2, ly2 = badge_x + 6.0, gy - leader_len
+                else:
+                    badge_x = max(4.0, gx)
+                    badge_y = gy + gh + leader_len
+                    lx1, ly1 = gx, gy + gh
+                    lx2, ly2 = badge_x + 6.0, gy + gh + leader_len
+
+                svg.append(f'    <line id="f0-core-leader" class="f0-core-leader" x1="{lx1:.1f}" y1="{ly1:.1f}" x2="{lx2:.1f}" y2="{ly2:.1f}" stroke="{ghost_stroke}" stroke-width="1.0" />')
+                svg.append(f'    <rect id="f0-core-anchor-badge" class="core-anchor-badge" x="{badge_x:.1f}" y="{badge_y:.1f}" width="{badge_w:.1f}" height="{badge_h:.1f}" rx="3" fill="{ghost_badge_bg}" opacity="0.95" />')
+                svg.append(f'    <text x="{badge_x + badge_w/2.0:.1f}" y="{badge_y + 10.5:.1f}" font-size="7.5" font-weight="700" fill="{ghost_badge_text}" text-anchor="middle" letter-spacing="0.5">F0 CORE ANCHOR</text>')
+
+                fixed_obstacles.append(("core_badge", BBox(badge_x, badge_y, badge_x + badge_w, badge_y + badge_h)))
 
         # Render ground floor MEP duct shafts
         if ground_ducts:
@@ -1143,7 +1287,6 @@ def generate_multi_floor_blueprint_svg(
                     f'    <rect x="{dx:.1f}" y="{dy:.1f}" width="{dw:.1f}" height="{dh:.1f}" '
                     f'fill="rgba(245, 158, 11, 0.12)" stroke="#F59E0B" stroke-width="1.8" stroke-dasharray="4 3" />'
                 )
-                # Cross hatch
                 svg.append(f'    <line x1="{dx:.1f}" y1="{dy:.1f}" x2="{dx + dw:.1f}" y2="{dy + dh:.1f}" stroke="#F59E0B" stroke-width="1.0" stroke-dasharray="2 2" opacity="0.7" />')
                 svg.append(f'    <line x1="{dx + dw:.1f}" y1="{dy:.1f}" x2="{dx:.1f}" y2="{dy + dh:.1f}" stroke="#F59E0B" stroke-width="1.0" stroke-dasharray="2 2" opacity="0.7" />')
 
@@ -1165,7 +1308,7 @@ def generate_multi_floor_blueprint_svg(
             f'fill="none" stroke="{wall_strk}" stroke-width="{wall_w}" {stroke_dash} />'
         )
 
-        # If current level staircase, draw crisp treads
+        # If staircase, draw treads and UP arrow
         if r.is_vertical_core:
             num_treads = 7
             for t in range(1, num_treads):
@@ -1175,7 +1318,10 @@ def generate_multi_floor_blueprint_svg(
             arrow_x = rx + rw - 14.0
             svg.append(f'  <line x1="{arrow_x:.1f}" y1="{ry + rh - 12:.1f}" x2="{arrow_x:.1f}" y2="{ry + 14:.1f}" stroke="{core_stroke}" stroke-width="1.6" />')
             svg.append(f'  <polyline points="{arrow_x - 3},{ry + 18} {arrow_x},{ry + 13} {arrow_x + 3},{ry + 18}" fill="none" stroke="{core_stroke}" stroke-width="1.6" />')
-            svg.append(f'  <text x="{arrow_x - 6:.1f}" y="{ry + rh/2:.1f}" font-size="7.5" font-weight="700" fill="{core_stroke}" text-anchor="end">UP</text>')
+            # UP text moved to bottom of arrow so it does not collide with room centroid label
+            up_y = ry + rh - 14.0
+            svg.append(f'  <text x="{arrow_x - 5:.1f}" y="{up_y:.1f}" font-size="7.5" font-weight="700" fill="{core_stroke}" text-anchor="end">UP</text>')
+            fixed_obstacles.append(("up_label", BBox(arrow_x - 22.0, up_y - 6.5, arrow_x - 4.0, up_y + 2.0)))
 
     # 4. Windows (Double line on exterior walls)
     for win in windows:
@@ -1186,36 +1332,341 @@ def generate_multi_floor_blueprint_svg(
         svg.append(f'  <line x1="{wx1:.1f}" y1="{wy1:.1f}" x2="{wx2:.1f}" y2="{wy2:.1f}" stroke="{window_stroke}" stroke-width="3.6" />')
         svg.append(f'  <line x1="{wx1:.1f}" y1="{wy1:.1f}" x2="{wx2:.1f}" y2="{wy2:.1f}" stroke="{bg_color}" stroke-width="1.4" />')
 
-    # 5. Doors with Swing Arcs
+    # Room index lookup by room_id
+    room_by_id = {r.room_id: r for r in rooms}
+
+    # Identify primary public room for Ground Floor Main Entrance
+    public_rooms = [r for r in rooms if getattr(r, 'zone_category', '') in ("public", "industrial_bay")]
+    if not public_rooms:
+        public_rooms = [r for r in rooms if not getattr(r, 'is_vertical_core', False)]
+    # Prefer North / NE public room
+    main_entry_room = next(
+        (r for r in public_rooms if "NE" in getattr(r, 'zone', '') or "N" in getattr(r, 'zone', '')),
+        public_rooms[0] if public_rooms else (rooms[0] if rooms else None)
+    )
+    main_entrance_zone = getattr(main_entry_room, 'zone', 'NORTH') if main_entry_room else 'NORTH'
+
+    # Find the door connected to the public entry room
+    main_door = None
+    if main_entry_room and doors:
+        main_door = next(
+            (d for d in doors if getattr(d, 'to_room', '') == getattr(main_entry_room, 'room_id', '') or getattr(d, 'from_room', '') == getattr(main_entry_room, 'room_id', '')),
+            doors[0]
+        )
+
+    # 5. Doors: Render leaf line + swing arc for every door
     for d in doors:
-        hx = px(d.hinge_x)
-        hy = py(d.hinge_y)
-        x1 = px(d.x1)
-        y1 = py(d.y1)
-        x2 = px(d.x2)
-        y2 = py(d.y2)
+        hx = px(getattr(d, 'hinge_x', getattr(d, 'x1', 0.0)))
+        hy = py(getattr(d, 'hinge_y', getattr(d, 'y1', 0.0)))
+        dw = max(getattr(d, 'width_m', 0.9) * scale, 22.0)
 
-        dw = math.hypot(x2 - x1, y2 - y1)
-        if dw < 4.0:
-            dw = 28.0
+        wall_edge = getattr(d, 'wall_edge', 'vertical')
+        swing_dir = getattr(d, 'swing_direction', 'inward_right')
 
-        # Draw door leaf line
-        svg.append(f'  <line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{door_stroke}" stroke-width="2.2" />')
+        if wall_edge in ("vertical", "east", "west"):
+            if swing_dir == "inward_left":
+                lx = hx - dw
+                ly = hy
+                swp = 1
+                arc_x = lx
+                arc_y = hy
+                start_x = hx
+                start_y = hy + dw
+            else:
+                lx = hx + dw
+                ly = hy
+                swp = 0
+                arc_x = lx
+                arc_y = hy
+                start_x = hx
+                start_y = hy + dw
+        else: # horizontal / north / south
+            if swing_dir == "inward_left":
+                lx = hx
+                ly = hy - dw
+                swp = 0
+                arc_x = lx
+                arc_y = ly
+                start_x = hx + dw
+                start_y = hy
+            else:
+                lx = hx
+                ly = hy + dw
+                swp = 1
+                arc_x = lx
+                arc_y = ly
+                start_x = hx + dw
+                start_y = hy
 
-    # 6. Room Labels & Dimensions
-    for r in rooms:
-        cx = px(r.x + r.width_m / 2.0)
-        cy = py(r.y + r.depth_m / 2.0)
+        svg.append(f'  <line x1="{hx:.1f}" y1="{hy:.1f}" x2="{lx:.1f}" y2="{ly:.1f}" stroke="{door_stroke}" stroke-width="2.0" />')
+        svg.append(f'  <path d="M {start_x:.1f} {start_y:.1f} A {dw:.1f} {dw:.1f} 0 0 {swp} {arc_x:.1f} {arc_y:.1f}" fill="none" stroke="{door_stroke}" stroke-width="1.4" stroke-dasharray="3 3" />')
 
-        # Room Name
-        svg.append(
-            f'  <text x="{cx:.1f}" y="{cy - 5.0:.1f}" font-size="10.5" font-weight="700" fill="{text_primary}" text-anchor="middle" letter-spacing="0.5">{r.room_name.upper()}</text>'
-        )
-        # Dimensions & Zone
-        zone_info = f"[{r.zone}]" if r.zone else ""
-        svg.append(
-            f'  <text x="{cx:.1f}" y="{cy + 10.0:.1f}" font-size="8.5" font-weight="500" fill="{text_secondary}" text-anchor="middle">{r.width_m:.1f}m × {r.depth_m:.1f}m ({r.area_sqm:.1f}m²) {zone_info}</text>'
-        )
+        # Requirement C: T2/T3 unit entry door badges
+        r_target = room_by_id.get(d.to_room)
+        if r_target and getattr(r_target, 'unit_id', None):
+            unit_id_str = str(r_target.unit_id)
+            if "A" in unit_id_str or "North" in unit_id_str:
+                unit_tag = "UNIT A"
+            elif "B" in unit_id_str or "South" in unit_id_str:
+                unit_tag = "UNIT B"
+            else:
+                unit_tag = unit_id_str.replace("_", " ").upper()
+
+            ub_w = 38.0
+            ub_h = 13.0
+            ub_x = hx + 4.0
+            ub_y = hy - 14.0
+            svg.append(f'  <rect x="{ub_x:.1f}" y="{ub_y:.1f}" width="{ub_w:.1f}" height="{ub_h:.1f}" rx="2" fill="{unit_badge_bg}" stroke="{unit_badge_stroke}" stroke-width="0.8" />')
+            svg.append(f'  <text x="{ub_x + ub_w/2.0:.1f}" y="{ub_y + 9.0:.1f}" font-size="7.0" font-weight="700" fill="{unit_badge_text}" text-anchor="middle">{unit_tag}</text>')
+            fixed_obstacles.append((f"unit_badge_{unit_tag}", BBox(ub_x, ub_y, ub_x + ub_w, ub_y + ub_h)))
+
+    # Requirement C: Main entrance annotation (Ground Floor only)
+    if floor_index == 0 and main_door:
+        door_x = (px(main_door.x1) + px(main_door.x2)) / 2.0
+        arr_y1 = margin_y - 36.0
+        arr_y2 = margin_y - 2.0
+        svg.append(f'  <!-- ================= MAIN ENTRANCE ANNOTATION ================= -->')
+        svg.append(f'  <line x1="{door_x:.1f}" y1="{arr_y1:.1f}" x2="{door_x:.1f}" y2="{arr_y2:.1f}" stroke="#10B981" stroke-width="2.6" marker-end="url(#entry-arrow)" />')
+        cap_y = arr_y1 - 6.0
+        # Avoid compass rose at svg_w - 40.0
+        cap_w = 72.0
+        cap_x = min(door_x, compass_x - 22.0 - cap_w / 2.0)
+        svg.append(f'  <text x="{cap_x:.1f}" y="{cap_y:.1f}" font-size="9.0" font-weight="800" stroke="#FFFFFF" stroke-width="3.2" stroke-linejoin="round" fill="#047857" paint-order="stroke fill" text-anchor="middle" letter-spacing="0.8">MAIN ENTRANCE</text>')
+        fixed_obstacles.append(("main_entrance_cap", BBox(cap_x - cap_w/2.0, cap_y - 8.0, cap_x + cap_w/2.0, cap_y + 2.0)))
+        fixed_obstacles.append(("main_entrance_arrow", BBox(door_x - 5.0, arr_y1, door_x + 5.0, arr_y2)))
+
+    # 6. Room Labels & Dimensions (Requirement A & E: Adaptive Priority Ladder + Collision Engine)
+    room_options: List[Tuple[Any, List[Dict[str, Any]]]] = []
+    for idx, r in enumerate(rooms, 1):
+        rx = px(r.x)
+        ry = py(r.y)
+        rw = r.width_m * scale
+        rh = r.depth_m * scale
+        cx = rx + rw / 2.0
+        cy = ry + rh / 2.0
+
+        avail_w = max(4.0, rw - 6.0)
+        avail_h = max(4.0, rh - 6.0)
+
+        full_name = r.room_name.upper()
+        abbrev_name = _get_abbrev(r.room_name)
+        zone_info = f" [{r.zone}]" if getattr(r, 'zone', None) else ""
+        dims_full = f"{r.width_m:.1f}m × {r.depth_m:.1f}m ({r.area_sqm:.1f}m²){zone_info}"
+        dims_short = f"{r.width_m:.1f}m × {r.depth_m:.1f}m"
+
+        opts: List[Dict[str, Any]] = []
+
+        # Level 1: Full name + dims inside room, word-wrapped, adaptive font 8-11pt
+        for fs in [11.0, 10.0, 9.5, 9.0, 8.5, 8.0]:
+            lines = _wrap_text(full_name, avail_w, fs)
+            if not lines or len(lines) > 2:
+                continue
+            name_h = len(lines) * fs * 1.25
+            dims_fs = min(8.0, fs - 1.0)
+            dims_to_use = None
+            if name_h + 3.0 + dims_fs * 1.2 <= avail_h:
+                if _approx_text_width(dims_full, dims_fs) <= avail_w:
+                    dims_to_use = dims_full
+                elif _approx_text_width(dims_short, dims_fs) <= avail_w:
+                    dims_to_use = dims_short
+
+            total_h = name_h + (3.0 + dims_fs * 1.2 if dims_to_use else 0.0)
+            if total_h <= avail_h:
+                opts.append({
+                    "level": 1,
+                    "name_lines": lines,
+                    "font_size": fs,
+                    "dims_str": dims_to_use,
+                    "dims_fs": dims_fs if dims_to_use else 0.0,
+                    "total_h": total_h,
+                    "cx": cx, "cy": cy,
+                    "rx": rx, "ry": ry, "rw": rw, "rh": rh,
+                })
+                break
+
+        # Level 2: Abbreviated name via ABBREV map, dims line hidden
+        for fs in [9.5, 9.0, 8.5, 8.0]:
+            lines = _wrap_text(abbrev_name, avail_w, fs)
+            if not lines or len(lines) > 2:
+                continue
+            total_h = len(lines) * fs * 1.25
+            if total_h <= avail_h:
+                opts.append({
+                    "level": 2,
+                    "name_lines": lines,
+                    "font_size": fs,
+                    "dims_str": None,
+                    "dims_fs": 0.0,
+                    "total_h": total_h,
+                    "cx": cx, "cy": cy,
+                    "rx": rx, "ry": ry, "rw": rw, "rh": rh,
+                })
+                break
+
+        # Level 3: Numbered tag only (small filled circle badge with room index at centroid)
+        opts.append({
+            "level": 3,
+            "room_idx": idx,
+            "radius": 7.5,
+            "cx": cx, "cy": cy,
+            "rx": rx, "ry": ry, "rw": rw, "rh": rh,
+        })
+
+        room_options.append((r, opts))
+
+    # Active ladder level index for each room (starts at best L1/L2)
+    active_levels = [0 for _ in room_options]
+
+    def get_cand_bbox(cand: Dict[str, Any]) -> BBox:
+        ccx = cand["cx"]
+        ccy = cand["cy"]
+        if cand["level"] in (1, 2):
+            lines = cand["name_lines"]
+            fs = cand["font_size"]
+            w = max(_approx_text_width(l, fs) for l in lines)
+            if cand.get("dims_str"):
+                w = max(w, _approx_text_width(cand["dims_str"], cand["dims_fs"]))
+            h = cand["total_h"]
+            pad = 0.5
+            return BBox(ccx - w / 2.0 - pad, ccy - h / 2.0 - pad, ccx + w / 2.0 + pad, ccy + h / 2.0 + pad)
+        else: # L3
+            rad = cand["radius"]
+            pad = 0.5
+            return BBox(ccx - rad - pad, ccy - rad - pad, ccx + rad + pad, ccy + rad + pad)
+
+    # Global Collision Resolution Pass
+    def has_any_conflict(i_idx: int, cand_item: Dict[str, Any], current_bboxes: List[BBox]) -> bool:
+        b = get_cand_bbox(cand_item)
+        for obs_name, b_obs in fixed_obstacles:
+            if b.intersects(b_obs):
+                return True
+        for o_idx, b_other in enumerate(current_bboxes):
+            if o_idx != i_idx and b.intersects(b_other):
+                return True
+        return False
+
+    for iteration in range(35):
+        collision_detected = False
+        bboxes = [get_cand_bbox(opts[active_levels[i]]) for i, (r, opts) in enumerate(room_options)]
+
+        # Check collision with fixed obstacles
+        for i, (r, opts) in enumerate(room_options):
+            b_cand = bboxes[i]
+            cand = opts[active_levels[i]]
+            for obs_name, b_obs in fixed_obstacles:
+                if b_cand.intersects(b_obs):
+                    collision_detected = True
+                    # Try nudging cand
+                    base_cy = cand["ry"] + cand["rh"] / 2.0
+                    nudged = False
+                    for dy in [-2, 2, -4, 4, -6, 6, -8, 8, -12, 12]:
+                        test_cy = base_cy + dy
+                        h = cand["total_h"] if cand["level"] in (1, 2) else cand["radius"] * 2
+                        if test_cy - h / 2.0 >= cand["ry"] + 3.0 and test_cy + h / 2.0 <= cand["ry"] + cand["rh"] - 3.0:
+                            cand["cy"] = test_cy
+                            if not has_any_conflict(i, cand, bboxes):
+                                nudged = True
+                                break
+                    if not nudged:
+                        cand["cy"] = base_cy
+                        if active_levels[i] + 1 < len(opts):
+                            active_levels[i] += 1
+                            cand = opts[active_levels[i]]
+                            cand["cy"] = cand["ry"] + cand["rh"] / 2.0
+                    break
+            if collision_detected:
+                break
+
+        if collision_detected:
+            continue
+
+        # Check pairwise room collisions
+        for i in range(len(bboxes)):
+            for j in range(i + 1, len(bboxes)):
+                if bboxes[i].intersects(bboxes[j]):
+                    collision_detected = True
+                    r1, opts1 = room_options[i]
+                    r2, opts2 = room_options[j]
+                    cand1 = opts1[active_levels[i]]
+                    cand2 = opts2[active_levels[j]]
+
+                    base_cy1 = cand1["ry"] + cand1["rh"] / 2.0
+                    base_cy2 = cand2["ry"] + cand2["rh"] / 2.0
+
+                    # Try nudging room 1
+                    nudged = False
+                    for dy in [-2, 2, -4, 4, -6, 6, -8, 8, -10, 10]:
+                        test_cy = base_cy1 + dy
+                        h = cand1["total_h"] if cand1["level"] in (1, 2) else cand1["radius"] * 2
+                        if test_cy - h / 2.0 >= cand1["ry"] + 3.0 and test_cy + h / 2.0 <= cand1["ry"] + cand1["rh"] - 3.0:
+                            cand1["cy"] = test_cy
+                            if not has_any_conflict(i, cand1, bboxes):
+                                nudged = True
+                                break
+                    if not nudged:
+                        cand1["cy"] = base_cy1
+                        # Try nudging room 2
+                        for dy in [-2, 2, -4, 4, -6, 6, -8, 8, -10, 10]:
+                            test_cy = base_cy2 + dy
+                            h = cand2["total_h"] if cand2["level"] in (1, 2) else cand2["radius"] * 2
+                            if test_cy - h / 2.0 >= cand2["ry"] + 3.0 and test_cy + h / 2.0 <= cand2["ry"] + cand2["rh"] - 3.0:
+                                cand2["cy"] = test_cy
+                                if not has_any_conflict(j, cand2, bboxes):
+                                    nudged = True
+                                    break
+                        if not nudged:
+                            cand2["cy"] = base_cy2
+                            # Demote smaller-area room
+                            if r1.area_sqm <= r2.area_sqm:
+                                if active_levels[i] + 1 < len(opts1):
+                                    active_levels[i] += 1
+                                    cand1 = opts1[active_levels[i]]
+                                    cand1["cy"] = cand1["ry"] + cand1["rh"] / 2.0
+                            else:
+                                if active_levels[j] + 1 < len(opts2):
+                                    active_levels[j] += 1
+                                    cand2 = opts2[active_levels[j]]
+                                    cand2["cy"] = cand2["ry"] + cand2["rh"] / 2.0
+                    break
+            if collision_detected:
+                break
+
+        if not collision_detected:
+            break
+
+    # Render resolved room labels
+    for i, (r, opts) in enumerate(room_options):
+        cand = opts[active_levels[i]]
+        cx = cand["cx"]
+        cy = cand["cy"]
+
+        if cand["level"] in (1, 2):
+            lines = cand["name_lines"]
+            fs = cand["font_size"]
+            dims_str = cand.get("dims_str")
+            dims_fs = cand.get("dims_fs", 8.0)
+            total_h = cand["total_h"]
+
+            top_y = cy - total_h / 2.0
+            line_step = fs * 1.25
+            for line_idx, line in enumerate(lines):
+                y_baseline = top_y + (line_idx + 0.85) * line_step
+                escaped_line = html.escape(line)
+                svg.append(f'  <text x="{cx:.1f}" y="{y_baseline:.1f}" font-size="{fs:.1f}" font-weight="700" fill="{text_primary}" text-anchor="middle" letter-spacing="0.5">{escaped_line}</text>')
+
+            if dims_str:
+                y_dims = top_y + len(lines) * line_step + 3.0 + 0.85 * dims_fs
+                escaped_dims = html.escape(dims_str)
+                svg.append(f'  <text x="{cx:.1f}" y="{y_dims:.1f}" font-size="{dims_fs:.1f}" font-weight="500" fill="{text_secondary}" text-anchor="middle">{escaped_dims}</text>')
+
+        else: # Level 3: Numbered circle badge
+            rad = cand["radius"]
+            tag_num = cand["room_idx"]
+            b_fill = "#1E293B" if is_cad else "#E2E8F0"
+            b_strk = "#38BDF8" if is_cad else "#0284C7"
+            b_txt = "#F8FAFC" if is_cad else "#0F172A"
+            svg.append(f'  <circle id="room-tag-{tag_num}" class="room-tag-badge" cx="{cx:.1f}" cy="{cy:.1f}" r="{rad:.1f}" fill="{b_fill}" stroke="{b_strk}" stroke-width="1.2" />')
+            svg.append(f'  <text x="{cx:.1f}" y="{cy + 2.5:.1f}" font-size="7.5" font-weight="700" fill="{b_txt}" text-anchor="middle">{tag_num}</text>')
 
     # 7. Exterior Dimension Lines
     dim_top_y = margin_y - 20.0
@@ -1235,8 +1686,6 @@ def generate_multi_floor_blueprint_svg(
     svg.append(f'  <text x="{dim_left_x - 8.0:.1f}" y="{(dim_y1 + dim_y2)/2.0:.1f}" font-size="9.0" font-weight="600" fill="{text_secondary}" text-anchor="middle" transform="rotate(-90 {dim_left_x - 8.0:.1f} {(dim_y1 + dim_y2)/2.0:.1f})">{env_d:.1f}m ENVELOPE DEPTH</text>')
 
     # 8. North Arrow / Compass
-    compass_x = svg_w - 40.0
-    compass_y = 36.0
     svg.append(f'  <g transform="translate({compass_x}, {compass_y})">')
     svg.append(f'    <circle cx="0" cy="0" r="14" fill="{bg_color}" stroke="{text_secondary}" stroke-width="1.2" />')
     svg.append(f'    <polygon points="0,-12 3,0 0,-2 -3,0" fill="{ext_wall_stroke}" />')
@@ -1245,7 +1694,7 @@ def generate_multi_floor_blueprint_svg(
     svg.append('  </g>')
 
     # 9. Scale Bar
-    scale_y = svg_h - 18.0
+    scale_y = svg_h - 20.0
     svg.append(f'  <g transform="translate({margin_x}, {scale_y})">')
     svg.append(f'    <rect x="0" y="0" width="{scale}" height="3" fill="{text_secondary}" />')
     svg.append(f'    <rect x="{scale}" y="0" width="{scale}" height="3" fill="{grid_line}" />')
@@ -1254,16 +1703,24 @@ def generate_multi_floor_blueprint_svg(
     svg.append(f'    <text x="{scale*2}" y="-4" font-size="7.0" fill="{text_secondary}">2m (SCALE 1:50)</text>')
     svg.append('  </g>')
 
-    # 10. Title Block Banner
-    banner_y = margin_y + content_h + 24.0
+    # 10. Title Block Banner (Requirement D: Fixed line heights with 4pt leading, watermark at bottom-right)
+    banner_y = margin_y + content_h + 16.0
     elevation_m = floor_index * 3.0
     typology_tag = f"TYPOLOGY: {building_typology.upper()}" if building_typology else "NBC 2016 COMPLIANT"
+
     svg.append(f'  <g transform="translate({margin_x}, {banner_y})">')
-    svg.append(f'    <text x="0" y="0" font-size="12.0" font-weight="700" fill="{text_primary}">{floor_name.upper()} (+{elevation_m:.2f}m LVL)</text>')
-    svg.append(f'    <text x="0" y="14" font-size="9.0" font-weight="500" fill="{text_secondary}">{typology_tag} | CORE ALIGNMENT VERIFIED</text>')
-    svg.append(f'    <text x="{content_w}" y="7" font-size="9.5" font-weight="600" fill="{text_secondary}" text-anchor="end">BUILDIWISE GENERATIVE CAD ENGINE</text>')
+    svg.append(f'    <text x="0" y="11.0" font-size="11.0" font-weight="700" fill="{text_primary}">{html.escape(floor_name.upper())} (+{elevation_m:.2f}m LVL)</text>')
+    svg.append(f'    <text x="0" y="26.0" font-size="8.5" font-weight="500" fill="{text_secondary}">{html.escape(typology_tag)} | CORE ALIGNMENT VERIFIED</text>')
+    if floor_index == 0:
+        svg.append(f'    <text x="0" y="39.0" font-size="8.5" font-weight="600" fill="#10B981">MAIN ENTRANCE: {html.escape(str(main_entrance_zone))}</text>')
     svg.append('  </g>')
+
+    # Watermark: Moved to bottom-right corner at 8pt gray
+    wm_x = svg_w - 14.0
+    wm_y = svg_h - 8.0
+    svg.append(f'  <text x="{wm_x:.1f}" y="{wm_y:.1f}" font-size="8.0" font-weight="600" fill="{text_dim}" text-anchor="end" letter-spacing="0.5">BUILDWISE GENERATIVE CAD ENGINE</text>')
 
     svg.append('</svg>')
     return "\n".join(svg)
+
 

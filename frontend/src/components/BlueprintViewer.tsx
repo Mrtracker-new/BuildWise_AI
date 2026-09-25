@@ -571,6 +571,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                   className="w-2.5 h-2.5 rounded-full shrink-0 shadow-2xs"
                   style={{ backgroundColor: meta.dotColor }}
                 />
+                <span className="text-[11px] font-mono font-semibold opacity-75">[{pIdx + 1}]</span>
                 <span className="text-[12px] font-medium">{meta.label}</span>
                 {p.area_sqm && (
                   <span className="text-[11px] font-mono opacity-75">{p.area_sqm.toFixed(1)}m²</span>
@@ -809,6 +810,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                           className="w-2.5 h-2.5 rounded-full shrink-0 shadow-2xs"
                           style={{ backgroundColor: meta.dotColor }}
                         />
+                        <span className="text-[11px] font-mono font-semibold opacity-75">[{pIdx + 1}]</span>
                         <span className="text-[12px] font-medium">{meta.label}</span>
                         {p.area_sqm && (
                           <span className="text-[11px] font-mono opacity-80">{p.area_sqm.toFixed(1)}m²</span>
