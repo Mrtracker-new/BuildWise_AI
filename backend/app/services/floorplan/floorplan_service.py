@@ -265,6 +265,16 @@ def generate_floor_plan(req: FloorPlanRequest) -> FloorPlanResponse:
             theme="paper"
         )
 
+        # Multi-Storey Synthesis (CF-HSA Core Anchor Phase)
+        multi_storey_model = None
+        if req.floors and req.floors >= 2:
+            try:
+                from app.services.floorplan.multi_floor_solver import MultiFloorSolver
+                multi_solver = MultiFloorSolver(req)
+                multi_storey_model = multi_solver.solve()
+            except Exception as e:
+                solver_warnings.append(f"Multi-storey solver error: {e}")
+
         return FloorPlanResponse(
             status=status,
             grid_matrix=grid_matrix,
@@ -282,6 +292,8 @@ def generate_floor_plan(req: FloorPlanRequest) -> FloorPlanResponse:
             placement_logic=placement_logic,
             room_program=program,
             qa=qa_data,
+            multi_storey=multi_storey_model,
+            client_constraints=req.extracted_constraints,
             ai_metadata={
                 "qa": qa_data.model_dump() if qa_data else {},
                 "placement_source": placement_source,
@@ -366,6 +378,16 @@ def generate_floor_plan(req: FloorPlanRequest) -> FloorPlanResponse:
     )
 
     qa_fallback = FloorPlanQA(entry="living", circulation="connected", violations=0)
+
+    multi_storey_model = None
+    if req.floors and req.floors >= 2:
+        try:
+            from app.services.floorplan.multi_floor_solver import MultiFloorSolver
+            multi_solver = MultiFloorSolver(req)
+            multi_storey_model = multi_solver.solve()
+        except Exception as e:
+            all_warnings.append(f"Multi-storey solver error: {e}")
+
     return FloorPlanResponse(
         status="compromise" if legacy_status == "optimal" else legacy_status,
         grid_matrix=grid_matrix,
@@ -380,6 +402,8 @@ def generate_floor_plan(req: FloorPlanRequest) -> FloorPlanResponse:
         program_source=program_source,
         room_program=program,
         qa=qa_fallback,
+        multi_storey=multi_storey_model,
+        client_constraints=req.extracted_constraints,
         ai_metadata={"qa": qa_fallback.model_dump()}
     )
 
