@@ -80,6 +80,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   // Multi-floor state
   const [activeFloorIndex, setActiveFloorIndex] = useState<number>(0);
   const [showGhostOverlay, setShowGhostOverlay] = useState<boolean>(true);
+  const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
 
   // Modal zoom and pan state
   const [modalZoom, setModalZoom] = useState<number>(1.0);
@@ -192,6 +193,51 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
+  };
+
+  const handleExportPdf = async () => {
+    try {
+      setIsExportingPdf(true);
+      const payload: Record<string, any> = {
+        plot_width_m: plotWidthM || (multiStorey?.plot_width_m ?? 12.0),
+        plot_depth_m: plotDepthM || (multiStorey?.plot_depth_m ?? 15.0),
+        floors: multiStorey ? multiStorey.total_storeys : 1,
+        building_typology: multiStorey ? multiStorey.building_typology : 'residential_single',
+      };
+      if (multiStorey) {
+        payload.multi_storey = multiStorey;
+      }
+
+      const response = await fetch('/api/generate-floorplan?format=pdf', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Failed to generate PDF dossier: ${response.status} ${errText}`);
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const typTag = multiStorey ? `_${multiStorey.building_typology}` : '';
+      const floorsTag = multiStorey ? `_${multiStorey.total_storeys}F` : '';
+      link.download = `BuildWise_Architectural_Dossier${typTag}${floorsTag}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      console.error('Error exporting PDF dossier:', error);
+      alert('Failed to export PDF dossier. Please try again.');
+    } finally {
+      setIsExportingPdf(false);
+    }
   };
 
   // Close modal on Escape
@@ -434,6 +480,30 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
           >
             <Icon name="refresh" size={14} />
           </button>
+
+          {/* Quick-Download PDF Dossier Button */}
+          <button
+            type="button"
+            id="blueprint-export-dossier-btn"
+            onClick={handleExportPdf}
+            disabled={isExportingPdf}
+            title="Export Multi-Page Architectural PDF Dossier (Cover Sheet 10.0 + Floor Sheets 10.1-10.N)"
+            aria-label="Export Dossier (PDF)"
+            className="h-7 px-2.5 rounded-[8px] bg-red-600/10 hover:bg-red-600/20 active:bg-red-600/25 text-red-600 dark:text-red-400 border border-red-500/20 text-[11px] font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed select-none shadow-xs"
+          >
+            {isExportingPdf ? (
+              <>
+                <Icon name="loader" size={13} className="animate-spin text-red-500" />
+                <span>Exporting...</span>
+              </>
+            ) : (
+              <>
+                <Icon name="file-text" size={13} />
+                <span>Export Dossier (PDF)</span>
+              </>
+            )}
+          </button>
+
           <button
             type="button"
             onClick={() => setIsModalOpen(true)}
@@ -657,6 +727,27 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                     className="w-8 h-8 rounded-[8px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-1)] flex items-center justify-center transition-colors cursor-pointer mr-2"
                   >
                     <Icon name="refresh" size={14} />
+                  </button>
+
+                  {/* Export Dossier (PDF) Button in Modal */}
+                  <button
+                    type="button"
+                    onClick={handleExportPdf}
+                    disabled={isExportingPdf}
+                    title="Export Multi-Page Architectural PDF Dossier"
+                    className="h-8 px-3 rounded-[8px] bg-red-600/15 hover:bg-red-600/25 active:bg-red-600/30 text-red-600 dark:text-red-400 border border-red-500/25 text-[12px] font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed mr-2 select-none shadow-xs"
+                  >
+                    {isExportingPdf ? (
+                      <>
+                        <Icon name="loader" size={14} className="animate-spin text-red-500" />
+                        <span>Exporting PDF...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Icon name="file-text" size={14} />
+                        <span>Export Dossier (PDF)</span>
+                      </>
+                    )}
                   </button>
 
                   {/* Export SVG Button */}

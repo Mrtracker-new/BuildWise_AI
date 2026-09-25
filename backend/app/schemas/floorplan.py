@@ -31,11 +31,17 @@ class FloorPlanRequest(BaseModel):
         default=None,
         description="Optional pre-parsed structured client constraints"
     )
+    multi_storey: Optional[MultiStoreyBuildingModel] = Field(
+        default=None,
+        description="Optional pre-generated multi-storey building model for direct PDF export or re-rendering"
+    )
 
     @model_validator(mode="before")
     @classmethod
     def normalize_aliases(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            if "multiStorey" in data and "multi_storey" not in data:
+                data["multi_storey"] = data["multiStorey"]
             if "groundCoverageRatio" in data and "ground_coverage_ratio" not in data:
                 data["ground_coverage_ratio"] = data["groundCoverageRatio"]
             if "builtUpAreaSqft" in data and "built_up_area_sqft" not in data:
@@ -48,6 +54,17 @@ class FloorPlanRequest(BaseModel):
                 data["plot_depth_m"] = data["plotDepthM"]
             if "bypassCache" in data and "bypass_cache" not in data:
                 data["bypass_cache"] = data["bypassCache"]
+            # Extract plot dimensions from multi_storey if not explicitly at top level
+            if data.get("multi_storey") and isinstance(data["multi_storey"], dict):
+                ms = data["multi_storey"]
+                if "plot_width_m" not in data and "plot_width_m" in ms:
+                    data["plot_width_m"] = ms["plot_width_m"]
+                if "plot_depth_m" not in data and "plot_depth_m" in ms:
+                    data["plot_depth_m"] = ms["plot_depth_m"]
+                if "floors" not in data and "total_storeys" in ms:
+                    data["floors"] = ms["total_storeys"]
+                if "building_typology" not in data and "building_typology" in ms:
+                    data["building_typology"] = ms["building_typology"]
         return data
 
     @field_validator("required_rooms")
