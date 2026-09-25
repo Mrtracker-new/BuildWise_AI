@@ -481,7 +481,8 @@ async def create_generative_floorplan(
             pdf_stream = generate_pdf_report(
                 mock_analysis,
                 floor_plan=fp_payload,
-                dossier_only=True
+                dossier_only=True,
+                include_construction_schedules=True
             )
             return StreamingResponse(
                 pdf_stream,
@@ -542,7 +543,8 @@ async def create_generative_floorplan(
             pdf_stream = generate_pdf_report(
                 mock_analysis,
                 floor_plan=response.model_dump(),
-                dossier_only=True
+                dossier_only=True,
+                include_construction_schedules=True
             )
             return StreamingResponse(
                 pdf_stream,

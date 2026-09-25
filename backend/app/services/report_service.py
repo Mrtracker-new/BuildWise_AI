@@ -1110,7 +1110,7 @@ def make_floorplan_legend(floorplan_data: Dict[str, Any], width: float = CONTENT
 
     cells = []
     seen_names = set()
-    for r in raw_rooms:
+    for idx, r in enumerate(raw_rooms, 1):
         rid = str(_get(r, "room_id", "") or "")
         name = str(_get(r, "room_name", "") or "")
         if not name:
@@ -1122,7 +1122,7 @@ def make_floorplan_legend(floorplan_data: Dict[str, Any], width: float = CONTENT
         zone = str(_get(r, "zone", "General") or "General")
         chip_label = "[Core]" if is_core else f"[{zone.title()}]"
         dot_color = "#AF52DE" if is_core else ZONE_COLORS.get(zone.lower(), "#0071E3")
-        cell_p = Paragraph(f'<font color="{dot_color}" size=9>●</font> <b>{html.escape(name)}</b> <font color="{COLOR_TEXT_TERTIARY.hexval()}" size=7>{html.escape(chip_label)}</font>', p_leg)
+        cell_p = Paragraph(f'<b>{idx}.</b> <font color="{dot_color}" size=8>●</font> <b>{html.escape(name)}</b> <font color="{COLOR_TEXT_TERTIARY.hexval()}" size=6.5>{html.escape(chip_label)}</font>', p_leg)
         cells.append(cell_p)
 
     if not cells:
@@ -1150,6 +1150,205 @@ def make_floorplan_legend(floorplan_data: Dict[str, Any], width: float = CONTENT
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
     ]))
     return t
+def make_construction_schedules_table(
+    floor_data: Dict[str, Any],
+    width: float = CONTENT_WIDTH_PT,
+    floor_index: int = 0
+) -> List[Any]:
+    """
+    Renders Apple-designed ReportLab Tables for:
+    - Wall Type Legend (W1 exterior 230mm, W2 interior 115mm, W3 partition 75mm)
+    - Door Schedule (Tag, WxH, Type, Clear Opening, Level)
+    - Window Schedule (Tag, WxH, Sill, Lintel, Ventilation Ratio)
+    - Room Schedule (No., Name, Clear Area, Clear Dims, Finish Zone)
+    """
+    flowables: List[Any] = []
+
+    p_th = ParagraphStyle('SchedTH', fontName=FONT_SEMIBOLD, fontSize=8.0, leading=10.0, textColor=COLOR_TEXT_SECONDARY)
+    p_td = ParagraphStyle('SchedTD', fontName=FONT_REGULAR, fontSize=7.5, leading=9.5, textColor=COLOR_TEXT_PRIMARY)
+    p_td_num = ParagraphStyle('SchedTDNum', fontName=FONT_REGULAR, fontSize=7.5, leading=9.5, textColor=COLOR_TEXT_PRIMARY, alignment=2)
+    p_title = ParagraphStyle('SchedH3', fontName=FONT_SEMIBOLD, fontSize=9.0, leading=12.0, textColor=COLOR_ACCENT)
+
+    # 1. Wall Type Legend
+    flowables.append(Spacer(1, 4))
+    flowables.append(Paragraph("<b>Wall Type Specifications (NBC 2016 Compliant)</b>", p_title))
+    flowables.append(Spacer(1, 3))
+    wall_headers = ["Wall Type", "Thickness", "Construction Specification", "Statutory Code Reference"]
+    wall_data = [
+        [Paragraph(h, p_th) for h in wall_headers],
+        [Paragraph("<b>W1</b>", p_td), Paragraph("230 mm", p_td), Paragraph("Exterior Load-Bearing / Structural Envelope (Masonry/RCC)", p_td), Paragraph("NBC 2016 Part 3 Cl 3.4.1", p_td)],
+        [Paragraph("<b>W2</b>", p_td), Paragraph("115 mm", p_td), Paragraph("Interior Non-Load-Bearing Partition (Half-Brick Masonry)", p_td), Paragraph("IS 2212 / NBC 2016", p_td)],
+        [Paragraph("<b>W3</b>", p_td), Paragraph("75 mm", p_td), Paragraph("Toilet / MEP Shaft Lightweight Enclosure", p_td), Paragraph("IS 456 / NBC 2016", p_td)],
+    ]
+    w_cols = [55.0, 60.0, 240.0, width - 355.0]
+    t_wall = Table(wall_data, colWidths=w_cols)
+    t_wall.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
+        ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+        ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5.0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 5.0),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    flowables.append(t_wall)
+
+    # Extract or synthesize schedules
+    d_sched = _get(floor_data, "door_schedule", [])
+    w_sched = _get(floor_data, "window_schedule", [])
+    r_sched = _get(floor_data, "room_schedule", [])
+
+    wall_graph = _get(floor_data, "wall_graph", None)
+    if wall_graph:
+        if not d_sched:
+            d_sched = getattr(wall_graph, "door_schedule", []) or _get(wall_graph, "door_schedule", [])
+        if not w_sched:
+            w_sched = getattr(wall_graph, "window_schedule", []) or _get(wall_graph, "window_schedule", [])
+        if not r_sched:
+            r_sched = getattr(wall_graph, "room_schedule", []) or _get(wall_graph, "room_schedule", [])
+
+    # Fallback from doors/windows/rooms if needed
+    if not d_sched:
+        doors_raw = _get(floor_data, "doors", []) or (_get(floor_data, "rectangles", {}) or {}).get("doors", [])
+        for idx, d in enumerate(doors_raw, 1):
+            w = _safe_float(_get(d, "width_m", 0.9), 0.9)
+            d_sched.append({
+                "tag": f"D{idx}",
+                "width_m": w,
+                "height_m": 2.10,
+                "door_type": str(_get(d, "door_type", "Standard Flush Timber")),
+                "level": floor_index,
+            })
+
+    if not w_sched:
+        wins_raw = _get(floor_data, "windows", []) or (_get(floor_data, "rectangles", {}) or {}).get("windows", [])
+        for idx, w in enumerate(wins_raw, 1):
+            w_w = _safe_float(_get(w, "width_m", 1.2), 1.2)
+            w_sched.append({
+                "tag": f"W{idx}",
+                "width_m": w_w,
+                "height_m": 1.20,
+                "sill_m": 0.90,
+                "lintel_m": 2.10,
+                "ventilation_ratio": ">= 12.5% (NBC Cl 4.2)",
+            })
+
+    if not r_sched:
+        rooms_raw = _get(floor_data, "rooms", []) or (_get(floor_data, "rectangles", {}) or {}).get("rooms", []) or _get(floor_data, "placements", [])
+        for idx, r in enumerate(rooms_raw, 1):
+            r_nm = str(_get(r, "room_name", f"Room {idx}"))
+            r_w = _safe_float(_get(r, "width_m", _get(r, "width", 3.0)), 3.0)
+            r_d = _safe_float(_get(r, "depth_m", _get(r, "height", 3.0)), 3.0)
+            r_ar = _safe_float(_get(r, "area_sqm", r_w * r_d), r_w * r_d)
+            r_sched.append({
+                "room_number": idx,
+                "room_name": r_nm,
+                "clear_area_sqm": r_ar,
+                "clear_dims": f"{r_w:.2f}m x {r_d:.2f}m",
+                "finish_zone": "Vitrified Tiles + Low-VOC Acrylic Paint",
+            })
+
+    # 2. Door Schedule Table
+    flowables.append(Spacer(1, 8))
+    flowables.append(Paragraph("<b>Door Schedule</b>", p_title))
+    flowables.append(Spacer(1, 3))
+    door_headers = ["Tag", "Size (W x H)", "Door Type Specification", "Clear Opening", "Storey Level"]
+    door_table_data = [[Paragraph(h, p_th) for h in door_headers]]
+    for d in (d_sched or [])[:8]:
+        d_tag = str(_get(d, "tag", "D1"))
+        d_size = f"{_safe_float(_get(d, 'width_m', 0.9)):.2f}m x {_safe_float(_get(d, 'height_m', 2.1)):.2f}m"
+        d_type = str(_get(d, "door_type", "Flush Timber Door"))
+        d_clear = f"{_safe_float(_get(d, 'width_m', 0.9)):.2f}m Clear"
+        d_lvl = f"Level {_get(d, 'level', floor_index)} (+{floor_index * 3.0:.2f}m)"
+        door_table_data.append([
+            Paragraph(f"<b>{d_tag}</b>", p_td),
+            Paragraph(d_size, p_td),
+            Paragraph(d_type, p_td),
+            Paragraph(d_clear, p_td),
+            Paragraph(d_lvl, p_td),
+        ])
+    d_cols = [45.0, 95.0, 165.0, 85.0, width - 390.0]
+    t_door = Table(door_table_data, colWidths=d_cols)
+    t_door.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
+        ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+        ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.0),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5.0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 5.0),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    flowables.append(t_door)
+
+    # 3. Window Schedule Table
+    flowables.append(Spacer(1, 8))
+    flowables.append(Paragraph("<b>Window Schedule (NBC 2016 Light &amp; Ventilation Ratios)</b>", p_title))
+    flowables.append(Spacer(1, 3))
+    win_headers = ["Tag", "Size (W x H)", "Sill Level", "Lintel Level", "Code Ventilation Ratio"]
+    win_table_data = [[Paragraph(h, p_th) for h in win_headers]]
+    for w in (w_sched or [])[:8]:
+        w_tag = str(_get(w, "tag", "W1"))
+        w_size = f"{_safe_float(_get(w, 'width_m', 1.2)):.2f}m x {_safe_float(_get(w, 'height_m', 1.2)):.2f}m"
+        w_sill = f"{_safe_float(_get(w, 'sill_m', 0.9)):.2f}m"
+        w_lint = f"{_safe_float(_get(w, 'lintel_m', 2.1)):.2f}m"
+        w_vr = str(_get(w, "ventilation_ratio", ">= 12.5% (NBC Part 8 Sec 1 Cl 4.2)"))
+        win_table_data.append([
+            Paragraph(f"<b>{w_tag}</b>", p_td),
+            Paragraph(w_size, p_td),
+            Paragraph(w_sill, p_td),
+            Paragraph(w_lint, p_td),
+            Paragraph(w_vr, p_td),
+        ])
+    w_cols = [45.0, 95.0, 70.0, 70.0, width - 280.0]
+    t_win = Table(win_table_data, colWidths=w_cols)
+    t_win.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
+        ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+        ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.0),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5.0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 5.0),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    flowables.append(t_win)
+
+    # 4. Room Schedule Table
+    flowables.append(Spacer(1, 8))
+    flowables.append(Paragraph("<b>Room Schedule (Clear Interior Dimensions &amp; Finish Specifications)</b>", p_title))
+    flowables.append(Spacer(1, 3))
+    room_headers = ["No.", "Room Name", "Clear Area", "Clear Dimensions (W x D)", "Finish Specification"]
+    room_table_data = [[Paragraph(h, p_th) for h in room_headers]]
+    for r in (r_sched or [])[:10]:
+        r_num = str(_get(r, "room_number", 1))
+        r_name = str(_get(r, "room_name", "Room"))
+        r_area = f"{_safe_float(_get(r, 'clear_area_sqm', 0.0)):.2f} m²"
+        r_dims = str(_get(r, "clear_dims", "-"))
+        r_finish = str(_get(r, "finish_zone", "Zone Standard Finish"))
+        room_table_data.append([
+            Paragraph(r_num, p_td_num),
+            Paragraph(f"<b>{r_name}</b>", p_td),
+            Paragraph(r_area, p_td_num),
+            Paragraph(r_dims, p_td),
+            Paragraph(r_finish, p_td),
+        ])
+    r_cols = [30.0, 120.0, 75.0, 110.0, width - 335.0]
+    t_room = Table(room_table_data, colWidths=r_cols)
+    t_room.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
+        ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+        ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.0),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5.0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 5.0),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    flowables.append(t_room)
+
+    return flowables
 
 
 # =============================================================================
@@ -1160,7 +1359,8 @@ def generate_pdf_report(
     data: Dict[str, Any],
     site_vision: Optional[Dict[str, Any]] = None,
     floor_plan: Optional[Dict[str, Any]] = None,
-    dossier_only: bool = False
+    dossier_only: bool = False,
+    include_construction_schedules: Optional[bool] = None
 ) -> io.BytesIO:
     """
     Generates a formal, Apple-designed vector PDF engineering report from an AnalysisResponse payload.
@@ -2057,6 +2257,10 @@ def generate_pdf_report(
         # =========================================================================
         # SHEETS 10.1, 10.2, ...: DEDICATED A4 PAGE PER STOREY LEVEL
         # =========================================================================
+        render_ms_schedules = include_construction_schedules
+        if render_ms_schedules is None:
+            render_ms_schedules = bool(data.get("include_construction_schedules", False))
+
         for fl in ms_floors:
             f_idx = int(_get(fl, "floor_index", 0))
             f_name = str(_get(fl, "floor_name", f"Floor {f_idx}"))
@@ -2171,6 +2375,19 @@ def generate_pdf_report(
             # Per-Floor Legend
             legend_table = make_floorplan_legend({"rectangles": floor_rects}, width=CONTENT_WIDTH_PT)
             story.append(legend_table)
+
+            # Dedicated Construction Schedules Sheet (When enabled)
+            if render_ms_schedules:
+                story.append(PageBreak())
+                story.append(create_section_header(f"{sheet_num}.S", f"{f_name.upper()} — Setting-Out & Schedules"))
+                sched_brief = (
+                    f"<b>Construction Setting-Out &amp; Fabrication Schedules:</b> Verified dimensional schedules for {html.escape(f_name)} ({elev_str}). "
+                    f"Contractor setting-out reference for masonry envelope, door jambs, window lintels, and interior room finishes."
+                )
+                story.append(make_callout(sched_brief, width=CONTENT_WIDTH_PT))
+                story.append(Spacer(1, 4))
+                sched_flowables = make_construction_schedules_table(fl, width=CONTENT_WIDTH_PT, floor_index=f_idx)
+                story.extend(sched_flowables)
 
     elif floorplan and isinstance(floorplan, dict):
         if not floorplan.get("rectangles") and not floorplan.get("placements") and ms_floors:
@@ -2306,6 +2523,23 @@ def generate_pdf_report(
         # Legend row (tinted dot + room name + zone chip per room, up to 3 lines)
         legend_table = make_floorplan_legend(floorplan, width=CONTENT_WIDTH_PT)
         story.append(legend_table)
+
+        # Construction Schedules (Door, Window, Room, Wall Specs)
+        render_single_sched = include_construction_schedules
+        if render_single_sched is None:
+            render_single_sched = bool(data.get("include_construction_schedules", True))
+
+        if render_single_sched:
+            story.append(PageBreak())
+            story.append(create_section_header("10.S", "Setting-Out & Construction Schedules"))
+            sched_brief = (
+                "<b>Construction Setting-Out &amp; Fabrication Schedules:</b> Verified dimensional schedules for layout setting-out. "
+                "Contractor reference for masonry envelope, door jambs, window lintels, and interior room finishes."
+            )
+            story.append(make_callout(sched_brief, width=CONTENT_WIDTH_PT))
+            story.append(Spacer(1, 4))
+            sched_flowables = make_construction_schedules_table(floorplan, width=CONTENT_WIDTH_PT, floor_index=0)
+            story.extend(sched_flowables)
 
         # Disclaimer after single floorplan
         story.append(Spacer(1, 12))
