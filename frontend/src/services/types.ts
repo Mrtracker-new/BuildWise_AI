@@ -606,6 +606,8 @@ export interface FloorPlanResponse {
   room_program?: RoomProgram;
   multi_storey?: MultiStoreyBuildingModel;
   client_constraints?: ExtractedClientConstraints;
+  generated_at?: number;
+  generation_id?: string;
 }
 
 export interface ReportRequestPayload {

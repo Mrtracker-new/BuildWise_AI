@@ -122,8 +122,22 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
 }) => {
   const [userWidth, setUserWidth] = useState<number | null>(null);
   const [userDepth, setUserDepth] = useState<number | null>(null);
+  const [userFloors, setUserFloors] = useState<number | null>(null);
+
   const plotWidth = userWidth ?? defaultWidthM;
   const plotDepth = userDepth ?? defaultDepthM;
+  const activeFloors = userFloors ?? floors ?? 1;
+
+  // Sync user dimensions when default props change
+  useEffect(() => {
+    setUserWidth(null);
+    setUserDepth(null);
+  }, [defaultWidthM, defaultDepthM]);
+
+  // Sync user floors when default floors prop changes
+  useEffect(() => {
+    setUserFloors(null);
+  }, [floors]);
 
   const canonicalTypology = normalizeTypology(buildingTypology);
   const availableRooms = TYPOLOGY_ROOM_CATALOGS[canonicalTypology] || TYPOLOGY_ROOM_CATALOGS.T1_SINGLE_FAMILY;
@@ -131,21 +145,21 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   // Initialize selected rooms
   const [selectedRooms, setSelectedRooms] = useState<string[]>(() => {
     return availableRooms
-      .filter((r) => r.required || ((floors || 1) >= 2 && r.isCore))
+      .filter((r) => r.required || (activeFloors >= 2 && r.isCore))
       .map((r) => r.id);
   });
 
   const prevTypologyRef = useRef<string>(canonicalTypology);
-  const prevFloorsRef = useRef<number>(floors || 1);
+  const prevFloorsRef = useRef<number>(activeFloors);
 
   // Dynamically adapt selected rooms when Typology or Floors changes
   useEffect(() => {
     const isTypologyChanged = prevTypologyRef.current !== canonicalTypology;
-    const isFloorsChanged = prevFloorsRef.current !== (floors || 1);
+    const isFloorsChanged = prevFloorsRef.current !== activeFloors;
 
     if (isTypologyChanged || isFloorsChanged) {
       prevTypologyRef.current = canonicalTypology;
-      prevFloorsRef.current = floors || 1;
+      prevFloorsRef.current = activeFloors;
 
       const currentRoomIds = new Set(availableRooms.map((r) => r.id));
       const hasValidRooms = selectedRooms.some((r) => currentRoomIds.has(r));
@@ -153,22 +167,32 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       if (isTypologyChanged || !hasValidRooms) {
         // Switch to sensible default selection for the newly selected typology
         const defaultSelection = availableRooms
-          .filter((r) => r.required || ((floors || 1) >= 2 && r.isCore))
+          .filter((r) => r.required || (activeFloors >= 2 && r.isCore))
           .map((r) => r.id);
 
         setSelectedRooms(defaultSelection.length >= 3 ? defaultSelection : availableRooms.slice(0, 4).map((r) => r.id));
-      } else if (isFloorsChanged && (floors || 1) >= 2) {
-        // Auto-include vertical core rooms if multiple storeys requested
-        const coreRooms = availableRooms.filter((r) => r.isCore).map((r) => r.id);
-        setSelectedRooms((prev) => Array.from(new Set([...prev, ...coreRooms])));
+      } else if (isFloorsChanged) {
+        if (activeFloors >= 2) {
+          // Auto-include vertical core rooms if multiple storeys requested
+          const coreRooms = availableRooms.filter((r) => r.isCore).map((r) => r.id);
+          setSelectedRooms((prev) => Array.from(new Set([...prev, ...coreRooms])));
+        } else {
+          // Exclude vertical core rooms when switching back to single storey to kill cross-run bleed
+          const coreRoomIds = new Set(availableRooms.filter((r) => r.isCore).map((r) => r.id));
+          setSelectedRooms((prev) => {
+            const filtered = prev.filter((r) => !coreRoomIds.has(r));
+            return filtered.length >= 3 ? filtered : availableRooms.filter((r) => r.required).map((r) => r.id);
+          });
+        }
       }
     }
-  }, [canonicalTypology, floors, availableRooms, selectedRooms]);
+  }, [canonicalTypology, activeFloors, availableRooms, selectedRooms]);
 
   const [strictness, setStrictness] = useState<'high' | 'medium' | 'low'>('high');
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [localFloorPlan, setLocalFloorPlan] = useState<FloorPlanResponse | null>(null);
-  const floorPlan = localFloorPlan ?? activeFloorPlan;
+  // Canonical single source of truth: parent-managed activeFloorPlan if provided, falling back to local state
+  const floorPlan = activeFloorPlan !== undefined ? activeFloorPlan : localFloorPlan;
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Synchronize when parent activeFloorPlan changes
@@ -202,7 +226,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       vastu_strictness: strictness,
       building_typology: buildingTypology,
       quality_grade: qualityGrade,
-      floors: floors,
+      floors: activeFloors,
       built_up_area_sqft: builtUpAreaSqft,
       ground_coverage_ratio: groundCoverageRatio,
       client_notes: clientNotes,
@@ -215,9 +239,15 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
 
     try {
       const resp = await generateFloorPlan(req);
-      setLocalFloorPlan(resp);
+      const genId = 'GEN-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+      const freshPlan: FloorPlanResponse = {
+        ...resp,
+        generation_id: genId,
+        generated_at: Date.now(),
+      };
+      setLocalFloorPlan(freshPlan);
       if (onFloorPlanGenerated) {
-        onFloorPlanGenerated(resp);
+        onFloorPlanGenerated(freshPlan);
       }
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to generate floor plan.');
@@ -237,11 +267,13 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
           </h3>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          {floors && floors > 1 && (
-            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25">
-              {floors} STOREYS
-            </span>
-          )}
+          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+            activeFloors > 1
+              ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/25'
+              : 'bg-[var(--fill)] text-[var(--text-2)] border-[var(--hairline)]'
+          }`}>
+            {activeFloors === 1 ? '1 STOREY (G)' : `${activeFloors} STOREYS (G+${activeFloors - 1})`}
+          </span>
           {floorPlan && (
             <span className="px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-[var(--fill)] text-[var(--text-1)] capitalize shrink-0">
               {floorPlan.status}
@@ -258,8 +290,8 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         </div>
       )}
 
-      {/* Dimensions & Strictness */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[12px]">
+      {/* Dimensions, Storeys & Strictness */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-[12px]">
         {/* Plot Dimensions */}
         <div className="space-y-1 min-w-0">
           <label className="text-[12px] font-normal text-[var(--text-3)] block">
@@ -291,6 +323,35 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
               />
             </div>
           </div>
+        </div>
+
+        {/* Storeys / Levels Selector */}
+        <div className="space-y-1 min-w-0">
+          <label className="text-[12px] font-normal text-[var(--text-3)] block">
+            Storeys (Levels)
+          </label>
+          <div className="bg-[var(--fill)] rounded-[10px] p-[2px] grid grid-cols-4 gap-1">
+            {[1, 2, 3, 4].map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setUserFloors(f)}
+                className={`py-1 px-1 rounded-[8px] text-[11px] font-medium text-center transition-all ${
+                  activeFloors === f
+                    ? 'bg-[var(--segmented-active-bg)] shadow-[var(--segmented-active-shadow)] font-semibold'
+                    : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
+                }`}
+                style={{
+                  color: activeFloors === f ? 'var(--segmented-active-label)' : 'var(--text-2)',
+                }}
+              >
+                {f === 1 ? '1 (G)' : f === 2 ? '2 (G+1)' : f === 3 ? '3 (G+2)' : '4 (G+3)'}
+              </button>
+            ))}
+          </div>
+          <span className="text-[11px] text-[var(--text-3)] block leading-tight">
+            {activeFloors === 1 ? 'Single level ground plan.' : `${activeFloors} storeys with vertical core & MEP stack.`}
+          </span>
         </div>
 
         {/* Vastu Strictness: iOS Segmented Control */}
@@ -646,6 +707,9 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
             plotWidthM={plotWidth}
             plotDepthM={plotDepth}
             multiStorey={floorPlan.multi_storey}
+            generationTimestamp={floorPlan.generated_at}
+            generationId={floorPlan.generation_id}
+            storeys={activeFloors}
           />
         </div>
       )}

@@ -298,6 +298,16 @@ export const App: React.FC = () => {
 
   const handleRequestChange = (updated: Partial<AnalysisRequest>) => {
     setRequest((prev) => ({ ...prev, ...updated }));
+    if (
+      updated.floors !== undefined ||
+      updated.building_typology !== undefined ||
+      updated.built_up_area_sqft !== undefined ||
+      updated.ground_coverage_ratio !== undefined ||
+      updated.latitude !== undefined ||
+      updated.longitude !== undefined
+    ) {
+      setFloorPlanData(null);
+    }
   };
 
   // Run Satellite Vision Analysis
@@ -368,8 +378,6 @@ export const App: React.FC = () => {
     handleRunSiteVision(undefined, controller.signal);
 
     try {
-      const prevPlotArea = overridePlotArea ?? analysisData?.land_value?.plot_area_sqft;
-
       const { data: response, fallbackTriggered } = await generateFeasibilityReport(
         request,
         controller.signal
@@ -383,15 +391,8 @@ export const App: React.FC = () => {
 
       setAnalysisData(response);
 
-      // STALE-STATE RULE: Retain floorPlanData only when plot dimensions are unchanged
-      const newPlotArea = overridePlotArea ?? response.land_value?.plot_area_sqft;
-      if (
-        prevPlotArea != null &&
-        newPlotArea != null &&
-        Math.abs(prevPlotArea - newPlotArea) > 0.5
-      ) {
-        setFloorPlanData(null);
-      }
+      // Freshness guarantee: Clear any prior floorPlanData to eliminate stale blueprint retention and cross-run bleed
+      setFloorPlanData(null);
 
       setIsDrawerOpen(true);
       // Auto-open ReportSheet on success

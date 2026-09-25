@@ -11,6 +11,9 @@ interface BlueprintViewerProps {
   plotWidthM?: number;
   plotDepthM?: number;
   multiStorey?: MultiStoreyBuildingModel | null;
+  generationTimestamp?: number;
+  generationId?: string;
+  storeys?: number;
 }
 
 const ROOM_METADATA: Record<string, { dotColor: string; label: string; zone: string; isCore?: boolean }> = {
@@ -71,6 +74,9 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   plotWidthM,
   plotDepthM,
   multiStorey = null,
+  generationTimestamp,
+  generationId,
+  storeys,
 }) => {
   const [mode, setMode] = useState<'cad' | 'paper'>('cad');
   const [zoom, setZoom] = useState<number>(1.0);
@@ -93,26 +99,47 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   const modalDragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const modalPanStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  const isMultiStorey = Boolean(multiStorey && multiStorey.floors && multiStorey.floors.length > 0);
-  const currentFloor: SingleFloorPlanModel | null = isMultiStorey
-    ? multiStorey!.floors[activeFloorIndex] || multiStorey!.floors[0]
+  // A plan is multi-storey ONLY if multiStorey model has > 1 floor, exactly matching report_service.py:2050 (len(ms_floors) > 1)
+  const isMultiStorey = Boolean(
+    multiStorey &&
+    multiStorey.floors &&
+    multiStorey.floors.length > 1 &&
+    (storeys === undefined || storeys > 1)
+  );
+  const safeFloorIndex =
+    isMultiStorey && multiStorey?.floors && activeFloorIndex < multiStorey.floors.length
+      ? activeFloorIndex
+      : 0;
+  const currentFloor: SingleFloorPlanModel | null = isMultiStorey && multiStorey?.floors
+    ? multiStorey.floors[safeFloorIndex] || multiStorey.floors[0]
     : null;
 
-  // Ensure activeFloorIndex is within bounds if floors change
+  // Whenever generationId, generationTimestamp, or primary svgString changes: reset active floor, pan, and zoom
   useEffect(() => {
-    if (multiStorey?.floors && activeFloorIndex >= multiStorey.floors.length) {
-      setActiveFloorIndex(0);
-    }
-  }, [multiStorey, activeFloorIndex]);
+    setActiveFloorIndex(0);
+    setZoom(1.0);
+    setPan({ x: 0, y: 0 });
+    setModalZoom(1.0);
+    setModalPan({ x: 0, y: 0 });
+  }, [generationId, generationTimestamp, svgString]);
 
   const activeSvg = useMemo(() => {
-    if (currentFloor) {
+    if (isMultiStorey && currentFloor) {
       return mode === 'paper' && currentFloor.svg_blueprint_paper
         ? currentFloor.svg_blueprint_paper
         : currentFloor.svg_blueprint_cad;
     }
     return mode === 'paper' && svgPaperString ? svgPaperString : svgString;
-  }, [currentFloor, mode, svgPaperString, svgString]);
+  }, [isMultiStorey, currentFloor, mode, svgPaperString, svgString]);
+
+  // Derive robust generation key and visible freshness token (Requirement 6)
+  const effectiveGenId = generationId ?? (generationTimestamp ? `T${generationTimestamp}` : (svgString ? `${svgString.length}_${svgString.slice(0, 16).replace(/\W/g, '')}` : 'init'));
+  const storeysLabel = isMultiStorey ? `G+${(multiStorey?.total_storeys || storeys || 2) - 1}` : 'G';
+  const dimsLabel = `${(plotWidthM || 10).toFixed(1)}x${(plotDepthM || 12).toFixed(1)}m`;
+  const freshnessToken = `${effectiveGenId} | ${dimsLabel} | ${storeysLabel}`;
+
+  const containerKey = `blueprint-svg-${effectiveGenId}-${safeFloorIndex}-${mode}-${showGhostOverlay ? 'ghost' : 'noghost'}`;
+  const modalContainerKey = `modal-blueprint-svg-${effectiveGenId}-${safeFloorIndex}-${mode}-${showGhostOverlay ? 'ghost' : 'noghost'}`;
 
   // Sanitize raw SVG and inject paint-order halo style + dynamic ghost overlay styling
   const sanitizedSvg = useMemo(() => {
@@ -150,7 +177,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
 
   // Derive per-floor room placements for current floor legend
   const currentPlacements = useMemo(() => {
-    if (currentFloor && currentFloor.rooms && currentFloor.rooms.length > 0) {
+    if (isMultiStorey && currentFloor && currentFloor.rooms && currentFloor.rooms.length > 0) {
       return currentFloor.rooms.map((r) => ({
         room_id: r.room_id,
         room_name: r.room_name,
@@ -166,7 +193,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
       is_core: p.room_id === 'stairs' || p.room_id.includes('stair') || p.room_id.includes('lift'),
       area_sqm: p.area_sqm,
     }));
-  }, [currentFloor, placements]);
+  }, [isMultiStorey, currentFloor, placements]);
 
   const handleZoomIn = () => setZoom((z) => Math.min(2.5, +(z + 0.25).toFixed(2)));
   const handleZoomOut = () => setZoom((z) => Math.max(0.75, +(z - 0.25).toFixed(2)));
@@ -188,8 +215,11 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    const floorTag = currentFloor ? `_${currentFloor.floor_name.replace(/\s+/g, '_')}` : '';
-    link.download = `BuildWise_Blueprint${floorTag}_${plotWidthM || 10}x${plotDepthM || 12}m.svg`;
+    const floorTag = isMultiStorey && currentFloor ? `_${currentFloor.floor_name.replace(/\s+/g, '_')}` : '';
+    const cleanGen = effectiveGenId.replace(/[^a-zA-Z0-9_-]/g, '');
+    const wStr = (plotWidthM || 10).toFixed(1);
+    const dStr = (plotDepthM || 12).toFixed(1);
+    link.download = `BuildWise_Blueprint_${cleanGen}${floorTag}_${wStr}x${dStr}m.svg`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -292,7 +322,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
           <span>Levels:</span>
         </div>
         {multiStorey.floors.map((fl, idx) => {
-          const isActive = activeFloorIndex === idx;
+          const isActive = safeFloorIndex === idx;
           const elevation = (fl.floor_index * 3.0).toFixed(1);
           const isGround = fl.floor_index === 0;
           return (
@@ -335,23 +365,25 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
       id="blueprint-viewer-container"
       className="flex flex-col w-full min-w-0 rounded-[16px] vibrancy-panel border border-[var(--panel-border-color)] shadow-md overflow-hidden @container"
     >
-      {/* 1. Header: title + dimension chip + CAD/Storey chip */}
+      {/* 1. Header: title + visible freshness token + CAD/Storey chip */}
       <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 border-b border-[var(--hairline)]">
         <div className="flex items-center gap-2 min-w-0">
           <Icon name="blueprint" size={15} className="text-[var(--accent)] shrink-0" />
           <h3 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight truncate">
-            {currentFloor ? `${currentFloor.floor_name}` : 'Architectural Blueprint'}
+            {isMultiStorey && currentFloor ? `${currentFloor.floor_name}` : 'Architectural Blueprint'}
           </h3>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          {currentFloor && (
+          <span
+            data-testid="blueprint-freshness-token"
+            title="Blueprint Generation Freshness Token (Generation ID | Dimensions | Levels)"
+            className="font-mono text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-2 py-0.5 rounded-[6px] whitespace-nowrap border border-[var(--accent)]/20"
+          >
+            {freshnessToken}
+          </span>
+          {isMultiStorey && currentFloor && (
             <span className="font-mono text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-2 py-0.5 rounded-[6px] whitespace-nowrap">
               +{(currentFloor.floor_index * 3.0).toFixed(1)}m LVL
-            </span>
-          )}
-          {plotWidthM && plotDepthM && (
-            <span className="font-mono text-[11px] font-medium text-[var(--text-1)] bg-[var(--fill)] px-2 py-0.5 rounded-[6px] whitespace-nowrap">
-              {plotWidthM.toFixed(1)}m × {plotDepthM.toFixed(1)}m
             </span>
           )}
           <span className="text-[10px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-1.5 py-0.5 rounded-[6px] uppercase tracking-wider whitespace-nowrap">
@@ -416,9 +448,9 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
               <Icon
                 name="layers"
                 size={13}
-                className={showGhostOverlay && activeFloorIndex > 0 ? 'text-amber-500 animate-pulse' : ''}
+                className={showGhostOverlay && safeFloorIndex > 0 ? 'text-amber-500 animate-pulse' : ''}
               />
-              <span>{activeFloorIndex === 0 ? 'F0 Anchor' : showGhostOverlay ? 'Ghost Core: ON' : 'Ghost Core: OFF'}</span>
+              <span>{safeFloorIndex === 0 ? 'F0 Anchor' : showGhostOverlay ? 'Ghost Core: ON' : 'Ghost Core: OFF'}</span>
             </button>
           )}
         </div>
@@ -526,7 +558,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
           onMouseUp={handleMouseUp}
         >
           <div
-            key={`blueprint-svg-${activeFloorIndex}-${mode}-${sanitizedSvg.length}-${plotWidthM}-${plotDepthM}`}
+            key={containerKey}
             className="relative flex items-center justify-center max-w-full max-h-full drop-shadow-md"
             dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
           />
@@ -606,12 +638,20 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                     <Icon name="blueprint" size={16} />
                   </div>
                   <div className="min-w-0">
-                    <h3 className="text-[16px] font-semibold text-[var(--text-1)] tracking-tight">
-                      {currentFloor ? `${currentFloor.floor_name}` : 'Architectural Floor Plan'}
-                    </h3>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-[16px] font-semibold text-[var(--text-1)] tracking-tight">
+                        {isMultiStorey && currentFloor ? `${currentFloor.floor_name}` : 'Architectural Floor Plan'}
+                      </h3>
+                      <span
+                        data-testid="modal-blueprint-freshness-token"
+                        className="font-mono text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-2 py-0.5 rounded-[6px] whitespace-nowrap border border-[var(--accent)]/20"
+                      >
+                        {freshnessToken}
+                      </span>
+                    </div>
                     <p className="text-[12px] text-[var(--text-2)] truncate">
-                      CAD 2D Drafting &bull; {plotWidthM || 10}m × {plotDepthM || 12}m Grid
-                      {currentFloor && ` • Elevation +${(currentFloor.floor_index * 3.0).toFixed(1)}m`}
+                      {isMultiStorey ? `Multi-Storey CAD Drafting (${multiStorey?.total_storeys} Levels)` : 'CAD 2D Drafting (Single Level Ground)'} &bull; {(plotWidthM || 10).toFixed(1)}m × {(plotDepthM || 12).toFixed(1)}m Grid
+                      {isMultiStorey && currentFloor && ` • Elevation +${(currentFloor.floor_index * 3.0).toFixed(1)}m`}
                     </p>
                   </div>
                 </div>
@@ -648,16 +688,16 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                     <button
                       type="button"
                       onClick={() => setShowGhostOverlay((v) => !v)}
-                      disabled={activeFloorIndex === 0}
+                      disabled={safeFloorIndex === 0}
                       title={
-                        activeFloorIndex === 0
+                        safeFloorIndex === 0
                           ? 'Ground Floor is the primary Anchor Core'
                           : showGhostOverlay
                           ? 'Hide F0 Core Ghost Overlay'
                           : 'Show F0 Core Ghost Overlay'
                       }
                       className={`h-8 px-2.5 rounded-[8px] text-[11px] font-semibold flex items-center gap-1.5 transition-all cursor-pointer mr-1 select-none ${
-                        activeFloorIndex === 0
+                        safeFloorIndex === 0
                           ? 'opacity-50 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)]'
                           : showGhostOverlay
                           ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30'
@@ -667,9 +707,9 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                       <Icon
                         name="layers"
                         size={13}
-                        className={showGhostOverlay && activeFloorIndex > 0 ? 'text-amber-500 animate-pulse' : ''}
+                        className={showGhostOverlay && safeFloorIndex > 0 ? 'text-amber-500 animate-pulse' : ''}
                       />
-                      <span>{activeFloorIndex === 0 ? 'F0 Anchor' : showGhostOverlay ? 'Ghost: ON' : 'Ghost: OFF'}</span>
+                      <span>{safeFloorIndex === 0 ? 'F0 Anchor' : showGhostOverlay ? 'Ghost: ON' : 'Ghost: OFF'}</span>
                     </button>
                   )}
 
@@ -771,7 +811,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                   }}
                 >
                   <div
-                    key={`modal-blueprint-svg-${activeFloorIndex}-${mode}-${sanitizedSvg.length}-${plotWidthM}-${plotDepthM}`}
+                    key={modalContainerKey}
                     className="relative flex items-center justify-center max-w-full max-h-full drop-shadow-xl"
                     dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
                   />
