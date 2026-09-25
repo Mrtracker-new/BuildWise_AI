@@ -549,6 +549,29 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                 </details>
               );
             })()}
+
+            {/* Solver Warnings Banner */}
+            {floorPlan.warnings && floorPlan.warnings.length > 0 && (
+              <div className="mt-2.5 p-3 rounded-[10px] bg-amber-500/10 border border-amber-500/25 text-amber-800 dark:text-amber-200 space-y-1">
+                <div className="flex items-center gap-1.5 font-semibold text-[12px]">
+                  <Icon name="alert-triangle" size={13} className="shrink-0" />
+                  <span>Engineering &amp; Degradation Advisories ({floorPlan.warnings.length})</span>
+                </div>
+                <ul className="text-[11px] space-y-0.5 pl-4 list-disc text-amber-900/80 dark:text-amber-100/80">
+                  {floorPlan.warnings.map((w, idx) => (
+                    <li key={idx} className="leading-snug">{w}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Critic Notes */}
+            {floorPlan.qa?.critic_notes && floorPlan.qa.critic_notes.length > 0 && (
+              <div className="mt-2 p-2.5 rounded-[10px] bg-blue-500/10 border border-blue-500/25 text-[11px] text-blue-800 dark:text-blue-200">
+                <span className="font-semibold mr-1">Architect Critic Notes:</span>
+                <span>{floorPlan.qa.critic_notes.join('; ')}</span>
+              </div>
+            )}
           </div>
 
           {/* Key-Value Metrics Rows */}
