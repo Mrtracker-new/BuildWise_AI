@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import ReactDOM from 'react-dom';
 import type { RoomPlacement, MultiStoreyBuildingModel, SingleFloorPlanModel } from '../services/types';
+import { downloadFloorplanDossier } from '../services/api';
 import { Icon } from './Icon';
 
 interface BlueprintViewerProps {
@@ -207,31 +208,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
       if (multiStorey) {
         payload.multi_storey = multiStorey;
       }
-
-      const response = await fetch('/api/generate-floorplan?format=pdf', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Failed to generate PDF dossier: ${response.status} ${errText}`);
-      }
-
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      const typTag = multiStorey ? `_${multiStorey.building_typology}` : '';
-      const floorsTag = multiStorey ? `_${multiStorey.total_storeys}F` : '';
-      link.download = `BuildWise_Architectural_Dossier${typTag}${floorsTag}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      await downloadFloorplanDossier(payload);
     } catch (error) {
       console.error('Error exporting PDF dossier:', error);
       alert('Failed to export PDF dossier. Please try again.');

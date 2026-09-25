@@ -8,7 +8,42 @@ import type {
   ExtractedClientConstraints,
 } from './types';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+export async function downloadFloorplanDossier(
+  payload: Record<string, any>
+): Promise<void> {
+  const resp = await fetch(`${API_BASE_URL}/api/generate-floorplan?format=pdf`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!resp.ok) {
+    let errorDetail = `PDF dossier export failed with status: ${resp.status}`;
+    try {
+      const errData = await resp.json();
+      if (errData?.detail) errorDetail = errData.detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(errorDetail);
+  }
+
+  const blob = await resp.blob();
+  const downloadUrl = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = downloadUrl;
+  const typTag = payload.building_typology ? `_${payload.building_typology}` : '';
+  const floorsTag = payload.floors ? `_${payload.floors}F` : '';
+  link.download = `BuildWise_Architectural_Dossier${typTag}${floorsTag}.pdf`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => window.URL.revokeObjectURL(downloadUrl), 1000);
+}
 
 export async function submitSiteVision(
   request: SiteVisionRequest,
