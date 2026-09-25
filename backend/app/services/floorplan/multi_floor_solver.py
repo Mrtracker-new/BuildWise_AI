@@ -184,15 +184,14 @@ class VerticalStackInvariantManager:
         env_w = self.env["width"]
         env_d = self.env["depth"]
 
-        # 1. Staircase Core Sizing (NBC 2016 Part 3 & 4)
-        if self.degradation_level >= 4 or env_w < 7.0 or env_d < 7.0:
-            stair_w = 2.0  # Compact 0.90m flight + 0.20m well
-            stair_d = 3.0  # Compact 1.0m landings
-            landing_d = 1.0
-        else:
-            stair_w = 2.4  # Standard 1.05m flight + 0.30m well
-            stair_d = 3.6  # Standard 1.20m landings
-            landing_d = 1.2
+        # 1. Staircase Core Sizing (NBC 2016 Part 3 & 4 - Computed Stair Geometry)
+        from app.services.floorplan.wall_graph import compute_stair_geometry
+        stair_geom = compute_stair_geometry(floor_height_m=3.0, typology=self.typology)
+        stair_w = stair_geom.stair_box_width_m
+        stair_d = stair_geom.stair_box_depth_m
+        landing_d = stair_geom.landing_depth_m
+        tread_mm = int(round(stair_geom.tread_depth_m * 1000.0))
+        riser_mm = int(round(stair_geom.riser_height_m * 1000.0))
 
         # 2. Core Placement (Vastu & Spatial Circulation Invariant)
         # Optimal Vastu zones for heavy vertical load: South (S), West (W), South-West (SW).
@@ -210,8 +209,8 @@ class VerticalStackInvariantManager:
             width_m=round(stair_w, 2),
             depth_m=round(stair_d, 2),
             landing_depth_m=landing_d,
-            tread_mm=250,
-            riser_mm=175,
+            tread_mm=tread_mm,
+            riser_mm=riser_mm,
             continuous_across_floors=list(range(self.total_storeys)),
         )
         self.vertical_cores.append(stair_spec)
@@ -618,6 +617,18 @@ class MultiFloorSolver:
         built_up_m2 = round(sum(r.area_sqm for r in rooms), 2)
         carpet_m2 = round(sum(r.area_sqm for r in rooms if r.zone_category not in ("circulation", "service_core")), 2)
 
+        # 7. Construct Constructible Wall-Graph Model & Schedules
+        from app.services.floorplan.wall_graph import build_constructible_wall_graph
+        wall_graph_obj = build_constructible_wall_graph(
+            floor_index=floor_index,
+            envelope=envelope,
+            raw_rooms=rooms,
+            typology=self.typology,
+            floor_to_floor_height_m=3.0,
+            doors_in=doors,
+            windows_in=windows,
+        )
+
         return SingleFloorPlanModel(
             floor_index=floor_index,
             floor_name=floor_name,
@@ -635,14 +646,21 @@ class MultiFloorSolver:
                 floor_index, floor_name, rooms, doors, windows, envelope,
                 ground_cores=invariant_mgr.vertical_cores,
                 ground_ducts=invariant_mgr.duct_shafts,
-                theme="cad"
+                theme="cad",
+                wall_graph=wall_graph_obj,
             ),
             svg_blueprint_paper=self._generate_floor_svg(
                 floor_index, floor_name, rooms, doors, windows, envelope,
                 ground_cores=invariant_mgr.vertical_cores,
                 ground_ducts=invariant_mgr.duct_shafts,
-                theme="paper"
+                theme="paper",
+                wall_graph=wall_graph_obj,
             ),
+            wall_graph=wall_graph_obj.to_dict(),
+            door_schedule=wall_graph_obj.door_schedule,
+            window_schedule=wall_graph_obj.window_schedule,
+            room_schedule=wall_graph_obj.room_schedule,
+            stair_geometry=wall_graph_obj.stair_geometry.to_dict() if wall_graph_obj.stair_geometry else None,
         )
 
     def _generate_doors_and_windows(
@@ -784,7 +802,8 @@ class MultiFloorSolver:
         envelope: Dict[str, float],
         ground_cores: Optional[List[VerticalCoreSpec]] = None,
         ground_ducts: Optional[List[DuctShaftSpec]] = None,
-        theme: str = "cad"
+        theme: str = "cad",
+        wall_graph: Optional[Any] = None,
     ) -> str:
         """
         Generates standalone W3C compliant SVG string for an individual floor plate
@@ -803,6 +822,7 @@ class MultiFloorSolver:
             theme=theme,
             include_ghost_overlay=(floor_index > 0),
             building_typology=self.typology,
+            wall_graph=wall_graph,
         )
 
 
@@ -817,3 +837,6 @@ def generate_multi_floor_building(
     """Convenience facade to instantiate MultiFloorSolver and synthesize building."""
     solver = MultiFloorSolver(request=request, ai_provider=ai_provider)
     return solver.solve()
+
+solve_multi_floor_plan = generate_multi_floor_building
+

@@ -124,6 +124,11 @@ class SingleFloorPlanModel(BaseModel):
     carpet_area_sqm: float = 0.0
     svg_blueprint_cad: str = ""
     svg_blueprint_paper: str = ""
+    wall_graph: Optional[Dict[str, Any]] = None
+    door_schedule: List[Dict[str, Any]] = Field(default_factory=list)
+    window_schedule: List[Dict[str, Any]] = Field(default_factory=list)
+    room_schedule: List[Dict[str, Any]] = Field(default_factory=list)
+    stair_geometry: Optional[Dict[str, Any]] = None
 
 
 class MultiStoreyBuildingModel(BaseModel):

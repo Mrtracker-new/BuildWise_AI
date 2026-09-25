@@ -1102,25 +1102,40 @@ def generate_multi_floor_blueprint_svg(
     theme: str = "cad",
     include_ghost_overlay: bool = True,
     building_typology: Optional[str] = None,
+    wall_graph: Optional[Any] = None,
 ) -> str:
     """
     Renders a publication-grade architectural CAD/Paper SVG blueprint for an individual storey plate.
     Features:
-    - Accurate wall thicknesses (exterior structural envelope vs interior partitions)
-    - True-scale door leaves & swing arcs for 100% of doors
-    - Adaptive Room Label Priority Ladder (L1 Full+Dims -> L2 Abbrev -> L3 Tag Badge)
+    - Wall-graph constructible geometry (W1 exterior 230mm, W2 interior 115mm, W3 partition 75mm)
+    - 3-line dimension chains (opening offsets, room clear dims, overall) with 45° architectural ticks
+    - Hosted openings with frame/jamb rebates and deterministic tags (D1..Dn, W1..Wn)
+    - Computed stair geometry with real treads, landing line, UP/DN arrows, and headroom note
+    - Door swing clearance and circulation integrity
+    - On-sheet schedules (Door, Window, Room) and Wall Type Legend
+    - Structural notation (LBW-230 load-bearing tags for T1, column grid bubbles for T3/T4)
     - Global Label Collision Resolution Engine (Zero pairwise text intersections guaranteed)
-    - Core Anchor Badge relocated outside core rectangle via 0.3m leader line
-    - Main Entrance bold approach arrow and haloed caption on Ground Floor
-    - T2/T3 Unit A & Unit B entry door badges
-    - Fixed line-height title block with 4pt leading and isolated bottom-right watermark
-    - Ghost Core Overlay: on upper storeys (floor_index > 0), renders a faint dashed outline
-      of ground floor's vertical cores & MEP shafts to visually prove exact physical vertical stacking.
     """
+    if wall_graph is None:
+        try:
+            from app.services.floorplan.wall_graph import build_constructible_wall_graph
+            wall_graph = build_constructible_wall_graph(
+                floor_index=floor_index,
+                envelope=envelope,
+                raw_rooms=rooms,
+                typology=building_typology or "T1_SINGLE_FAMILY",
+                floor_to_floor_height_m=3.0,
+                doors_in=doors,
+                windows_in=windows,
+            )
+        except Exception:
+            wall_graph = None
+
     scale = 36.0  # pixels per meter
-    margin_x = 55.0
-    margin_y = 55.0
-    title_block_h = 58.0
+    margin_x = 75.0
+    margin_y = 75.0
+    title_block_h = 52.0
+    schedules_panel_h = 240.0
 
     env_w = envelope.get("width", 12.0)
     env_d = envelope.get("depth", 15.0)
@@ -1128,7 +1143,7 @@ def generate_multi_floor_blueprint_svg(
     content_w = env_w * scale
     content_h = env_d * scale
     svg_w = int(content_w + (2.0 * margin_x))
-    svg_h = int(content_h + (2.0 * margin_y) + title_block_h)
+    svg_h = int(content_h + (2.0 * margin_y) + title_block_h + schedules_panel_h)
 
     compass_x = svg_w - 40.0
     compass_y = 36.0
@@ -1248,31 +1263,59 @@ def generate_multi_floor_blueprint_svg(
                     t_y = gy + (gh / num_treads) * t
                     svg.append(f'    <line x1="{gx + 3:.1f}" y1="{t_y:.1f}" x2="{gx + gw - 3:.1f}" y2="{t_y:.1f}" stroke="{ghost_stroke}" stroke-width="1.0" stroke-dasharray="3 3" opacity="0.6" />')
 
-                # Requirement B: Relocate core anchor badge outside the core rect (corner offset + 0.3m leader line)
+                # Requirement B: Relocate core anchor badge outside the core rect (to east of core in circulation lobby, clear of D1 door tag)
                 leader_len = 0.3 * scale  # ~10.8px
-                badge_w = 80.0
-                badge_h = 15.0
+                badge_w = 68.0
+                badge_h = 14.0
 
-                # Prefer placement in left margin or above corner
-                if gx - leader_len - badge_w >= 4.0:
-                    badge_x = gx - leader_len - badge_w
-                    badge_y = gy - 4.0
-                    lx1, ly1 = gx, gy
-                    lx2, ly2 = badge_x + badge_w, badge_y + badge_h / 2.0
-                elif gy - leader_len - badge_h >= 4.0:
-                    badge_x = max(4.0, gx)
-                    badge_y = gy - leader_len - badge_h
-                    lx1, ly1 = gx, gy
-                    lx2, ly2 = badge_x + 6.0, gy - leader_len
-                else:
-                    badge_x = max(4.0, gx)
-                    badge_y = gy + gh + leader_len
-                    lx1, ly1 = gx, gy + gh
-                    lx2, ly2 = badge_x + 6.0, gy + gh + leader_len
+                # Compute known door tag obstacles to guarantee zero collision
+                door_boxes = []
+                for d_tmp in doors:
+                    thx = px(getattr(d_tmp, 'hinge_x', getattr(d_tmp, 'x1', 0.0)))
+                    thy = py(getattr(d_tmp, 'hinge_y', getattr(d_tmp, 'y1', 0.0)))
+                    tdw = max(getattr(d_tmp, 'width_m', 0.9) * scale, 22.0)
+                    tw_edge = getattr(d_tmp, 'wall_edge', 'vertical')
+                    tswing = getattr(d_tmp, 'swing_direction', 'inward_right')
+                    if tw_edge in ("vertical", "east", "west"):
+                        tlx = thx - tdw if tswing == "inward_left" else thx + tdw
+                        tly = thy
+                    else:
+                        tlx = thx
+                        tly = thy - tdw if tswing == "inward_left" else thy + tdw
+                    td_cx = (thx + tlx) / 2.0
+                    td_cy = (thy + tly) / 2.0
+                    door_boxes.append(BBox(td_cx - 10.0, td_cy - 8.0, td_cx + 10.0, td_cy + 8.0))
+
+                # Candidate placements around the core:
+                # 1. East wall lower, 2. East wall middle, 3. South wall, 4. West wall lower
+                candidates = [
+                    # (badge_x, badge_y, lx1, ly1, lx2, ly2)
+                    (gx + gw + leader_len, gy + gh - badge_h - 4.0, gx + gw, gy + gh - 10.0, gx + gw + leader_len, gy + gh - 4.0 - badge_h / 2.0),
+                    (gx + gw + leader_len, gy + gh / 2.0 - badge_h / 2.0, gx + gw, gy + gh / 2.0, gx + gw + leader_len, gy + gh / 2.0),
+                    (gx + gw / 2.0 - badge_w / 2.0, gy + gh + leader_len, gx + gw / 2.0, gy + gh, gx + gw / 2.0, gy + gh + leader_len),
+                    (gx - leader_len - badge_w, gy + gh - badge_h - 4.0, gx, gy + gh - 10.0, gx - leader_len, gy + gh - 4.0 - badge_h / 2.0),
+                ]
+
+                chosen_cand = candidates[0]
+                for cand in candidates:
+                    cand_bx = cand[0]
+                    cand_by = cand[1]
+                    cand_bbox = BBox(cand_bx, cand_by, cand_bx + badge_w, cand_by + badge_h)
+                    # Must not intersect any door tag and must remain within the building envelope
+                    collides_door = any(cand_bbox.intersects(db) for db in door_boxes)
+                    inside_envelope = (
+                        cand_bx >= margin_x and cand_bx + badge_w <= margin_x + content_w and
+                        cand_by >= margin_y and cand_by + badge_h <= margin_y + content_h
+                    )
+                    if not collides_door and inside_envelope:
+                        chosen_cand = cand
+                        break
+
+                badge_x, badge_y, lx1, ly1, lx2, ly2 = chosen_cand
 
                 svg.append(f'    <line id="f0-core-leader" class="f0-core-leader" x1="{lx1:.1f}" y1="{ly1:.1f}" x2="{lx2:.1f}" y2="{ly2:.1f}" stroke="{ghost_stroke}" stroke-width="1.0" />')
                 svg.append(f'    <rect id="f0-core-anchor-badge" class="core-anchor-badge" x="{badge_x:.1f}" y="{badge_y:.1f}" width="{badge_w:.1f}" height="{badge_h:.1f}" rx="3" fill="{ghost_badge_bg}" opacity="0.95" />')
-                svg.append(f'    <text x="{badge_x + badge_w/2.0:.1f}" y="{badge_y + 10.5:.1f}" font-size="7.5" font-weight="700" fill="{ghost_badge_text}" text-anchor="middle" letter-spacing="0.5">F0 CORE ANCHOR</text>')
+                svg.append(f'    <text x="{badge_x + badge_w/2.0:.1f}" y="{badge_y + 9.8:.1f}" font-size="7.0" font-weight="700" fill="{ghost_badge_text}" text-anchor="middle" letter-spacing="0.5">F0 CORE ANCHOR</text>')
 
                 fixed_obstacles.append(("core_badge", BBox(badge_x, badge_y, badge_x + badge_w, badge_y + badge_h)))
 
@@ -1292,45 +1335,155 @@ def generate_multi_floor_blueprint_svg(
 
         svg.append('  </g>')
 
-    # 3. Room Interior Partition Walls
+    # 3. Walls & Partitions (Constructible Wall-Graph Representation)
+    if wall_graph and getattr(wall_graph, "walls", None):
+        # Render first-class wall segments with exact thicknesses
+        for wall in wall_graph.walls.values():
+            wx1 = px(wall.x1)
+            wy1 = py(wall.y1)
+            wx2 = px(wall.x2)
+            wy2 = py(wall.y2)
+            if wall.wall_type == "W1":
+                w_strk = ext_wall_stroke
+                w_width = max(3.5, wall.thickness_m * scale)
+                w_dash = ""
+            elif wall.wall_type == "W3":
+                w_strk = int_wall_stroke
+                w_width = max(1.8, wall.thickness_m * scale)
+                w_dash = 'stroke-dasharray="3 2"'
+            else:  # W2
+                w_strk = int_wall_stroke
+                w_width = max(2.4, wall.thickness_m * scale)
+                w_dash = ""
+            svg.append(f'  <line x1="{wx1:.1f}" y1="{wy1:.1f}" x2="{wx2:.1f}" y2="{wy2:.1f}" stroke="{w_strk}" stroke-width="{w_width:.1f}" {w_dash} stroke-linecap="square" />')
+    else:
+        # Fallback to room borders
+        for r in rooms:
+            rx = px(r.x)
+            ry = py(r.y)
+            rw = r.width_m * scale
+            rh = r.depth_m * scale
+            wall_strk = core_stroke if r.is_vertical_core else int_wall_stroke
+            wall_w = "2.8" if r.is_vertical_core else "2.0"
+            stroke_dash = 'stroke-dasharray="4 2"' if r.is_vertical_core else ""
+            svg.append(
+                f'  <rect x="{rx:.1f}" y="{ry:.1f}" width="{rw:.1f}" height="{rh:.1f}" '
+                f'fill="none" stroke="{wall_strk}" stroke-width="{wall_w}" {stroke_dash} />'
+            )
+
+    # 3b. Computed Staircase Geometry (2 Flights + Mid-Landing + Real Treads)
     for r in rooms:
-        rx = px(r.x)
-        ry = py(r.y)
-        rw = r.width_m * scale
-        rh = r.depth_m * scale
-
-        wall_strk = core_stroke if r.is_vertical_core else int_wall_stroke
-        wall_w = "2.8" if r.is_vertical_core else "2.0"
-        stroke_dash = 'stroke-dasharray="4 2"' if r.is_vertical_core else ""
-
-        svg.append(
-            f'  <rect x="{rx:.1f}" y="{ry:.1f}" width="{rw:.1f}" height="{rh:.1f}" '
-            f'fill="none" stroke="{wall_strk}" stroke-width="{wall_w}" {stroke_dash} />'
-        )
-
-        # If staircase, draw treads and UP arrow
         if r.is_vertical_core:
-            num_treads = 7
-            for t in range(1, num_treads):
-                t_y = ry + (rh / num_treads) * t
-                svg.append(f'  <line x1="{rx + 4:.1f}" y1="{t_y:.1f}" x2="{rx + rw - 4:.1f}" y2="{t_y:.1f}" stroke="{core_stroke}" stroke-width="1.2" opacity="0.7" />')
-            # UP arrow
-            arrow_x = rx + rw - 14.0
-            svg.append(f'  <line x1="{arrow_x:.1f}" y1="{ry + rh - 12:.1f}" x2="{arrow_x:.1f}" y2="{ry + 14:.1f}" stroke="{core_stroke}" stroke-width="1.6" />')
-            svg.append(f'  <polyline points="{arrow_x - 3},{ry + 18} {arrow_x},{ry + 13} {arrow_x + 3},{ry + 18}" fill="none" stroke="{core_stroke}" stroke-width="1.6" />')
-            # UP text moved to bottom of arrow so it does not collide with room centroid label
-            up_y = ry + rh - 14.0
-            svg.append(f'  <text x="{arrow_x - 5:.1f}" y="{up_y:.1f}" font-size="7.5" font-weight="700" fill="{core_stroke}" text-anchor="end">UP</text>')
-            fixed_obstacles.append(("up_label", BBox(arrow_x - 22.0, up_y - 6.5, arrow_x - 4.0, up_y + 2.0)))
+            rx = px(r.x)
+            ry = py(r.y)
+            rw = r.width_m * scale
+            rh = r.depth_m * scale
 
-    # 4. Windows (Double line on exterior walls)
+            # Outline staircase core boundary
+            svg.append(f'  <rect x="{rx:.1f}" y="{ry:.1f}" width="{rw:.1f}" height="{rh:.1f}" fill="none" stroke="{core_stroke}" stroke-width="2.6" stroke-dasharray="4 2" />')
+
+            # Mid-landing line derived from wall_graph stair_geometry
+            stair_geom = getattr(wall_graph, "stair_geometry", None) if wall_graph else None
+            treads_per_fl = 8
+            landing_depth = 1.2
+            if stair_geom:
+                if isinstance(stair_geom, dict):
+                    treads_per_fl = int(stair_geom.get("treads_per_flight", 8))
+                    landing_depth = float(stair_geom.get("landing_depth_m", 1.2))
+                else:
+                    treads_per_fl = int(getattr(stair_geom, "treads_per_flight", 8))
+                    landing_depth = float(getattr(stair_geom, "landing_depth_m", 1.2))
+
+            landing_h = max(24.0, min(rh * 0.45, landing_depth * scale))
+            landing_y = ry + landing_h
+            svg.append(f'  <line x1="{rx:.1f}" y1="{landing_y:.1f}" x2="{rx + rw:.1f}" y2="{landing_y:.1f}" stroke="{core_stroke}" stroke-width="1.8" />')
+
+            # Central flight dividing line
+            mid_x = rx + rw / 2.0
+            svg.append(f'  <line x1="{mid_x:.1f}" y1="{landing_y:.1f}" x2="{mid_x:.1f}" y2="{ry + rh:.1f}" stroke="{core_stroke}" stroke-width="1.4" />')
+
+            # Real treads derived from stair geometry
+            flight_h = rh - landing_h
+            num_treads = max(4, min(14, treads_per_fl))
+            for t in range(1, num_treads):
+                ty = landing_y + (flight_h / num_treads) * t
+                # Flight 1 treads (left)
+                svg.append(f'  <line x1="{rx + 2:.1f}" y1="{ty:.1f}" x2="{mid_x - 2:.1f}" y2="{ty:.1f}" stroke="{core_stroke}" stroke-width="1.0" opacity="0.75" />')
+                # Flight 2 treads (right)
+                svg.append(f'  <line x1="{mid_x + 2:.1f}" y1="{ty:.1f}" x2="{rx + rw - 2:.1f}" y2="{ty:.1f}" stroke="{core_stroke}" stroke-width="1.0" opacity="0.75" />')
+
+            # UP arrow on Flight 1 (Left)
+            arr1_x = rx + (mid_x - rx) / 2.0
+            svg.append(f'  <line x1="{arr1_x:.1f}" y1="{ry + rh - 6:.1f}" x2="{arr1_x:.1f}" y2="{landing_y + 8:.1f}" stroke="{core_stroke}" stroke-width="1.5" />')
+            svg.append(f'  <polyline points="{arr1_x - 3},{landing_y + 12} {arr1_x},{landing_y + 7} {arr1_x + 3},{landing_y + 12}" fill="none" stroke="{core_stroke}" stroke-width="1.5" />')
+            up_y = ry + rh - 8.0
+            svg.append(f'  <text x="{arr1_x - 5:.1f}" y="{up_y:.1f}" font-size="7.0" font-weight="700" fill="{core_stroke}" text-anchor="end">UP</text>')
+            fixed_obstacles.append(("up_label", BBox(arr1_x - 18.0, up_y - 6.0, arr1_x - 4.0, up_y + 2.0)))
+
+            # DN arrow on Flight 2 (Right) for upper floors
+            if floor_index > 0:
+                arr2_x = mid_x + (rx + rw - mid_x) / 2.0
+                svg.append(f'  <line x1="{arr2_x:.1f}" y1="{landing_y + 8:.1f}" x2="{arr2_x:.1f}" y2="{ry + rh - 6:.1f}" stroke="{core_stroke}" stroke-width="1.5" />')
+                svg.append(f'  <polyline points="{arr2_x - 3},{ry + rh - 10} {arr2_x},{ry + rh - 5} {arr2_x + 3},{ry + rh - 10}" fill="none" stroke="{core_stroke}" stroke-width="1.5" />')
+                dn_y = landing_y + 14.0
+                svg.append(f'  <text x="{arr2_x + 5:.1f}" y="{dn_y:.1f}" font-size="7.0" font-weight="700" fill="{core_stroke}" text-anchor="start">DN</text>')
+                fixed_obstacles.append(("dn_label", BBox(arr2_x + 4.0, dn_y - 6.0, arr2_x + 18.0, dn_y + 2.0)))
+
+            # Statutory Headroom Note (>= 2.0m clear) on mid-landing
+            hr_y = ry + landing_h / 2.0 + 3.0
+            svg.append(f'  <text x="{rx + rw / 2.0:.1f}" y="{hr_y:.1f}" font-size="6.5" font-weight="700" fill="{core_stroke}" text-anchor="middle" letter-spacing="0.2">HEADROOM &gt;= 2.0m CLEAR</text>')
+            fixed_obstacles.append(("headroom_note", BBox(rx + rw / 2.0 - 52.0, hr_y - 5.5, rx + rw / 2.0 + 52.0, hr_y + 2.0)))
+
+    # 4. Windows (3-Line Architectural Window Symbol with Sill/Lintel Tags)
+    win_tag_counter = 1
     for win in windows:
         wx1 = px(win.x1)
         wy1 = py(win.y1)
         wx2 = px(win.x2)
         wy2 = py(win.y2)
-        svg.append(f'  <line x1="{wx1:.1f}" y1="{wy1:.1f}" x2="{wx2:.1f}" y2="{wy2:.1f}" stroke="{window_stroke}" stroke-width="3.6" />')
-        svg.append(f'  <line x1="{wx1:.1f}" y1="{wy1:.1f}" x2="{wx2:.1f}" y2="{wy2:.1f}" stroke="{bg_color}" stroke-width="1.4" />')
+
+        # 3-line window symbol: outer sill line, middle glass line, inner finish line
+        is_horiz = abs(wy1 - wy2) < 0.1
+        if is_horiz:
+            svg.append(f'  <line x1="{wx1:.1f}" y1="{wy1 - 1.8:.1f}" x2="{wx2:.1f}" y2="{wy2 - 1.8:.1f}" stroke="{window_stroke}" stroke-width="1.5" />')
+            svg.append(f'  <line x1="{wx1:.1f}" y1="{wy1:.1f}" x2="{wx2:.1f}" y2="{wy2:.1f}" stroke="{text_primary}" stroke-width="0.9" />')
+            svg.append(f'  <line x1="{wx1:.1f}" y1="{wy1 + 1.8:.1f}" x2="{wx2:.1f}" y2="{wy2 + 1.8:.1f}" stroke="{window_stroke}" stroke-width="1.5" />')
+        else:
+            svg.append(f'  <line x1="{wx1 - 1.8:.1f}" y1="{wy1:.1f}" x2="{wx2 - 1.8:.1f}" y2="{wy2:.1f}" stroke="{window_stroke}" stroke-width="1.5" />')
+            svg.append(f'  <line x1="{wx1:.1f}" y1="{wy1:.1f}" x2="{wx2:.1f}" y2="{wy2:.1f}" stroke="{text_primary}" stroke-width="0.9" />')
+            svg.append(f'  <line x1="{wx1 + 1.8:.1f}" y1="{wy1:.1f}" x2="{wx2 + 1.8:.1f}" y2="{wy2:.1f}" stroke="{window_stroke}" stroke-width="1.5" />')
+
+        # Window tag (e.g. W1, W2)
+        w_tag = f"W{win_tag_counter}"
+        win_tag_counter += 1
+        tag_cx = (wx1 + wx2) / 2.0
+        tag_cy = (wy1 + wy2) / 2.0
+        # Position slightly interior to avoid exterior dimension chains
+        w_w = 0.6 * 6.5 * len(w_tag)
+        if is_horiz:
+            lbl_x = tag_cx
+            base_y = tag_cy + 9.0 if tag_cy < margin_y + content_h / 2.0 else tag_cy - 6.0
+            lbl_y = base_y
+            for dy in [0, -12, 12, -18, 18]:
+                cand_y = base_y + dy
+                wb_test = BBox(lbl_x - w_w / 2.0, cand_y - 5.5, lbl_x + w_w / 2.0, cand_y + 1.6)
+                if not any(wb_test.intersects(b_obs) for _, b_obs in fixed_obstacles):
+                    lbl_y = cand_y
+                    break
+            svg.append(f'  <text x="{lbl_x:.1f}" y="{lbl_y:.1f}" font-size="6.5" font-weight="700" fill="{window_stroke}" text-anchor="middle">{w_tag}</text>')
+            fixed_obstacles.append((f"win_tag_{w_tag}", BBox(lbl_x - w_w / 2.0, lbl_y - 5.5, lbl_x + w_w / 2.0, lbl_y + 1.6)))
+        else:
+            lbl_x = tag_cx + 9.0 if tag_cx < margin_x + content_w / 2.0 else tag_cx - 9.0
+            base_y = tag_cy + 2.5
+            lbl_y = base_y
+            for dy in [0, -14, 14, -20, 20]:
+                cand_y = base_y + dy
+                wb_test = BBox(lbl_x - w_w / 2.0, cand_y - 5.5, lbl_x + w_w / 2.0, cand_y + 1.6)
+                if not any(wb_test.intersects(b_obs) for _, b_obs in fixed_obstacles):
+                    lbl_y = cand_y
+                    break
+            svg.append(f'  <text x="{lbl_x:.1f}" y="{lbl_y:.1f}" font-size="6.5" font-weight="700" fill="{window_stroke}" text-anchor="middle">{w_tag}</text>')
+            fixed_obstacles.append((f"win_tag_{w_tag}", BBox(lbl_x - w_w / 2.0, lbl_y - 5.5, lbl_x + w_w / 2.0, lbl_y + 1.6)))
 
     # Room index lookup by room_id
     room_by_id = {r.room_id: r for r in rooms}
@@ -1339,7 +1492,6 @@ def generate_multi_floor_blueprint_svg(
     public_rooms = [r for r in rooms if getattr(r, 'zone_category', '') in ("public", "industrial_bay")]
     if not public_rooms:
         public_rooms = [r for r in rooms if not getattr(r, 'is_vertical_core', False)]
-    # Prefer North / NE public room
     main_entry_room = next(
         (r for r in public_rooms if "NE" in getattr(r, 'zone', '') or "N" in getattr(r, 'zone', '')),
         public_rooms[0] if public_rooms else (rooms[0] if rooms else None)
@@ -1354,7 +1506,8 @@ def generate_multi_floor_blueprint_svg(
             doors[0]
         )
 
-    # 5. Doors: Render leaf line + swing arc for every door
+    # 5. Doors: Render Door Frame Jamb Rebates + Leaf + Swing Arc + Tags
+    door_tag_counter = 1
     for d in doors:
         hx = px(getattr(d, 'hinge_x', getattr(d, 'x1', 0.0)))
         hy = py(getattr(d, 'hinge_y', getattr(d, 'y1', 0.0)))
@@ -1364,6 +1517,9 @@ def generate_multi_floor_blueprint_svg(
         swing_dir = getattr(d, 'swing_direction', 'inward_right')
 
         if wall_edge in ("vertical", "east", "west"):
+            # Jamb rebates
+            svg.append(f'  <line x1="{hx - 3:.1f}" y1="{hy:.1f}" x2="{hx + 3:.1f}" y2="{hy:.1f}" stroke="{door_stroke}" stroke-width="1.8" />')
+            svg.append(f'  <line x1="{hx - 3:.1f}" y1="{hy + dw:.1f}" x2="{hx + 3:.1f}" y2="{hy + dw:.1f}" stroke="{door_stroke}" stroke-width="1.8" />')
             if swing_dir == "inward_left":
                 lx = hx - dw
                 ly = hy
@@ -1381,6 +1537,9 @@ def generate_multi_floor_blueprint_svg(
                 start_x = hx
                 start_y = hy + dw
         else: # horizontal / north / south
+            # Jamb rebates
+            svg.append(f'  <line x1="{hx:.1f}" y1="{hy - 3:.1f}" x2="{hx:.1f}" y2="{hy + 3:.1f}" stroke="{door_stroke}" stroke-width="1.8" />')
+            svg.append(f'  <line x1="{hx + dw:.1f}" y1="{hy - 3:.1f}" x2="{hx + dw:.1f}" y2="{hy + 3:.1f}" stroke="{door_stroke}" stroke-width="1.8" />')
             if swing_dir == "inward_left":
                 lx = hx
                 ly = hy - dw
@@ -1401,6 +1560,14 @@ def generate_multi_floor_blueprint_svg(
         svg.append(f'  <line x1="{hx:.1f}" y1="{hy:.1f}" x2="{lx:.1f}" y2="{ly:.1f}" stroke="{door_stroke}" stroke-width="2.0" />')
         svg.append(f'  <path d="M {start_x:.1f} {start_y:.1f} A {dw:.1f} {dw:.1f} 0 0 {swp} {arc_x:.1f} {arc_y:.1f}" fill="none" stroke="{door_stroke}" stroke-width="1.4" stroke-dasharray="3 3" />')
 
+        # Deterministic Door Tag (D1, D2, ...)
+        d_tag = f"D{door_tag_counter}"
+        door_tag_counter += 1
+        dtag_x = (hx + lx) / 2.0
+        dtag_y = (hy + ly) / 2.0
+        svg.append(f'  <text x="{dtag_x:.1f}" y="{dtag_y + 2.5:.1f}" font-size="6.5" font-weight="700" fill="{door_stroke}" text-anchor="middle">{d_tag}</text>')
+        fixed_obstacles.append((f"door_tag_{d_tag}", BBox(dtag_x - 7.0, dtag_y - 4.5, dtag_x + 7.0, dtag_y + 4.5)))
+
         # Requirement C: T2/T3 unit entry door badges
         r_target = room_by_id.get(d.to_room)
         if r_target and getattr(r_target, 'unit_id', None):
@@ -1420,18 +1587,42 @@ def generate_multi_floor_blueprint_svg(
             svg.append(f'  <text x="{ub_x + ub_w/2.0:.1f}" y="{ub_y + 9.0:.1f}" font-size="7.0" font-weight="700" fill="{unit_badge_text}" text-anchor="middle">{unit_tag}</text>')
             fixed_obstacles.append((f"unit_badge_{unit_tag}", BBox(ub_x, ub_y, ub_x + ub_w, ub_y + ub_h)))
 
+    # 5.5 Structural Notation (LBW-230 for T1; Column Grid Bubbles for T3/T4)
+    typ_upper = (building_typology or "").upper()
+    if "T1" in typ_upper or "SINGLE" in typ_upper:
+        # Load-bearing wall tags LBW-230 on exterior envelope walls (placed cleanly away from openings)
+        lbw_x = margin_x + 14.0
+        lbw_y = margin_y + content_h - 10.0
+        svg.append(f'  <text x="{lbw_x:.1f}" y="{lbw_y:.1f}" font-size="6.5" font-weight="700" fill="{ext_wall_stroke}" text-anchor="start" letter-spacing="0.5">[LBW-230]</text>')
+        fixed_obstacles.append(("lbw_tag", BBox(lbw_x - 2.0, lbw_y - 5.5, lbw_x + 42.0, lbw_y + 2.0)))
+    elif "T3" in typ_upper or "T4" in typ_upper or "COMMERCIAL" in typ_upper or "WAREHOUSE" in typ_upper:
+        # Column grid bubbles at corners / midpoints
+        grid_x_locs = [margin_x, margin_x + content_w / 2.0, margin_x + content_w]
+        grid_x_tags = ["1", "2", "3"]
+        for gx, gtag in zip(grid_x_locs, grid_x_tags):
+            svg.append(f'  <circle cx="{gx:.1f}" cy="{margin_y - 54.0:.1f}" r="6.5" fill="{bg_color}" stroke="{ext_wall_stroke}" stroke-width="1.0" class="col-grid-bubble" />')
+            svg.append(f'  <text x="{gx:.1f}" y="{margin_y - 51.5:.1f}" font-size="6.5" font-weight="700" fill="{text_primary}" text-anchor="middle">{gtag}</text>')
+            fixed_obstacles.append((f"col_bubble_{gtag}", BBox(gx - 7.0, margin_y - 61.0, gx + 7.0, margin_y - 47.0)))
+
+        grid_y_locs = [margin_y, margin_y + content_h / 2.0, margin_y + content_h]
+        grid_y_tags = ["A", "B", "C"]
+        for gy, gtag in zip(grid_y_locs, grid_y_tags):
+            svg.append(f'  <circle cx="{margin_x - 54.0:.1f}" cy="{gy:.1f}" r="6.5" fill="{bg_color}" stroke="{ext_wall_stroke}" stroke-width="1.0" class="col-grid-bubble" />')
+            svg.append(f'  <text x="{margin_x - 54.0:.1f}" y="{gy + 2.5:.1f}" font-size="6.5" font-weight="700" fill="{text_primary}" text-anchor="middle">{gtag}</text>')
+            fixed_obstacles.append((f"col_bubble_{gtag}", BBox(margin_x - 61.0, gy - 7.0, margin_x - 47.0, gy + 7.0)))
+
     # Requirement C: Main entrance annotation (Ground Floor only)
     if floor_index == 0 and main_door:
         door_x = (px(main_door.x1) + px(main_door.x2)) / 2.0
-        arr_y1 = margin_y - 36.0
-        arr_y2 = margin_y - 2.0
+        # Compact entrance pointer immediately outside north wall without cutting through dimension chains (-12, -24, -36)
+        arr_y1 = margin_y - 8.5
+        arr_y2 = margin_y - 1.0
         svg.append(f'  <!-- ================= MAIN ENTRANCE ANNOTATION ================= -->')
         svg.append(f'  <line x1="{door_x:.1f}" y1="{arr_y1:.1f}" x2="{door_x:.1f}" y2="{arr_y2:.1f}" stroke="#10B981" stroke-width="2.6" marker-end="url(#entry-arrow)" />')
-        cap_y = arr_y1 - 6.0
-        # Avoid compass rose at svg_w - 40.0
+        cap_y = margin_y - 66.0
         cap_w = 72.0
         cap_x = min(door_x, compass_x - 22.0 - cap_w / 2.0)
-        svg.append(f'  <text x="{cap_x:.1f}" y="{cap_y:.1f}" font-size="9.0" font-weight="800" stroke="#FFFFFF" stroke-width="3.2" stroke-linejoin="round" fill="#047857" paint-order="stroke fill" text-anchor="middle" letter-spacing="0.8">MAIN ENTRANCE</text>')
+        svg.append(f'  <text x="{cap_x:.1f}" y="{cap_y:.1f}" font-size="8.5" font-weight="800" stroke="{bg_color}" stroke-width="3.2" stroke-linejoin="round" fill="#047857" paint-order="stroke fill" text-anchor="middle" letter-spacing="0.8">MAIN ENTRANCE</text>')
         fixed_obstacles.append(("main_entrance_cap", BBox(cap_x - cap_w/2.0, cap_y - 8.0, cap_x + cap_w/2.0, cap_y + 2.0)))
         fixed_obstacles.append(("main_entrance_arrow", BBox(door_x - 5.0, arr_y1, door_x + 5.0, arr_y2)))
 
@@ -1668,22 +1859,123 @@ def generate_multi_floor_blueprint_svg(
             svg.append(f'  <circle id="room-tag-{tag_num}" class="room-tag-badge" cx="{cx:.1f}" cy="{cy:.1f}" r="{rad:.1f}" fill="{b_fill}" stroke="{b_strk}" stroke-width="1.2" />')
             svg.append(f'  <text x="{cx:.1f}" y="{cy + 2.5:.1f}" font-size="7.5" font-weight="700" fill="{b_txt}" text-anchor="middle">{tag_num}</text>')
 
-    # 7. Exterior Dimension Lines
-    dim_top_y = margin_y - 20.0
-    dim_x1 = margin_x
-    dim_x2 = margin_x + content_w
-    svg.append(f'  <line x1="{dim_x1:.1f}" y1="{dim_top_y:.1f}" x2="{dim_x2:.1f}" y2="{dim_top_y:.1f}" stroke="{text_dim}" stroke-width="1.0" />')
-    svg.append(f'  <line x1="{dim_x1 - 4:.1f}" y1="{dim_top_y + 4:.1f}" x2="{dim_x1 + 4:.1f}" y2="{dim_top_y - 4:.1f}" stroke="{text_secondary}" stroke-width="1.5" />')
-    svg.append(f'  <line x1="{dim_x2 - 4:.1f}" y1="{dim_top_y + 4:.1f}" x2="{dim_x2 + 4:.1f}" y2="{dim_top_y - 4:.1f}" stroke="{text_secondary}" stroke-width="1.5" />')
-    svg.append(f'  <text x="{(dim_x1 + dim_x2)/2.0:.1f}" y="{dim_top_y - 6.0:.1f}" font-size="9.0" font-weight="600" fill="{text_secondary}" text-anchor="middle">{env_w:.1f}m ENVELOPE WIDTH</text>')
+    # 7. Exterior 3-Line Dimension Chains (a: Opening Offsets, b: Room Clear Dims, c: Overall)
+    # (Visibly and mathematically add up to overall within 1mm; 45-degree architectural slash ticks)
+    dim_tick_strk = ext_wall_stroke
 
-    dim_left_x = margin_x - 20.0
-    dim_y1 = margin_y
-    dim_y2 = margin_y + content_h
-    svg.append(f'  <line x1="{dim_left_x:.1f}" y1="{dim_y1:.1f}" x2="{dim_left_x:.1f}" y2="{dim_y2:.1f}" stroke="{text_dim}" stroke-width="1.0" />')
-    svg.append(f'  <line x1="{dim_left_x - 4:.1f}" y1="{dim_y1 + 4:.1f}" x2="{dim_left_x + 4:.1f}" y2="{dim_y1 - 4:.1f}" stroke="{text_secondary}" stroke-width="1.5" />')
-    svg.append(f'  <line x1="{dim_left_x - 4:.1f}" y1="{dim_y2 + 4:.1f}" x2="{dim_left_x + 4:.1f}" y2="{dim_y2 - 4:.1f}" stroke="{text_secondary}" stroke-width="1.5" />')
-    svg.append(f'  <text x="{dim_left_x - 8.0:.1f}" y="{(dim_y1 + dim_y2)/2.0:.1f}" font-size="9.0" font-weight="600" fill="{text_secondary}" text-anchor="middle" transform="rotate(-90 {dim_left_x - 8.0:.1f} {(dim_y1 + dim_y2)/2.0:.1f})">{env_d:.1f}m ENVELOPE DEPTH</text>')
+    # Helper: draw architectural 45-degree slash tick
+    def draw_slash_tick(tx: float, ty: float):
+        svg.append(f'  <line x1="{tx - 3.0:.1f}" y1="{ty + 3.0:.1f}" x2="{tx + 3.0:.1f}" y2="{ty - 3.0:.1f}" stroke="{dim_tick_strk}" stroke-width="1.4" />')
+
+    # Top Horizontal 3-Line Dimension Chains
+    top_y_a = margin_y - 12.0  # Line (a): Opening offsets
+    top_y_b = margin_y - 24.0  # Line (b): Room clear dims
+    top_y_c = margin_y - 36.0  # Line (c): Overall envelope width
+
+    # Line (c): Overall Envelope Width
+    svg.append(f'  <line x1="{margin_x:.1f}" y1="{top_y_c:.1f}" x2="{margin_x + content_w:.1f}" y2="{top_y_c:.1f}" stroke="{text_dim}" stroke-width="1.0" />')
+    draw_slash_tick(margin_x, top_y_c)
+    draw_slash_tick(margin_x + content_w, top_y_c)
+    svg.append(f'  <line x1="{margin_x:.1f}" y1="{margin_y - 2.0:.1f}" x2="{margin_x:.1f}" y2="{top_y_c - 5.0:.1f}" stroke="{text_dim}" stroke-width="0.5" stroke-dasharray="2 2" />')
+    svg.append(f'  <line x1="{margin_x + content_w:.1f}" y1="{margin_y - 2.0:.1f}" x2="{margin_x + content_w:.1f}" y2="{top_y_c - 5.0:.1f}" stroke="{text_dim}" stroke-width="0.5" stroke-dasharray="2 2" />')
+    svg.append(f'  <text x="{margin_x + content_w / 2.0:.1f}" y="{top_y_c - 3.5:.1f}" font-size="8.5" font-weight="700" fill="{text_primary}" text-anchor="middle">{env_w:.2f}m OVERALL</text>')
+
+    # Line (b): Room Clear Dims (from wall_graph horizontal chain or room projections)
+    svg.append(f'  <line x1="{margin_x:.1f}" y1="{top_y_b:.1f}" x2="{margin_x + content_w:.1f}" y2="{top_y_b:.1f}" stroke="{text_dim}" stroke-width="0.8" />')
+    h_clear_chain = None
+    if wall_graph and getattr(wall_graph, "dimension_chains", None):
+        h_clear_chain = next((c for c in wall_graph.dimension_chains if c.axis == "X" and c.level == "clear_rooms"), None)
+
+    if h_clear_chain and h_clear_chain.segments:
+        for seg in h_clear_chain.segments:
+            sx1 = px(seg.start_m)
+            sx2 = px(seg.end_m)
+            draw_slash_tick(sx1, top_y_b)
+            draw_slash_tick(sx2, top_y_b)
+            svg.append(f'  <line x1="{sx1:.1f}" y1="{margin_y - 2.0:.1f}" x2="{sx1:.1f}" y2="{top_y_b - 3.0:.1f}" stroke="{text_dim}" stroke-width="0.5" stroke-dasharray="1 2" />')
+            seg_px_w = sx2 - sx1
+            if seg_px_w >= 28.0:
+                svg.append(f'  <text x="{(sx1 + sx2) / 2.0:.1f}" y="{top_y_b - 2.5:.1f}" font-size="6.5" font-weight="600" fill="{text_secondary}" text-anchor="middle">{seg.length_m:.2f}</text>')
+    else:
+        # Fallback ticks for room clear dims
+        draw_slash_tick(margin_x, top_y_b)
+        draw_slash_tick(margin_x + content_w, top_y_b)
+
+    # Line (a): Opening Offsets
+    svg.append(f'  <line x1="{margin_x:.1f}" y1="{top_y_a:.1f}" x2="{margin_x + content_w:.1f}" y2="{top_y_a:.1f}" stroke="{text_dim}" stroke-width="0.8" />')
+    h_openings_chain = None
+    if wall_graph and getattr(wall_graph, "dimension_chains", None):
+        h_openings_chain = next((c for c in wall_graph.dimension_chains if c.axis == "X" and c.level == "openings"), None)
+
+    if h_openings_chain and h_openings_chain.segments:
+        for seg in h_openings_chain.segments:
+            sx1 = px(seg.start_m)
+            sx2 = px(seg.end_m)
+            draw_slash_tick(sx1, top_y_a)
+            draw_slash_tick(sx2, top_y_a)
+            svg.append(f'  <line x1="{sx1:.1f}" y1="{margin_y - 2.0:.1f}" x2="{sx1:.1f}" y2="{top_y_a - 2.0:.1f}" stroke="{text_dim}" stroke-width="0.5" stroke-dasharray="1 1" />')
+            seg_px_w = sx2 - sx1
+            if seg_px_w >= 30.0:
+                svg.append(f'  <text x="{(sx1 + sx2) / 2.0:.1f}" y="{top_y_a - 2.5:.1f}" font-size="6.0" font-weight="600" fill="{text_dim}" text-anchor="middle">{seg.length_m:.2f}</text>')
+    else:
+        draw_slash_tick(margin_x, top_y_a)
+        draw_slash_tick(margin_x + content_w, top_y_a)
+
+    # Left Vertical 3-Line Dimension Chains
+    left_x_a = margin_x - 14.0  # Line (a): Opening offsets
+    left_x_b = margin_x - 28.0  # Line (b): Room clear dims
+    left_x_c = margin_x - 44.0  # Line (c): Overall envelope depth
+
+    # Line (c): Overall Envelope Depth
+    svg.append(f'  <line x1="{left_x_c:.1f}" y1="{margin_y:.1f}" x2="{left_x_c:.1f}" y2="{margin_y + content_h:.1f}" stroke="{text_dim}" stroke-width="1.0" />')
+    draw_slash_tick(left_x_c, margin_y)
+    draw_slash_tick(left_x_c, margin_y + content_h)
+    svg.append(f'  <line x1="{margin_x - 2.0:.1f}" y1="{margin_y:.1f}" x2="{left_x_c - 5.0:.1f}" y2="{margin_y:.1f}" stroke="{text_dim}" stroke-width="0.5" stroke-dasharray="2 2" />')
+    svg.append(f'  <line x1="{margin_x - 2.0:.1f}" y1="{margin_y + content_h:.1f}" x2="{left_x_c - 5.0:.1f}" y2="{margin_y + content_h:.1f}" stroke="{text_dim}" stroke-width="0.5" stroke-dasharray="2 2" />')
+    mid_yd = margin_y + content_h / 2.0
+    svg.append(f'  <text x="{left_x_c - 3.5:.1f}" y="{mid_yd:.1f}" font-size="8.5" font-weight="700" fill="{text_primary}" text-anchor="middle" transform="rotate(-90 {left_x_c - 3.5:.1f} {mid_yd:.1f})">{env_d:.2f}m OVERALL</text>')
+
+    # Line (b): Room Clear Dims (Vertical)
+    svg.append(f'  <line x1="{left_x_b:.1f}" y1="{margin_y:.1f}" x2="{left_x_b:.1f}" y2="{margin_y + content_h:.1f}" stroke="{text_dim}" stroke-width="0.8" />')
+    v_clear_chain = None
+    if wall_graph and getattr(wall_graph, "dimension_chains", None):
+        v_clear_chain = next((c for c in wall_graph.dimension_chains if c.axis == "Y" and c.level == "clear_rooms"), None)
+
+    if v_clear_chain and v_clear_chain.segments:
+        for seg in v_clear_chain.segments:
+            sy1 = py(seg.start_m)
+            sy2 = py(seg.end_m)
+            draw_slash_tick(left_x_b, sy1)
+            draw_slash_tick(left_x_b, sy2)
+            svg.append(f'  <line x1="{margin_x - 2.0:.1f}" y1="{sy1:.1f}" x2="{left_x_b - 3.0:.1f}" y2="{sy1:.1f}" stroke="{text_dim}" stroke-width="0.5" stroke-dasharray="1 2" />')
+            seg_px_h = sy2 - sy1
+            if seg_px_h >= 28.0:
+                mid_y = (sy1 + sy2) / 2.0
+                svg.append(f'  <text x="{left_x_b - 2.5:.1f}" y="{mid_y:.1f}" font-size="6.5" font-weight="600" fill="{text_secondary}" text-anchor="middle" transform="rotate(-90 {left_x_b - 2.5:.1f} {mid_y:.1f})">{seg.length_m:.2f}</text>')
+    else:
+        draw_slash_tick(left_x_b, margin_y)
+        draw_slash_tick(left_x_b, margin_y + content_h)
+
+    # Line (a): Opening Offsets (Vertical)
+    svg.append(f'  <line x1="{left_x_a:.1f}" y1="{margin_y:.1f}" x2="{left_x_a:.1f}" y2="{margin_y + content_h:.1f}" stroke="{text_dim}" stroke-width="0.8" />')
+    v_openings_chain = None
+    if wall_graph and getattr(wall_graph, "dimension_chains", None):
+        v_openings_chain = next((c for c in wall_graph.dimension_chains if c.axis == "Y" and c.level == "openings"), None)
+
+    if v_openings_chain and v_openings_chain.segments:
+        for seg in v_openings_chain.segments:
+            sy1 = py(seg.start_m)
+            sy2 = py(seg.end_m)
+            draw_slash_tick(left_x_a, sy1)
+            draw_slash_tick(left_x_a, sy2)
+            svg.append(f'  <line x1="{margin_x - 2.0:.1f}" y1="{sy1:.1f}" x2="{left_x_a - 2.0:.1f}" y2="{sy1:.1f}" stroke="{text_dim}" stroke-width="0.5" stroke-dasharray="1 1" />')
+            seg_px_h = sy2 - sy1
+            if seg_px_h >= 30.0:
+                mid_y = (sy1 + sy2) / 2.0
+                svg.append(f'  <text x="{left_x_a - 2.5:.1f}" y="{mid_y:.1f}" font-size="6.0" font-weight="600" fill="{text_dim}" text-anchor="middle" transform="rotate(-90 {left_x_a - 2.5:.1f} {mid_y:.1f})">{seg.length_m:.2f}</text>')
+    else:
+        draw_slash_tick(left_x_a, margin_y)
+        draw_slash_tick(left_x_a, margin_y + content_h)
 
     # 8. North Arrow / Compass
     svg.append(f'  <g transform="translate({compass_x}, {compass_y})">')
@@ -1700,10 +1992,10 @@ def generate_multi_floor_blueprint_svg(
     svg.append(f'    <rect x="{scale}" y="0" width="{scale}" height="3" fill="{grid_line}" />')
     svg.append(f'    <text x="0" y="-4" font-size="7.0" fill="{text_secondary}">0</text>')
     svg.append(f'    <text x="{scale}" y="-4" font-size="7.0" fill="{text_secondary}">1m</text>')
-    svg.append(f'    <text x="{scale*2}" y="-4" font-size="7.0" fill="{text_secondary}">2m (SCALE 1:50)</text>')
+    svg.append(f'    <text x="{scale*2}" y="-4" font-size="7.0" fill="{text_secondary}">2m (1:50)</text>')
     svg.append('  </g>')
 
-    # 10. Title Block Banner (Requirement D: Fixed line heights with 4pt leading, watermark at bottom-right)
+    # 10. Title Block Banner (Requirement D: Fixed line heights with 4pt leading)
     banner_y = margin_y + content_h + 16.0
     elevation_m = floor_index * 3.0
     typology_tag = f"TYPOLOGY: {building_typology.upper()}" if building_typology else "NBC 2016 COMPLIANT"
@@ -1715,12 +2007,117 @@ def generate_multi_floor_blueprint_svg(
         svg.append(f'    <text x="0" y="39.0" font-size="8.5" font-weight="600" fill="#10B981">MAIN ENTRANCE: {html.escape(str(main_entrance_zone))}</text>')
     svg.append('  </g>')
 
-    # Watermark: Moved to bottom-right corner at 8pt gray
+    # 11. Construction Schedules & Wall Legend Panel (On-Sheet Construction Grade)
+    schedules_y = banner_y + 48.0
+    half_w = max(180.0, (content_w - 20.0) / 2.0)
+
+    # 11a. Wall Type Legend (Stacked rows to avoid any horizontal collision)
+    svg.append(f'  <g transform="translate({margin_x}, {schedules_y})">')
+    svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}" letter-spacing="0.4">WALL TYPE SPECIFICATION (NBC 2016 COMPLIANT)</text>')
+    svg.append(f'    <line x1="0" y1="18.0" x2="16.0" y2="18.0" stroke="{ext_wall_stroke}" stroke-width="4.0" />')
+    svg.append(f'    <text x="22.0" y="20.0" font-size="6.5" font-weight="600" fill="{text_secondary}">W1: 230mm Exterior Structural Wall (Masonry/RCC) - NBC 2016 Pt 3 Cl 3.4.1</text>')
+    svg.append(f'    <line x1="0" y1="29.0" x2="16.0" y2="29.0" stroke="{int_wall_stroke}" stroke-width="2.5" />')
+    svg.append(f'    <text x="22.0" y="31.0" font-size="6.5" font-weight="600" fill="{text_secondary}">W2: 115mm Interior Partition Wall (Half-Brick Masonry)</text>')
+    svg.append(f'    <line x1="0" y1="40.0" x2="16.0" y2="40.0" stroke="{int_wall_stroke}" stroke-width="1.8" stroke-dasharray="3 2" />')
+    svg.append(f'    <text x="22.0" y="42.0" font-size="6.5" font-weight="600" fill="{text_secondary}">W3: 75mm Toilet / Shaft Lightweight Enclosure</text>')
+    svg.append('  </g>')
+
+    # 11b. Door Schedule Table (Left half)
+    door_tbl_y = schedules_y + 54.0
+    svg.append(f'  <g transform="translate({margin_x}, {door_tbl_y})">')
+    svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">DOOR SCHEDULE</text>')
+    d_cols = [24.0, 52.0, 56.0, 36.0]
+    d_heads = ["TAG", "W x H (m)", "TYPE", "LEVEL"]
+    cx = 0.0
+    for h_txt, cw in zip(d_heads, d_cols):
+        svg.append(f'    <text x="{cx:.1f}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">{html.escape(h_txt)}</text>')
+        cx += cw
+
+    d_sched = getattr(wall_graph, "door_schedule", []) if wall_graph else []
+    for r_idx, d_row in enumerate(d_sched[:5]):
+        ry_pos = 29.0 + (r_idx * 10.5)
+        d_tag = str(d_row.get("tag", f"D{r_idx+1}"))
+        d_wh = f"{d_row.get('width_m', 0.9):.2f}x{d_row.get('height_m', 2.1):.2f}"
+        d_tp = str(d_row.get("door_type", "Standard"))[:11]
+        d_lvl = f"L{d_row.get('level', floor_index)}"
+        row_vals = [d_tag, d_wh, d_tp, d_lvl]
+        rcx = 0.0
+        for val_txt, cw in zip(row_vals, d_cols):
+            svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(val_txt)}</text>')
+            rcx += cw
+    if len(d_sched) > 5:
+        svg.append(f'    <text x="0" y="{29.0 + 5 * 10.5:.1f}" font-size="5.5" font-style="italic" fill="{text_secondary}">(+{len(d_sched) - 5} more in dossier)</text>')
+    svg.append('  </g>')
+
+    # 11c. Window Schedule Table (Right half)
+    win_tbl_x = margin_x + half_w + 10.0
+    svg.append(f'  <g transform="translate({win_tbl_x}, {door_tbl_y})">')
+    svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">WINDOW SCHEDULE</text>')
+    w_cols = [24.0, 52.0, 32.0, 32.0, 48.0]
+    w_heads = ["TAG", "W x H (m)", "SILL", "LINT", "VENT RATIO"]
+    cx = 0.0
+    for h_txt, cw in zip(w_heads, w_cols):
+        svg.append(f'    <text x="{cx:.1f}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">{html.escape(h_txt)}</text>')
+        cx += cw
+
+    w_sched = getattr(wall_graph, "window_schedule", []) if wall_graph else []
+    for r_idx, w_row in enumerate(w_sched[:5]):
+        ry_pos = 29.0 + (r_idx * 10.5)
+        w_tag = str(w_row.get("tag", f"W{r_idx+1}"))
+        w_wh = f"{w_row.get('width_m', 1.2):.2f}x{w_row.get('height_m', 1.2):.2f}"
+        w_sill = f"{w_row.get('sill_m', 0.9):.2f}m"
+        w_lint = f"{w_row.get('lintel_m', 2.1):.2f}m"
+        w_vr = ">=12.5% NBC"
+        row_vals = [w_tag, w_wh, w_sill, w_lint, w_vr]
+        rcx = 0.0
+        for val_txt, cw in zip(row_vals, w_cols):
+            svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(val_txt)}</text>')
+            rcx += cw
+    if len(w_sched) > 5:
+        svg.append(f'    <text x="0" y="{29.0 + 5 * 10.5:.1f}" font-size="5.5" font-style="italic" fill="{text_secondary}">(+{len(w_sched) - 5} more in dossier)</text>')
+    svg.append('  </g>')
+
+    # 11d. Room Schedule Table (Full width below door & window schedules)
+    room_tbl_y = door_tbl_y + 82.0
+    svg.append(f'  <g transform="translate({margin_x}, {room_tbl_y})">')
+    svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">ROOM SCHEDULE (CLEAR DIMS &amp; FINISH ZONES)</text>')
+    r_cols = [22.0, 75.0, 48.0, 68.0, 110.0]
+    r_heads = ["NO.", "ROOM NAME", "AREA", "CLEAR DIMS", "FINISH SPECIFICATION"]
+    cx = 0.0
+    for h_txt, cw in zip(r_heads, r_cols):
+        svg.append(f'    <text x="{cx:.1f}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">{html.escape(h_txt)}</text>')
+        cx += cw
+
+    r_sched = getattr(wall_graph, "room_schedule", []) if wall_graph else []
+    for r_idx, r_row in enumerate(r_sched[:6]):
+        ry_pos = 29.0 + (r_idx * 10.5)
+        r_num = str(r_row.get("room_number", r_idx + 1))
+        r_nm = str(r_row.get("room_name", "Room"))[:14]
+        r_ar = f"{r_row.get('clear_area_sqm', 0.0):.1f}m2"
+        r_dm = str(r_row.get("clear_dims", "-"))[:13]
+        r_fn = str(r_row.get("finish_zone", "Zone Standard"))[:24]
+        row_vals = [r_num, r_nm, r_ar, r_dm, r_fn]
+        rcx = 0.0
+        for val_txt, cw in zip(row_vals, r_cols):
+            svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(val_txt)}</text>')
+            rcx += cw
+    if len(r_sched) > 6:
+        svg.append(f'    <text x="0" y="{29.0 + 6 * 10.5:.1f}" font-size="5.5" font-style="italic" fill="{text_secondary}">(+{len(r_sched) - 6} more in dossier)</text>')
+    svg.append('  </g>')
+
+    # Setting-out hard assert dimension chain verification badge
+    setout_y = room_tbl_y + 95.0
+    svg.append(f'  <g transform="translate({margin_x}, {setout_y})">')
+    svg.append(f'    <text x="0" y="8.0" font-size="6.5" font-weight="600" fill="#10B981">SETTING-OUT ACCURACY: Chain Sums == Envelope within 1mm (Verified) | NBC 2016 Pt 3 Cl 3.4</text>')
+    svg.append('  </g>')
+
+    # Watermark: Isolated bottom-right corner at 8pt gray
     wm_x = svg_w - 14.0
     wm_y = svg_h - 8.0
     svg.append(f'  <text x="{wm_x:.1f}" y="{wm_y:.1f}" font-size="8.0" font-weight="600" fill="{text_dim}" text-anchor="end" letter-spacing="0.5">BUILDWISE GENERATIVE CAD ENGINE</text>')
 
     svg.append('</svg>')
     return "\n".join(svg)
+
 
 

@@ -702,6 +702,10 @@ class DissectionEngine:
         env_h = self.env_h
         env_area = self.env_area
 
+        # Guard against compact/insufficient plot footprints
+        if env_w < 6.5 or env_h < 5.8:
+            return None
+
         puja_w = 2.40
         liv_w = round(env_w - puja_w, 2)
         H_pub = 3.50
@@ -724,6 +728,9 @@ class DissectionEngine:
             RoomRectangle(room_id=master_id, room_name=ROOM_CATALOG.get(master_id, {}).get("name", "Master Bedroom"), x=round(env_x + W_bath, 2), y=y_rear, width=mb_w, height=H_rear, area_sqm=round(mb_w * H_rear, 2), zone="SW", vastu_compliant=True),
             RoomRectangle(room_id=kitchen_id, room_name=ROOM_CATALOG.get(kitchen_id, {}).get("name", "Kitchen"), x=round(env_x + W_bath + mb_w, 2), y=y_rear, width=kitch_w, height=H_rear, area_sqm=round(kitch_w * H_rear, 2), zone="SE", vastu_compliant=True),
         ]
+
+        if any(r.width < 0.85 or r.height < 0.85 or r.area_sqm < 0.85 for r in rooms):
+            return None
 
         doors: List[DoorGeometry] = [
             DoorGeometry(door_id="main_entry", from_room="exterior", to_room=living_id, wall_edge="horizontal", x1=round(env_x + (liv_w - 1.0) / 2.0, 2), y1=env_y, x2=round(env_x + (liv_w + 1.0) / 2.0, 2), y2=env_y, hinge_x=round(env_x + (liv_w - 1.0) / 2.0, 2), hinge_y=env_y, swing_direction="inward_right", width_m=1.0),
@@ -792,8 +799,14 @@ class DissectionEngine:
         env_h = self.env_h
         env_area = self.env_area
 
+        if env_w < 6.5 or env_h < 6.0:
+            return None
+
         if env_w < 10.20:
             # Deep plot configuration
+            if env_w < 6.2 or env_h < 8.0:
+                return None
+
             H_pub = 3.45
             H_mid = 3.35
             H_rear = round(env_h - H_pub - H_mid, 2)
@@ -819,6 +832,8 @@ class DissectionEngine:
                 RoomRectangle(room_id=master_id, room_name=ROOM_CATALOG.get(master_id, {}).get("name", "Master Bedroom"), x=env_x, y=y_rear, width=W_mb, height=H_rear, area_sqm=round(W_mb * H_rear, 2), zone="SW", vastu_compliant=True),
                 RoomRectangle(room_id=kitchen_id, room_name=ROOM_CATALOG.get(kitchen_id, {}).get("name", "Kitchen"), x=round(env_x + W_mb, 2), y=y_rear, width=W_kitch, height=H_rear, area_sqm=round(W_kitch * H_rear, 2), zone="SE", vastu_compliant=True),
             ]
+            if any(r.width < 0.85 or r.height < 0.85 or r.area_sqm < 0.85 for r in rooms):
+                return None
             doors = [
                 DoorGeometry(door_id="main_entry", from_room="exterior", to_room=living_id, wall_edge="horizontal", x1=round(env_x + 1.2, 2), y1=env_y, x2=round(env_x + 2.2, 2), y2=env_y, hinge_x=round(env_x + 1.2, 2), hinge_y=env_y, swing_direction="inward_right", width_m=1.0),
                 DoorGeometry(door_id="door_puja", from_room=living_id, to_room=puja_id, wall_edge="vertical", x1=round(env_x + liv_w, 2), y1=round(env_y + 1.0, 2), x2=round(env_x + liv_w, 2), y2=round(env_y + 1.9, 2), hinge_x=round(env_x + liv_w, 2), hinge_y=round(env_y + 1.0, 2), swing_direction="inward_right", width_m=0.9),
@@ -842,6 +857,9 @@ class DissectionEngine:
             ]
         else:
             # Wide plot configuration
+            if env_w < 7.9 or env_h < 6.3:
+                return None
+
             H_pub = 3.65
             H_corr = 1.15
             H_rear = round(env_h - H_pub - H_corr, 2)
@@ -867,6 +885,8 @@ class DissectionEngine:
                 RoomRectangle(room_id=master_id, room_name=ROOM_CATALOG.get(master_id, {}).get("name", "Master Bedroom"), x=round(env_x + W_bath, 2), y=y_rear, width=mb_w, height=H_rear, area_sqm=round(mb_w * H_rear, 2), zone="SW", vastu_compliant=True),
                 RoomRectangle(room_id=kitchen_id, room_name=ROOM_CATALOG.get(kitchen_id, {}).get("name", "Kitchen"), x=round(env_x + W_bath + mb_w, 2), y=y_rear, width=kitch_w, height=H_rear, area_sqm=round(kitch_w * H_rear, 2), zone="SE", vastu_compliant=True),
             ]
+            if any(r.width < 0.85 or r.height < 0.85 or r.area_sqm < 0.85 for r in rooms):
+                return None
             doors = [
                 DoorGeometry(door_id="main_entry", from_room="exterior", to_room=living_id, wall_edge="horizontal", x1=round(env_x + W_b2 + (liv_w - 1.0) / 2.0, 2), y1=env_y, x2=round(env_x + W_b2 + (liv_w + 1.0) / 2.0, 2), y2=env_y, hinge_x=round(env_x + W_b2 + (liv_w - 1.0) / 2.0, 2), hinge_y=env_y, swing_direction="inward_right", width_m=1.0),
                 DoorGeometry(door_id="door_puja", from_room=living_id, to_room=puja_id, wall_edge="vertical", x1=round(env_x + W_b2 + liv_w, 2), y1=round(env_y + 1.0, 2), x2=round(env_x + W_b2 + liv_w, 2), y2=round(env_y + 1.9, 2), hinge_x=round(env_x + W_b2 + liv_w, 2), hinge_y=round(env_y + 1.0, 2), swing_direction="inward_right", width_m=0.9),
@@ -938,8 +958,14 @@ class DissectionEngine:
         env_h = self.env_h
         env_area = self.env_area
 
+        if env_w < 8.5 or env_h < 6.5:
+            return None
+
         if env_w < 10.40:
             # Deep plot configuration
+            if env_w < 8.5 or env_h < 8.2:
+                return None
+
             H_pub = 3.50
             H_mid = 3.35
             H_rear = round(env_h - H_pub - H_mid, 2)
@@ -969,6 +995,8 @@ class DissectionEngine:
                 RoomRectangle(room_id=master_id, room_name=ROOM_CATALOG.get(master_id, {}).get("name", "Master Bedroom"), x=round(env_x + W_bath2, 2), y=y_rear, width=W_mb, height=H_rear, area_sqm=round(W_mb * H_rear, 2), zone="SW", vastu_compliant=True),
                 RoomRectangle(room_id=kitchen_id, room_name=ROOM_CATALOG.get(kitchen_id, {}).get("name", "Kitchen"), x=round(env_x + W_bath2 + W_mb, 2), y=y_rear, width=W_kitch, height=H_rear, area_sqm=round(W_kitch * H_rear, 2), zone="SE", vastu_compliant=True),
             ]
+            if any(r.width < 0.85 or r.height < 0.85 or r.area_sqm < 0.85 for r in rooms):
+                return None
             doors = [
                 DoorGeometry(door_id="main_entry", from_room="exterior", to_room=living_id, wall_edge="horizontal", x1=round(env_x + 1.2, 2), y1=env_y, x2=round(env_x + 2.2, 2), y2=env_y, hinge_x=round(env_x + 1.2, 2), hinge_y=env_y, swing_direction="inward_right", width_m=1.0),
                 DoorGeometry(door_id="door_puja", from_room=living_id, to_room=puja_id, wall_edge="vertical", x1=round(env_x + liv_w, 2), y1=round(env_y + 1.0, 2), x2=round(env_x + liv_w, 2), y2=round(env_y + 1.9, 2), hinge_x=round(env_x + liv_w, 2), hinge_y=round(env_y + 1.0, 2), swing_direction="inward_right", width_m=0.9),
@@ -995,6 +1023,9 @@ class DissectionEngine:
             ]
         else:
             # Wide plot configuration
+            if env_w < 8.95 or env_h < 8.05:
+                return None
+
             H_pub = 3.75
             H_mid = 2.80
             H_rear = round(env_h - H_pub - H_mid, 2)
@@ -1025,6 +1056,8 @@ class DissectionEngine:
                 RoomRectangle(room_id=master_id, room_name=ROOM_CATALOG.get(master_id, {}).get("name", "Master Bedroom"), x=round(env_x + W_b1 + W_b2_bath, 2), y=y_rear, width=W_mb, height=H_rear, area_sqm=round(W_mb * H_rear, 2), zone="SW", vastu_compliant=True),
                 RoomRectangle(room_id=kitchen_id, room_name=ROOM_CATALOG.get(kitchen_id, {}).get("name", "Kitchen"), x=round(env_x + W_b1 + W_b2_bath + W_mb, 2), y=y_rear, width=W_kitch, height=H_rear, area_sqm=round(W_kitch * H_rear, 2), zone="SE", vastu_compliant=True),
             ]
+            if any(r.width < 0.85 or r.height < 0.85 or r.area_sqm < 0.85 for r in rooms):
+                return None
             doors = [
                 DoorGeometry(door_id="main_entry", from_room="exterior", to_room=living_id, wall_edge="horizontal", x1=round(env_x + W_b2 + (liv_w - 1.0) / 2.0, 2), y1=env_y, x2=round(env_x + W_b2 + (liv_w + 1.0) / 2.0, 2), y2=env_y, hinge_x=round(env_x + W_b2 + (liv_w - 1.0) / 2.0, 2), hinge_y=env_y, swing_direction="inward_right", width_m=1.0),
                 DoorGeometry(door_id="door_puja", from_room=living_id, to_room=puja_id, wall_edge="vertical", x1=round(env_x + W_b2 + liv_w, 2), y1=round(env_y + 1.0, 2), x2=round(env_x + W_b2 + liv_w, 2), y2=round(env_y + 1.9, 2), hinge_x=round(env_x + W_b2 + liv_w, 2), hinge_y=round(env_y + 1.0, 2), swing_direction="inward_right", width_m=0.9),
@@ -1121,7 +1154,7 @@ class DissectionEngine:
         # 0. Primary Attempt: Reference Typology Templates (Blueprint Spatial Logic v12)
         if force_template or len(self.required_rooms) <= 9:
             template_model = self._solve_typology_templates(self.vastu_strictness, force_template=force_template)
-            if template_model is not None:
+            if template_model is not None and all(r.width >= 0.85 and r.height >= 0.85 and r.area_sqm >= 0.85 for r in template_model.rooms):
                 return template_model, "optimal", warnings
 
         # 1. Recursive guillotine slicing attempt
@@ -1144,7 +1177,7 @@ class DissectionEngine:
         # Fallback to template library if guillotine cut returned None
         if rects is None:
             template_fallback = self._solve_typology_templates("low")
-            if template_fallback is not None:
+            if template_fallback is not None and all(r.width >= 0.85 and r.height >= 0.85 and r.area_sqm >= 0.85 for r in template_fallback.rooms):
                 warnings.append("Guillotine slicing failed; applied reference typology template.")
                 return template_fallback, "compromise", warnings
             return None, "failed", warnings
@@ -1214,9 +1247,11 @@ class DissectionEngine:
         if not passed:
             # QA gate failed: fallback to template library to guarantee topological invariants
             template_fallback = self._solve_typology_templates("low")
-            if template_fallback is not None:
+            if template_fallback is not None and all(r.width >= 0.85 and r.height >= 0.85 and r.area_sqm >= 0.85 for r in template_fallback.rooms):
                 warnings.append(f"Guillotine layout failed QA gate ({violations}); applied reference typology template.")
                 return template_fallback, "compromise", warnings
+            if any(r.width <= 0.0 or r.height <= 0.0 or r.area_sqm <= 0.0 for r in rect_model.rooms):
+                return None, "failed", warnings + [f"QA gate failed ({violations}) with invalid room dimensions."]
 
         rect_model.qa = FloorPlanQA(
             entry=qa_dict.get("entry", "living"),
@@ -1230,3 +1265,4 @@ class DissectionEngine:
         )
 
         return rect_model, status, warnings
+

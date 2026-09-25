@@ -28,6 +28,8 @@ ENV/
 # Testing & Cache
 .pytest_cache/
 .coverage
+backend/tests/golden_snapshots/
+golden_snapshots/
 desktop.ini
 
 # Logs

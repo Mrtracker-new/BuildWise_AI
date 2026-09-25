@@ -342,6 +342,22 @@ def evaluate_solver_qa(
 
     room_map = {r.room_id: r for r in rooms}
 
+    # 0. Non-Positive / Corrupt Dimension Invariant Check
+    for r in rooms:
+        if r.width <= 0.0 or r.height <= 0.0 or r.area_sqm <= 0.0:
+            violations.append(f"Room '{r.room_id}' has non-positive dimension or area ({r.width}x{r.height}, {r.area_sqm} m²).")
+            return False, {
+                "entry": "invalid",
+                "circulation": "disconnected",
+                "leaf_rule": False,
+                "peripheral_service": False,
+                "catalog": False,
+                "aspect": False,
+                "critic": "fail",
+                "violations": len(violations),
+                "critic_notes": violations
+            }, violations
+
     # 1. Main Entry Door Check
     main_door = next((d for d in doors if d.door_id == "main_entry"), None)
     entry_room_id = "unknown"
