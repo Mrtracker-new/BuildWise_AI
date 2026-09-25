@@ -631,8 +631,18 @@ class MultiFloorSolver:
             plumbing_stack_alignment_pct=plumbing_pct,
             built_up_area_sqm=built_up_m2,
             carpet_area_sqm=carpet_m2,
-            svg_blueprint_cad=self._generate_floor_svg(floor_index, floor_name, rooms, doors, windows, envelope, theme="cad"),
-            svg_blueprint_paper=self._generate_floor_svg(floor_index, floor_name, rooms, doors, windows, envelope, theme="paper"),
+            svg_blueprint_cad=self._generate_floor_svg(
+                floor_index, floor_name, rooms, doors, windows, envelope,
+                ground_cores=invariant_mgr.vertical_cores,
+                ground_ducts=invariant_mgr.duct_shafts,
+                theme="cad"
+            ),
+            svg_blueprint_paper=self._generate_floor_svg(
+                floor_index, floor_name, rooms, doors, windows, envelope,
+                ground_cores=invariant_mgr.vertical_cores,
+                ground_ducts=invariant_mgr.duct_shafts,
+                theme="paper"
+            ),
         )
 
     def _generate_doors_and_windows(
@@ -772,75 +782,28 @@ class MultiFloorSolver:
         doors: List[MultiFloorDoorGeometry],
         windows: List[MultiFloorWindowGeometry],
         envelope: Dict[str, float],
+        ground_cores: Optional[List[VerticalCoreSpec]] = None,
+        ground_ducts: Optional[List[DuctShaftSpec]] = None,
         theme: str = "cad"
     ) -> str:
         """
-        Generates standalone W3C compliant SVG string for an individual floor plate.
+        Generates standalone W3C compliant SVG string for an individual floor plate
+        with Ghost Core Overlay on upper floors (floor_index > 0).
         """
-        scale = 32.0  # pixels per meter
-        margin = 40.0
-        env_w = envelope["width"]
-        env_d = envelope["depth"]
-
-        svg_w = int(env_w * scale + 2 * margin)
-        svg_h = int(env_d * scale + 2 * margin + 40)  # extra height for title block
-
-        bg_color = "#0b132b" if theme == "cad" else "#f7f9fc"
-        wall_color = "#00d2ff" if theme == "cad" else "#1c3d5a"
-        room_fill = "rgba(0, 210, 255, 0.05)" if theme == "cad" else "rgba(28, 61, 90, 0.04)"
-        core_fill = "rgba(255, 170, 0, 0.15)" if theme == "cad" else "rgba(180, 83, 9, 0.12)"
-        text_color = "#ffffff" if theme == "cad" else "#0f172a"
-        sub_text_color = "#94a3b8" if theme == "cad" else "#64748b"
-
-        svg_lines = [
-            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_w} {svg_h}" width="{svg_w}" height="{svg_h}" style="background-color: {bg_color}; font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif;">',
-            f'  <rect width="{svg_w}" height="{svg_h}" fill="{bg_color}" />',
-            f'  <g transform="translate({margin}, {margin})">',
-            f'    <!-- Building Envelope Outer Boundary -->',
-            f'    <rect x="0" y="0" width="{env_w * scale}" height="{env_d * scale}" fill="none" stroke="{wall_color}" stroke-width="3.5" />'
-        ]
-
-        # Draw Rooms
-        for r in rooms:
-            rx = r.x * scale
-            ry = r.y * scale
-            rw = r.width_m * scale
-            rh = r.depth_m * scale
-
-            fill = core_fill if r.is_vertical_core else room_fill
-            stroke_dash = 'stroke-dasharray="4,2"' if r.is_vertical_core else ""
-
-            svg_lines.append(
-                f'    <rect x="{rx}" y="{ry}" width="{rw}" height="{rh}" fill="{fill}" stroke="{wall_color}" stroke-width="1.8" {stroke_dash} />'
-            )
-
-            # Room Label & Area
-            cx = rx + rw / 2.0
-            cy = ry + rh / 2.0
-            svg_lines.append(
-                f'    <text x="{cx}" y="{cy - 6}" font-size="11" font-weight="600" fill="{text_color}" text-anchor="middle">{r.room_name}</text>'
-            )
-            svg_lines.append(
-                f'    <text x="{cx}" y="{cy + 10}" font-size="9" fill="{sub_text_color}" text-anchor="middle">{r.width_m:.1f}m × {r.depth_m:.1f}m ({r.area_sqm:.1f}m²)</text>'
-            )
-
-            # If staircase, draw inner tread lines
-            if r.is_vertical_core:
-                treads = 6
-                for i in range(1, treads):
-                    ty = ry + (rh / treads) * i
-                    svg_lines.append(f'    <line x1="{rx + 4}" y1="{ty}" x2="{rx + rw - 4}" y2="{ty}" stroke="{wall_color}" stroke-width="1" opacity="0.6" />')
-
-        # Title Block Banner
-        banner_y = env_d * scale + 24
-        elevation_m = floor_index * 3.0
-        svg_lines.append(f'    <text x="0" y="{banner_y}" font-size="12" font-weight="bold" fill="{text_color}">{floor_name} (+{elevation_m:.2f}m)</text>')
-        svg_lines.append(f'    <text x="{env_w * scale}" y="{banner_y}" font-size="10" fill="{sub_text_color}" text-anchor="end">Scale 1:50 | NBC 2016 Compliant</text>')
-
-        svg_lines.append('  </g>')
-        svg_lines.append('</svg>')
-
-        return "\n".join(svg_lines)
+        from app.services.floorplan.svg_generator import generate_multi_floor_blueprint_svg
+        return generate_multi_floor_blueprint_svg(
+            floor_index=floor_index,
+            floor_name=floor_name,
+            rooms=rooms,
+            doors=doors,
+            windows=windows,
+            envelope=envelope,
+            ground_cores=ground_cores,
+            ground_ducts=ground_ducts,
+            theme=theme,
+            include_ghost_overlay=(floor_index > 0),
+            building_typology=self.typology,
+        )
 
 
 # =====================================================================

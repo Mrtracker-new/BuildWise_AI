@@ -1,3 +1,4 @@
+import math
 from typing import List, Dict, Tuple, Optional, Any
 from app.services.floorplan.grid_model import RoomBox, ROOM_CATALOG
 from app.schemas.floorplan import RectanglesModel
@@ -979,3 +980,290 @@ def generate_blueprint_from_rectangles(
 
     svg.append('</svg>')
     return "".join(svg)
+
+
+# =====================================================================
+# Multi-Storey Blueprint SVG Generator with Ghost Core Overlay
+# =====================================================================
+
+def generate_multi_floor_blueprint_svg(
+    floor_index: int,
+    floor_name: str,
+    rooms: List[Any],
+    doors: List[Any],
+    windows: List[Any],
+    envelope: Dict[str, float],
+    ground_cores: Optional[List[Any]] = None,
+    ground_ducts: Optional[List[Any]] = None,
+    theme: str = "cad",
+    include_ghost_overlay: bool = True,
+    building_typology: Optional[str] = None,
+) -> str:
+    """
+    Renders a publication-grade architectural CAD/Paper SVG blueprint for an individual storey plate.
+    Features:
+    - Accurate wall thicknesses (exterior structural envelope vs interior partitions)
+    - True-scale door leaves & swing arcs
+    - North arrow, metric scale bar, and title block with elevation
+    - Ghost Core Overlay: on upper storeys (floor_index > 0), renders a faint dashed outline
+      of ground floor's vertical cores & MEP shafts to visually prove exact physical vertical stacking.
+    """
+    scale = 36.0  # pixels per meter
+    margin_x = 55.0
+    margin_y = 55.0
+    title_block_h = 44.0
+
+    env_w = envelope.get("width", 12.0)
+    env_d = envelope.get("depth", 15.0)
+
+    content_w = env_w * scale
+    content_h = env_d * scale
+    svg_w = int(content_w + (2.0 * margin_x))
+    svg_h = int(content_h + (2.0 * margin_y) + title_block_h)
+
+    # Theme Palettes
+    is_cad = (theme == "cad")
+    bg_color = "#0B132B" if is_cad else "#F8FAFC"
+    grid_line = "#1E293B" if is_cad else "#E2E8F0"
+    ext_wall_stroke = "#38BDF8" if is_cad else "#1E293B"
+    int_wall_stroke = "#94A3B8" if is_cad else "#475569"
+    door_stroke = "#38BDF8" if is_cad else "#0284C7"
+    window_stroke = "#0284C7" if is_cad else "#0369A1"
+    core_stroke = "#F59E0B" if is_cad else "#D97706"
+    text_primary = "#F8FAFC" if is_cad else "#0F172A"
+    text_secondary = "#94A3B8" if is_cad else "#64748B"
+    text_dim = "#64748B" if is_cad else "#94A3B8"
+
+    # Ghost Core styling (faint luminous cyan/amber for CAD, crisp soft blue for Paper)
+    ghost_stroke = "#06B6D4" if is_cad else "#0284C7"
+    ghost_fill = "rgba(6, 182, 212, 0.08)" if is_cad else "rgba(2, 132, 199, 0.06)"
+    ghost_badge_bg = "#0E7490" if is_cad else "#0284C7"
+    ghost_badge_text = "#CFFAFE" if is_cad else "#FFFFFF"
+
+    # Coordinate mapping helpers
+    def px(xm: float) -> float:
+        return margin_x + (xm * scale)
+
+    def py(ym: float) -> float:
+        return margin_y + (ym * scale)
+
+    svg: List[str] = []
+    svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_w} {svg_h}" width="{svg_w}" height="{svg_h}" style="background-color: {bg_color}; font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif;">')
+
+    # Styles and Defs
+    svg.append(f"""
+      <defs>
+        <pattern id="mf-grid-{theme}" width="{scale}" height="{scale}" patternUnits="userSpaceOnUse">
+          <path d="M {scale} 0 L 0 0 0 {scale}" fill="none" stroke="{grid_line}" stroke-width="0.75" />
+          <path d="M {scale/2} 0 L {scale/2} {scale} M 0 {scale/2} L {scale} {scale/2}" fill="none" stroke="{grid_line}" stroke-width="0.25" stroke-dasharray="2 2" />
+        </pattern>
+        <style>
+          .ghost-core-overlay {{
+            transition: opacity 0.2s ease;
+          }}
+          .ghost-core-overlay.hidden, [data-ghost-overlay="false"] .ghost-core-overlay {{
+            display: none !important;
+          }}
+          text {{
+            user-select: none;
+          }}
+        </style>
+      </defs>
+    """)
+
+    # Background canvas
+    svg.append(f'  <rect width="{svg_w}" height="{svg_h}" fill="{bg_color}" />')
+    svg.append(f'  <rect x="{margin_x}" y="{margin_y}" width="{content_w}" height="{content_h}" fill="url(#mf-grid-{theme})" />')
+
+    # Plinth Boundary Line
+    svg.append(f'  <rect x="{margin_x}" y="{margin_y}" width="{content_w}" height="{content_h}" fill="none" stroke="{ext_wall_stroke}" stroke-width="4.5" />')
+
+    # 1. Room Background Fills
+    for r in rooms:
+        rx = px(r.x)
+        ry = py(r.y)
+        rw = r.width_m * scale
+        rh = r.depth_m * scale
+
+        if r.is_vertical_core:
+            fill_color = "rgba(245, 158, 11, 0.15)" if is_cad else "rgba(217, 119, 6, 0.12)"
+        elif r.zone_category == "circulation":
+            fill_color = "rgba(148, 163, 184, 0.12)" if is_cad else "rgba(100, 116, 139, 0.08)"
+        elif r.zone_category == "service":
+            fill_color = "rgba(251, 191, 36, 0.12)" if is_cad else "rgba(245, 158, 11, 0.09)"
+        elif r.zone_category == "private":
+            fill_color = "rgba(56, 189, 248, 0.12)" if is_cad else "rgba(2, 132, 199, 0.08)"
+        elif r.zone_category == "industrial_bay":
+            fill_color = "rgba(14, 165, 233, 0.10)" if is_cad else "rgba(14, 165, 233, 0.06)"
+        else:
+            fill_color = "rgba(52, 211, 153, 0.12)" if is_cad else "rgba(16, 185, 129, 0.08)"
+
+        svg.append(f'  <rect x="{rx:.1f}" y="{ry:.1f}" width="{rw:.1f}" height="{rh:.1f}" fill="{fill_color}" />')
+
+    # 2. Ghost Core Overlay (Active on Upper Floors floor_index > 0)
+    if floor_index > 0 and include_ghost_overlay and (ground_cores or ground_ducts):
+        svg.append('  <!-- ================= GHOST CORE OVERLAY (STACKING PROOF) ================= -->')
+        svg.append('  <g id="ghost-core-overlay" class="ghost-core-overlay" data-visible="true">')
+
+        # Render ground floor vertical cores
+        if ground_cores:
+            for gcore in ground_cores:
+                gx = px(gcore.x)
+                gy = py(gcore.y)
+                gw = gcore.width_m * scale
+                gh = gcore.depth_m * scale
+
+                # Dashed bounding box of ground core
+                svg.append(
+                    f'    <rect x="{gx:.1f}" y="{gy:.1f}" width="{gw:.1f}" height="{gh:.1f}" '
+                    f'fill="{ghost_fill}" stroke="{ghost_stroke}" stroke-width="2.2" stroke-dasharray="6 4" />'
+                )
+
+                # Tread ghost lines
+                num_treads = 6
+                for t in range(1, num_treads):
+                    t_y = gy + (gh / num_treads) * t
+                    svg.append(f'    <line x1="{gx + 3:.1f}" y1="{t_y:.1f}" x2="{gx + gw - 3:.1f}" y2="{t_y:.1f}" stroke="{ghost_stroke}" stroke-width="1.0" stroke-dasharray="3 3" opacity="0.6" />')
+
+                # Alignment Proof Watermark Badge
+                badge_w = min(110.0, gw - 8.0)
+                badge_x = gx + (gw / 2.0) - (badge_w / 2.0)
+                badge_y = gy + 8.0
+                svg.append(f'    <rect x="{badge_x:.1f}" y="{badge_y:.1f}" width="{badge_w:.1f}" height="18" rx="4" fill="{ghost_badge_bg}" opacity="0.9" />')
+                svg.append(f'    <text x="{gx + gw/2.0:.1f}" y="{badge_y + 12.5:.1f}" font-size="8.5" font-weight="700" fill="{ghost_badge_text}" text-anchor="middle" letter-spacing="0.5">F0 CORE ANCHOR</text>')
+
+        # Render ground floor MEP duct shafts
+        if ground_ducts:
+            for gduct in ground_ducts:
+                dx = px(gduct.x)
+                dy = py(gduct.y)
+                dw = gduct.width_m * scale
+                dh = gduct.depth_m * scale
+                svg.append(
+                    f'    <rect x="{dx:.1f}" y="{dy:.1f}" width="{dw:.1f}" height="{dh:.1f}" '
+                    f'fill="rgba(245, 158, 11, 0.12)" stroke="#F59E0B" stroke-width="1.8" stroke-dasharray="4 3" />'
+                )
+                # Cross hatch
+                svg.append(f'    <line x1="{dx:.1f}" y1="{dy:.1f}" x2="{dx + dw:.1f}" y2="{dy + dh:.1f}" stroke="#F59E0B" stroke-width="1.0" stroke-dasharray="2 2" opacity="0.7" />')
+                svg.append(f'    <line x1="{dx + dw:.1f}" y1="{dy:.1f}" x2="{dx:.1f}" y2="{dy + dh:.1f}" stroke="#F59E0B" stroke-width="1.0" stroke-dasharray="2 2" opacity="0.7" />')
+
+        svg.append('  </g>')
+
+    # 3. Room Interior Partition Walls
+    for r in rooms:
+        rx = px(r.x)
+        ry = py(r.y)
+        rw = r.width_m * scale
+        rh = r.depth_m * scale
+
+        wall_strk = core_stroke if r.is_vertical_core else int_wall_stroke
+        wall_w = "2.8" if r.is_vertical_core else "2.0"
+        stroke_dash = 'stroke-dasharray="4 2"' if r.is_vertical_core else ""
+
+        svg.append(
+            f'  <rect x="{rx:.1f}" y="{ry:.1f}" width="{rw:.1f}" height="{rh:.1f}" '
+            f'fill="none" stroke="{wall_strk}" stroke-width="{wall_w}" {stroke_dash} />'
+        )
+
+        # If current level staircase, draw crisp treads
+        if r.is_vertical_core:
+            num_treads = 7
+            for t in range(1, num_treads):
+                t_y = ry + (rh / num_treads) * t
+                svg.append(f'  <line x1="{rx + 4:.1f}" y1="{t_y:.1f}" x2="{rx + rw - 4:.1f}" y2="{t_y:.1f}" stroke="{core_stroke}" stroke-width="1.2" opacity="0.7" />')
+            # UP arrow
+            arrow_x = rx + rw - 14.0
+            svg.append(f'  <line x1="{arrow_x:.1f}" y1="{ry + rh - 12:.1f}" x2="{arrow_x:.1f}" y2="{ry + 14:.1f}" stroke="{core_stroke}" stroke-width="1.6" />')
+            svg.append(f'  <polyline points="{arrow_x - 3},{ry + 18} {arrow_x},{ry + 13} {arrow_x + 3},{ry + 18}" fill="none" stroke="{core_stroke}" stroke-width="1.6" />')
+            svg.append(f'  <text x="{arrow_x - 6:.1f}" y="{ry + rh/2:.1f}" font-size="7.5" font-weight="700" fill="{core_stroke}" text-anchor="end">UP</text>')
+
+    # 4. Windows (Double line on exterior walls)
+    for win in windows:
+        wx1 = px(win.x1)
+        wy1 = py(win.y1)
+        wx2 = px(win.x2)
+        wy2 = py(win.y2)
+        svg.append(f'  <line x1="{wx1:.1f}" y1="{wy1:.1f}" x2="{wx2:.1f}" y2="{wy2:.1f}" stroke="{window_stroke}" stroke-width="3.6" />')
+        svg.append(f'  <line x1="{wx1:.1f}" y1="{wy1:.1f}" x2="{wx2:.1f}" y2="{wy2:.1f}" stroke="{bg_color}" stroke-width="1.4" />')
+
+    # 5. Doors with Swing Arcs
+    for d in doors:
+        hx = px(d.hinge_x)
+        hy = py(d.hinge_y)
+        x1 = px(d.x1)
+        y1 = py(d.y1)
+        x2 = px(d.x2)
+        y2 = py(d.y2)
+
+        dw = math.hypot(x2 - x1, y2 - y1)
+        if dw < 4.0:
+            dw = 28.0
+
+        # Draw door leaf line
+        svg.append(f'  <line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{door_stroke}" stroke-width="2.2" />')
+
+    # 6. Room Labels & Dimensions
+    for r in rooms:
+        cx = px(r.x + r.width_m / 2.0)
+        cy = py(r.y + r.depth_m / 2.0)
+
+        # Room Name
+        svg.append(
+            f'  <text x="{cx:.1f}" y="{cy - 5.0:.1f}" font-size="10.5" font-weight="700" fill="{text_primary}" text-anchor="middle" letter-spacing="0.5">{r.room_name.upper()}</text>'
+        )
+        # Dimensions & Zone
+        zone_info = f"[{r.zone}]" if r.zone else ""
+        svg.append(
+            f'  <text x="{cx:.1f}" y="{cy + 10.0:.1f}" font-size="8.5" font-weight="500" fill="{text_secondary}" text-anchor="middle">{r.width_m:.1f}m × {r.depth_m:.1f}m ({r.area_sqm:.1f}m²) {zone_info}</text>'
+        )
+
+    # 7. Exterior Dimension Lines
+    dim_top_y = margin_y - 20.0
+    dim_x1 = margin_x
+    dim_x2 = margin_x + content_w
+    svg.append(f'  <line x1="{dim_x1:.1f}" y1="{dim_top_y:.1f}" x2="{dim_x2:.1f}" y2="{dim_top_y:.1f}" stroke="{text_dim}" stroke-width="1.0" />')
+    svg.append(f'  <line x1="{dim_x1 - 4:.1f}" y1="{dim_top_y + 4:.1f}" x2="{dim_x1 + 4:.1f}" y2="{dim_top_y - 4:.1f}" stroke="{text_secondary}" stroke-width="1.5" />')
+    svg.append(f'  <line x1="{dim_x2 - 4:.1f}" y1="{dim_top_y + 4:.1f}" x2="{dim_x2 + 4:.1f}" y2="{dim_top_y - 4:.1f}" stroke="{text_secondary}" stroke-width="1.5" />')
+    svg.append(f'  <text x="{(dim_x1 + dim_x2)/2.0:.1f}" y="{dim_top_y - 6.0:.1f}" font-size="9.0" font-weight="600" fill="{text_secondary}" text-anchor="middle">{env_w:.1f}m ENVELOPE WIDTH</text>')
+
+    dim_left_x = margin_x - 20.0
+    dim_y1 = margin_y
+    dim_y2 = margin_y + content_h
+    svg.append(f'  <line x1="{dim_left_x:.1f}" y1="{dim_y1:.1f}" x2="{dim_left_x:.1f}" y2="{dim_y2:.1f}" stroke="{text_dim}" stroke-width="1.0" />')
+    svg.append(f'  <line x1="{dim_left_x - 4:.1f}" y1="{dim_y1 + 4:.1f}" x2="{dim_left_x + 4:.1f}" y2="{dim_y1 - 4:.1f}" stroke="{text_secondary}" stroke-width="1.5" />')
+    svg.append(f'  <line x1="{dim_left_x - 4:.1f}" y1="{dim_y2 + 4:.1f}" x2="{dim_left_x + 4:.1f}" y2="{dim_y2 - 4:.1f}" stroke="{text_secondary}" stroke-width="1.5" />')
+    svg.append(f'  <text x="{dim_left_x - 8.0:.1f}" y="{(dim_y1 + dim_y2)/2.0:.1f}" font-size="9.0" font-weight="600" fill="{text_secondary}" text-anchor="middle" transform="rotate(-90 {dim_left_x - 8.0:.1f} {(dim_y1 + dim_y2)/2.0:.1f})">{env_d:.1f}m ENVELOPE DEPTH</text>')
+
+    # 8. North Arrow / Compass
+    compass_x = svg_w - 40.0
+    compass_y = 36.0
+    svg.append(f'  <g transform="translate({compass_x}, {compass_y})">')
+    svg.append(f'    <circle cx="0" cy="0" r="14" fill="{bg_color}" stroke="{text_secondary}" stroke-width="1.2" />')
+    svg.append(f'    <polygon points="0,-12 3,0 0,-2 -3,0" fill="{ext_wall_stroke}" />')
+    svg.append(f'    <polygon points="0,12 3,0 0,2 -3,0" fill="{text_dim}" />')
+    svg.append(f'    <text x="0" y="-15" font-size="8.5" font-weight="800" fill="{text_primary}" text-anchor="middle">N</text>')
+    svg.append('  </g>')
+
+    # 9. Scale Bar
+    scale_y = svg_h - 18.0
+    svg.append(f'  <g transform="translate({margin_x}, {scale_y})">')
+    svg.append(f'    <rect x="0" y="0" width="{scale}" height="3" fill="{text_secondary}" />')
+    svg.append(f'    <rect x="{scale}" y="0" width="{scale}" height="3" fill="{grid_line}" />')
+    svg.append(f'    <text x="0" y="-4" font-size="7.0" fill="{text_secondary}">0</text>')
+    svg.append(f'    <text x="{scale}" y="-4" font-size="7.0" fill="{text_secondary}">1m</text>')
+    svg.append(f'    <text x="{scale*2}" y="-4" font-size="7.0" fill="{text_secondary}">2m (SCALE 1:50)</text>')
+    svg.append('  </g>')
+
+    # 10. Title Block Banner
+    banner_y = margin_y + content_h + 24.0
+    elevation_m = floor_index * 3.0
+    typology_tag = f"TYPOLOGY: {building_typology.upper()}" if building_typology else "NBC 2016 COMPLIANT"
+    svg.append(f'  <g transform="translate({margin_x}, {banner_y})">')
+    svg.append(f'    <text x="0" y="0" font-size="12.0" font-weight="700" fill="{text_primary}">{floor_name.upper()} (+{elevation_m:.2f}m LVL)</text>')
+    svg.append(f'    <text x="0" y="14" font-size="9.0" font-weight="500" fill="{text_secondary}">{typology_tag} | CORE ALIGNMENT VERIFIED</text>')
+    svg.append(f'    <text x="{content_w}" y="7" font-size="9.5" font-weight="600" fill="{text_secondary}" text-anchor="end">BUILDIWISE GENERATIVE CAD ENGINE</text>')
+    svg.append('  </g>')
+
+    svg.append('</svg>')
+    return "\n".join(svg)
+

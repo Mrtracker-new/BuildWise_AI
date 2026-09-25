@@ -1,6 +1,6 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import ReactDOM from 'react-dom';
-import type { RoomPlacement } from '../services/types';
+import type { RoomPlacement, MultiStoreyBuildingModel, SingleFloorPlanModel } from '../services/types';
 import { Icon } from './Icon';
 
 interface BlueprintViewerProps {
@@ -9,18 +9,58 @@ interface BlueprintViewerProps {
   placements?: RoomPlacement[];
   plotWidthM?: number;
   plotDepthM?: number;
+  multiStorey?: MultiStoreyBuildingModel | null;
 }
 
-const ROOM_METADATA: Record<string, { dotColor: string; label: string; zone: string }> = {
+const ROOM_METADATA: Record<string, { dotColor: string; label: string; zone: string; isCore?: boolean }> = {
+  // T1 Residence
   master_bed: { dotColor: '#0284C7', label: 'Master Bedroom', zone: 'SW' },
-  living: { dotColor: '#10B981', label: 'Living Room', zone: 'N/E' },
+  living: { dotColor: '#10B981', label: 'Living Room', zone: 'N/NE' },
   kitchen: { dotColor: '#F59E0B', label: 'Kitchen', zone: 'SE' },
   puja: { dotColor: '#EAB308', label: 'Puja Room', zone: 'NE' },
   bath_1: { dotColor: '#06B6D4', label: 'Primary Bath', zone: 'W' },
   bath_2: { dotColor: '#14B8A6', label: 'Common Bath', zone: 'NW' },
   bed_2: { dotColor: '#3B82F6', label: 'Bedroom 2', zone: 'NW' },
   dining: { dotColor: '#F97316', label: 'Dining Area', zone: 'W' },
-  stairs: { dotColor: '#64748B', label: 'Staircase', zone: 'SW/W' },
+  stairs: { dotColor: '#8B5CF6', label: 'Staircase Core', zone: 'SW/W', isCore: true },
+  balcony: { dotColor: '#10B981', label: 'Balcony', zone: 'N/E' },
+  study: { dotColor: '#6366F1', label: 'Study / Office', zone: 'NE' },
+  utility: { dotColor: '#EC4899', label: 'Utility / Store', zone: 'SE' },
+
+  // T2 Apartment
+  staircase_core: { dotColor: '#8B5CF6', label: 'Common Stair Core', zone: 'CORE', isCore: true },
+  lift_core: { dotColor: '#A855F7', label: 'Passenger Lift Core', zone: 'CORE', isCore: true },
+  lobby: { dotColor: '#64748B', label: 'Central Lobby', zone: 'CIRC' },
+  apt_a_living: { dotColor: '#059669', label: 'Unit A Living', zone: 'NE' },
+  apt_a_kitchen: { dotColor: '#D97706', label: 'Unit A Kitchen', zone: 'SE' },
+  apt_a_bed: { dotColor: '#0284C7', label: 'Unit A Master Bed', zone: 'SW' },
+  apt_a_bath: { dotColor: '#0891B2', label: 'Unit A Bath', zone: 'W' },
+  apt_b_living: { dotColor: '#10B981', label: 'Unit B Living', zone: 'NW' },
+  apt_b_kitchen: { dotColor: '#F59E0B', label: 'Unit B Kitchen', zone: 'SE' },
+  apt_b_bed: { dotColor: '#2563EB', label: 'Unit B Bedroom', zone: 'NW' },
+  apt_b_bath: { dotColor: '#06B6D4', label: 'Unit B Bath', zone: 'W' },
+  apt_balcony: { dotColor: '#34D399', label: 'Apartment Balcony', zone: 'E' },
+
+  // T3 Complex
+  fire_stair_1: { dotColor: '#EF4444', label: 'Fire Stair Core 1', zone: 'CORE', isCore: true },
+  fire_stair_2: { dotColor: '#DC2626', label: 'Fire Exit Stair 2', zone: 'CORE', isCore: true },
+  lift_bank: { dotColor: '#9333EA', label: 'Dual Lift Bank & Lobby', zone: 'CORE', isCore: true },
+  corridor: { dotColor: '#64748B', label: 'Spine Corridor', zone: 'CIRC' },
+  commercial_suite_a: { dotColor: '#2563EB', label: 'Commercial Suite A', zone: 'N' },
+  commercial_suite_b: { dotColor: '#3B82F6', label: 'Commercial Suite B', zone: 'E' },
+  commercial_suite_c: { dotColor: '#60A5FA', label: 'Commercial Suite C', zone: 'S' },
+  restroom_block: { dotColor: '#06B6D4', label: 'Public Restrooms', zone: 'W' },
+  mep_room: { dotColor: '#F59E0B', label: 'MEP & Service Room', zone: 'NW' },
+
+  // T4 Warehouse
+  storage_bay: { dotColor: '#3B82F6', label: 'Clear-Span Storage Bay', zone: 'BAY' },
+  loading_dock: { dotColor: '#F97316', label: 'Loading Dock Shutter', zone: 'DOCK' },
+  dispatch_buffer: { dotColor: '#EAB308', label: 'Dispatch Buffer', zone: 'BUFFER' },
+  staff_amenities: { dotColor: '#14B8A6', label: 'Staff Locker & WC', zone: 'AMENITY' },
+  steel_stair: { dotColor: '#8B5CF6', label: 'Industrial Steel Stair', zone: 'CORE', isCore: true },
+  mezzanine_office: { dotColor: '#6366F1', label: 'Mezzanine Office', zone: 'OFFICE' },
+  conference_room: { dotColor: '#8B5CF6', label: 'Conference Room', zone: 'ADMIN' },
+  catwalk: { dotColor: '#94A3B8', label: 'Inspection Catwalk', zone: 'ACCESS' },
 };
 
 export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
@@ -29,12 +69,17 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   placements = [],
   plotWidthM,
   plotDepthM,
+  multiStorey = null,
 }) => {
   const [mode, setMode] = useState<'cad' | 'paper'>('cad');
   const [zoom, setZoom] = useState<number>(1.0);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState<boolean>(false);
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+
+  // Multi-floor state
+  const [activeFloorIndex, setActiveFloorIndex] = useState<number>(0);
+  const [showGhostOverlay, setShowGhostOverlay] = useState<boolean>(true);
 
   // Modal zoom and pan state
   const [modalZoom, setModalZoom] = useState<number>(1.0);
@@ -46,18 +91,41 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   const modalDragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const modalPanStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  const activeSvg = mode === 'paper' && svgPaperString ? svgPaperString : svgString;
+  const isMultiStorey = Boolean(multiStorey && multiStorey.floors && multiStorey.floors.length > 0);
+  const currentFloor: SingleFloorPlanModel | null = isMultiStorey
+    ? multiStorey!.floors[activeFloorIndex] || multiStorey!.floors[0]
+    : null;
 
-  // Sanitize raw SVG and inject paint-order halo style for crisp room labels
+  // Ensure activeFloorIndex is within bounds if floors change
+  useEffect(() => {
+    if (multiStorey?.floors && activeFloorIndex >= multiStorey.floors.length) {
+      setActiveFloorIndex(0);
+    }
+  }, [multiStorey, activeFloorIndex]);
+
+  const activeSvg = useMemo(() => {
+    if (currentFloor) {
+      return mode === 'paper' && currentFloor.svg_blueprint_paper
+        ? currentFloor.svg_blueprint_paper
+        : currentFloor.svg_blueprint_cad;
+    }
+    return mode === 'paper' && svgPaperString ? svgPaperString : svgString;
+  }, [currentFloor, mode, svgPaperString, svgString]);
+
+  // Sanitize raw SVG and inject paint-order halo style + dynamic ghost overlay styling
   const sanitizedSvg = useMemo(() => {
     if (!activeSvg) return '';
     const cleaned = activeSvg
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
       .replace(/on\w+\s*=\s*["'][^"']*["']/gi, '');
 
-    // Inject paint-order stroke halo rule into SVG for legibility
+    const ghostOverlayCss = showGhostOverlay
+      ? '.ghost-core-overlay { display: block !important; opacity: 1 !important; }'
+      : '.ghost-core-overlay { display: none !important; opacity: 0 !important; visibility: hidden !important; }';
+
     const styleInjection = `
       <style>
+        ${ghostOverlayCss}
         text {
           paint-order: stroke fill;
           stroke: var(--blueprint-bg, #0E1726);
@@ -70,10 +138,33 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
     `;
 
     if (cleaned.includes('<svg')) {
-      return cleaned.replace(/<svg\b([^>]*)>/i, `<svg $1>${styleInjection}`);
+      return cleaned.replace(
+        /<svg\b([^>]*)>/i,
+        `<svg $1 data-ghost-overlay="${showGhostOverlay ? 'true' : 'false'}">${styleInjection}`
+      );
     }
     return cleaned;
-  }, [activeSvg]);
+  }, [activeSvg, showGhostOverlay]);
+
+  // Derive per-floor room placements for current floor legend
+  const currentPlacements = useMemo(() => {
+    if (currentFloor && currentFloor.rooms && currentFloor.rooms.length > 0) {
+      return currentFloor.rooms.map((r) => ({
+        room_id: r.room_id,
+        room_name: r.room_name,
+        zone: r.zone,
+        is_core: Boolean(r.is_vertical_core),
+        area_sqm: r.area_sqm,
+      }));
+    }
+    return placements.map((p) => ({
+      room_id: p.room_id,
+      room_name: p.room_name,
+      zone: p.zone,
+      is_core: p.room_id === 'stairs' || p.room_id.includes('stair') || p.room_id.includes('lift'),
+      area_sqm: p.area_sqm,
+    }));
+  }, [currentFloor, placements]);
 
   const handleZoomIn = () => setZoom((z) => Math.min(2.5, +(z + 0.25).toFixed(2)));
   const handleZoomOut = () => setZoom((z) => Math.max(0.75, +(z - 0.25).toFixed(2)));
@@ -95,7 +186,8 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `BuildWise_Blueprint_${plotWidthM || 10}x${plotDepthM || 12}m.svg`;
+    const floorTag = currentFloor ? `_${currentFloor.floor_name.replace(/\s+/g, '_')}` : '';
+    link.download = `BuildWise_Blueprint${floorTag}_${plotWidthM || 10}x${plotDepthM || 12}m.svg`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -160,57 +252,152 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
 
   const handleModalMouseUp = () => setIsModalPanning(false);
 
+  // Render floor switcher tab bar
+  const renderFloorSwitcher = (isModal: boolean = false) => {
+    if (!isMultiStorey || !multiStorey?.floors || multiStorey.floors.length <= 1) {
+      return null;
+    }
+
+    return (
+      <div
+        className={`flex items-center gap-1.5 overflow-x-auto py-1.5 px-3.5 border-b border-[var(--hairline)] ${
+          isModal ? 'bg-[var(--fill)]/40' : 'bg-[var(--fill)]/20'
+        } scrollbar-none`}
+      >
+        <div className="flex items-center gap-1 mr-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-3)] shrink-0 select-none">
+          <Icon name="layers" size={13} className="text-[var(--accent)]" />
+          <span>Levels:</span>
+        </div>
+        {multiStorey.floors.map((fl, idx) => {
+          const isActive = activeFloorIndex === idx;
+          const elevation = (fl.floor_index * 3.0).toFixed(1);
+          const isGround = fl.floor_index === 0;
+          return (
+            <button
+              key={fl.floor_index}
+              type="button"
+              onClick={() => setActiveFloorIndex(idx)}
+              className={`px-3 py-1.5 rounded-[9px] text-[12px] transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${
+                isActive
+                  ? 'bg-[var(--accent)] text-white shadow-sm font-semibold ring-1 ring-white/20'
+                  : 'bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--fill-hover)] font-medium'
+              }`}
+            >
+              <span>{fl.floor_name || `Floor ${fl.floor_index}`}</span>
+              <span
+                className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                  isActive ? 'bg-white/20 text-white' : 'bg-black/5 dark:bg-white/10 text-[var(--text-3)]'
+                }`}
+              >
+                +{elevation}m
+              </span>
+              {isGround && (
+                <span
+                  className={`text-[9px] px-1.5 py-0.2 rounded font-bold uppercase tracking-wider ${
+                    isActive ? 'bg-amber-400 text-amber-950' : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                  }`}
+                >
+                  Anchor
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
   return (
     <div
       id="blueprint-viewer-container"
       className="flex flex-col w-full min-w-0 rounded-[16px] vibrancy-panel border border-[var(--panel-border-color)] shadow-md overflow-hidden @container"
     >
-      {/* 1. Header: title 15px/600 left; right = single nowrap dimension chip + CAD 2D chip */}
+      {/* 1. Header: title + dimension chip + CAD/Storey chip */}
       <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 border-b border-[var(--hairline)]">
         <div className="flex items-center gap-2 min-w-0">
           <Icon name="blueprint" size={15} className="text-[var(--accent)] shrink-0" />
           <h3 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight truncate">
-            Architectural Blueprint
+            {currentFloor ? `${currentFloor.floor_name}` : 'Architectural Blueprint'}
           </h3>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
+          {currentFloor && (
+            <span className="font-mono text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-2 py-0.5 rounded-[6px] whitespace-nowrap">
+              +{(currentFloor.floor_index * 3.0).toFixed(1)}m LVL
+            </span>
+          )}
           {plotWidthM && plotDepthM && (
             <span className="font-mono text-[11px] font-medium text-[var(--text-1)] bg-[var(--fill)] px-2 py-0.5 rounded-[6px] whitespace-nowrap">
               {plotWidthM.toFixed(1)}m × {plotDepthM.toFixed(1)}m
             </span>
           )}
           <span className="text-[10px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-1.5 py-0.5 rounded-[6px] uppercase tracking-wider whitespace-nowrap">
-            CAD 2D
+            {isMultiStorey ? `${multiStorey?.total_storeys}F CAD` : 'CAD 2D'}
           </span>
         </div>
       </div>
 
-      {/* 2. Toolbar row below header: 28px square --fill buttons radius 8, 14px icons, gap 8, zoom % label 12px --text-2 */}
+      {/* 2. Storey Switcher Tabs (Rendered when multi-floor) */}
+      {renderFloorSwitcher(false)}
+
+      {/* 3. Toolbar row below header */}
       <div className="flex items-center justify-between gap-2 px-3.5 py-2 border-b border-[var(--hairline)] bg-[var(--fill)]/30">
-        {/* Mode Selector: CAD vs Paper */}
-        <div className="flex items-center bg-[var(--fill)] rounded-[8px] p-0.5">
-          <button
-            type="button"
-            onClick={() => setMode('cad')}
-            className={`px-2 py-1 rounded-[6px] text-[11px] font-semibold transition-all cursor-pointer ${
-              mode === 'cad'
-                ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
-                : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
-            }`}
-          >
-            CAD
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('paper')}
-            className={`px-2 py-1 rounded-[6px] text-[11px] font-semibold transition-all cursor-pointer ${
-              mode === 'paper'
-                ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
-                : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
-            }`}
-          >
-            Paper
-          </button>
+        <div className="flex items-center gap-2">
+          {/* Mode Selector: CAD vs Paper */}
+          <div className="flex items-center bg-[var(--fill)] rounded-[8px] p-0.5">
+            <button
+              type="button"
+              onClick={() => setMode('cad')}
+              className={`px-2 py-1 rounded-[6px] text-[11px] font-semibold transition-all cursor-pointer ${
+                mode === 'cad'
+                  ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
+                  : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
+              }`}
+            >
+              CAD
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('paper')}
+              className={`px-2 py-1 rounded-[6px] text-[11px] font-semibold transition-all cursor-pointer ${
+                mode === 'paper'
+                  ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
+                  : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
+              }`}
+            >
+              Paper
+            </button>
+          </div>
+
+          {/* Ghost Core Overlay Toggle (Multi-floor upper storeys) */}
+          {isMultiStorey && multiStorey!.floors.length > 1 && (
+            <button
+              type="button"
+              onClick={() => setShowGhostOverlay((v) => !v)}
+              disabled={activeFloorIndex === 0}
+              title={
+                activeFloorIndex === 0
+                  ? 'Ground Floor is the primary Anchor Core (Ghost overlay appears on upper floors)'
+                  : showGhostOverlay
+                  ? 'Hide F0 Core Ghost Overlay'
+                  : 'Show F0 Core Ghost Overlay (Verifying vertical stacking alignment)'
+              }
+              className={`h-7 px-2.5 rounded-[8px] text-[11px] font-semibold flex items-center gap-1.5 transition-all cursor-pointer select-none ${
+                activeFloorIndex === 0
+                  ? 'opacity-50 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)]'
+                  : showGhostOverlay
+                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 shadow-xs'
+                  : 'bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)]'
+              }`}
+            >
+              <Icon
+                name="layers"
+                size={13}
+                className={showGhostOverlay && activeFloorIndex > 0 ? 'text-amber-500 animate-pulse' : ''}
+              />
+              <span>{activeFloorIndex === 0 ? 'F0 Anchor' : showGhostOverlay ? 'Ghost Core: ON' : 'Ghost Core: OFF'}</span>
+            </button>
+          )}
         </div>
 
         {/* Zoom Controls & Expand Action */}
@@ -259,7 +446,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
         </div>
       </div>
 
-      {/* 3. Canvas Preview: SVG at 100% width, min-height 320px, bg token --blueprint-bg. Click to open modal */}
+      {/* 4. Canvas Preview */}
       <div
         className="relative w-full min-h-[320px] h-[360px] overflow-hidden select-none cursor-pointer group"
         style={{ backgroundColor: 'var(--blueprint-bg)' }}
@@ -292,7 +479,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
           onMouseUp={handleMouseUp}
         >
           <div
-            key={`blueprint-svg-${mode}-${sanitizedSvg.length}-${plotWidthM}-${plotDepthM}`}
+            key={`blueprint-svg-${activeFloorIndex}-${mode}-${sanitizedSvg.length}-${plotWidthM}-${plotDepthM}`}
             className="relative flex items-center justify-center max-w-full max-h-full drop-shadow-md"
             dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
           />
@@ -305,36 +492,55 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
         </div>
       </div>
 
-      {/* 4. Legend: flex-wrap gap 8; 10px dot + name 12px/500 --text-1 + zone 11px --text-3 in parens; bg --fill, radius full, padding 4px 10px, white-space: nowrap */}
-      {placements.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 p-3 border-t border-[var(--hairline)]">
-          <span className="text-[11px] font-semibold text-[var(--text-3)] uppercase tracking-wider mr-1">
-            Legend:
-          </span>
-          {placements.map((p) => {
+      {/* 5. Per-Floor Room Legend */}
+      {currentPlacements.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 p-3 border-t border-[var(--hairline)] bg-[var(--card-bg-subtle)]/30">
+          <div className="flex items-center gap-1.5 mr-1 shrink-0">
+            <span className="text-[11px] font-semibold text-[var(--text-3)] uppercase tracking-wider">
+              {currentFloor ? `${currentFloor.floor_name}:` : 'Legend:'}
+            </span>
+            {currentFloor && (
+              <span className="text-[10px] text-[var(--text-3)] font-mono">
+                ({currentFloor.rooms.length} zones)
+              </span>
+            )}
+          </div>
+          {currentPlacements.map((p, pIdx) => {
             const meta = ROOM_METADATA[p.room_id] || {
-              dotColor: '#64748B',
+              dotColor: p.is_core ? '#8B5CF6' : '#64748B',
               label: p.room_name,
               zone: p.zone,
             };
             return (
               <div
-                key={p.room_id}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--fill)] text-[12px] font-medium text-[var(--text-1)] whitespace-nowrap select-none"
+                key={`${p.room_id}-${pIdx}`}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium whitespace-nowrap select-none border transition-colors ${
+                  p.is_core
+                    ? 'bg-purple-500/10 border-purple-500/30 text-purple-700 dark:text-purple-300'
+                    : 'bg-[var(--fill)] border-transparent text-[var(--text-1)]'
+                }`}
               >
                 <span
                   className="w-2.5 h-2.5 rounded-full shrink-0 shadow-2xs"
                   style={{ backgroundColor: meta.dotColor }}
                 />
-                <span className="text-[12px] font-medium text-[var(--text-1)]">{meta.label}</span>
-                <span className="text-[11px] text-[var(--text-3)] font-normal">({p.zone})</span>
+                <span className="text-[12px] font-medium">{meta.label}</span>
+                {p.area_sqm && (
+                  <span className="text-[11px] font-mono opacity-75">{p.area_sqm.toFixed(1)}m²</span>
+                )}
+                <span className="text-[10px] text-[var(--text-3)] font-normal">({p.zone})</span>
+                {p.is_core && (
+                  <span className="text-[9px] px-1 py-0.2 rounded font-bold uppercase bg-purple-500/20 text-purple-600 dark:text-purple-300 tracking-wider">
+                    Core
+                  </span>
+                )}
               </div>
             );
           })}
         </div>
       )}
 
-      {/* 5. macOS-Style Fullscreen Sheet Modal */}
+      {/* 6. macOS-Style Fullscreen Sheet Modal */}
       {isModalOpen &&
         ReactDOM.createPortal(
           <div
@@ -342,7 +548,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
             onClick={() => setIsModalOpen(false)}
           >
             <div
-              className="vibrancy-panel rounded-[20px] max-w-[90vw] max-h-[85vh] w-full h-full flex flex-col shadow-2xl border border-[var(--panel-border-color)] overflow-hidden"
+              className="vibrancy-panel rounded-[20px] max-w-[92vw] max-h-[88vh] w-full h-full flex flex-col shadow-2xl border border-[var(--panel-border-color)] overflow-hidden"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Modal Header */}
@@ -353,17 +559,18 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                   </div>
                   <div className="min-w-0">
                     <h3 className="text-[16px] font-semibold text-[var(--text-1)] tracking-tight">
-                      Architectural Floor Plan
+                      {currentFloor ? `${currentFloor.floor_name}` : 'Architectural Floor Plan'}
                     </h3>
                     <p className="text-[12px] text-[var(--text-2)] truncate">
                       CAD 2D Drafting &bull; {plotWidthM || 10}m × {plotDepthM || 12}m Grid
+                      {currentFloor && ` • Elevation +${(currentFloor.floor_index * 3.0).toFixed(1)}m`}
                     </p>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2">
                   {/* Mode switcher in modal */}
-                  <div className="flex items-center bg-[var(--fill)] rounded-[8px] p-0.5 mr-2">
+                  <div className="flex items-center bg-[var(--fill)] rounded-[8px] p-0.5 mr-1">
                     <button
                       type="button"
                       onClick={() => setMode('cad')}
@@ -387,6 +594,36 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                       Paper
                     </button>
                   </div>
+
+                  {/* Ghost Core Toggle in Modal */}
+                  {isMultiStorey && multiStorey!.floors.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowGhostOverlay((v) => !v)}
+                      disabled={activeFloorIndex === 0}
+                      title={
+                        activeFloorIndex === 0
+                          ? 'Ground Floor is the primary Anchor Core'
+                          : showGhostOverlay
+                          ? 'Hide F0 Core Ghost Overlay'
+                          : 'Show F0 Core Ghost Overlay'
+                      }
+                      className={`h-8 px-2.5 rounded-[8px] text-[11px] font-semibold flex items-center gap-1.5 transition-all cursor-pointer mr-1 select-none ${
+                        activeFloorIndex === 0
+                          ? 'opacity-50 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)]'
+                          : showGhostOverlay
+                          ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30'
+                          : 'bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)]'
+                      }`}
+                    >
+                      <Icon
+                        name="layers"
+                        size={13}
+                        className={showGhostOverlay && activeFloorIndex > 0 ? 'text-amber-500 animate-pulse' : ''}
+                      />
+                      <span>{activeFloorIndex === 0 ? 'F0 Anchor' : showGhostOverlay ? 'Ghost: ON' : 'Ghost: OFF'}</span>
+                    </button>
+                  )}
 
                   {/* Modal Zoom Controls */}
                   <button
@@ -444,6 +681,9 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                 </div>
               </div>
 
+              {/* Modal Storey Switcher Tabs */}
+              {renderFloorSwitcher(true)}
+
               {/* Modal Body Canvas */}
               <div
                 className="relative flex-1 w-full overflow-hidden select-none"
@@ -462,7 +702,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                   }}
                 >
                   <div
-                    key={`modal-blueprint-svg-${mode}-${sanitizedSvg.length}-${plotWidthM}-${plotDepthM}`}
+                    key={`modal-blueprint-svg-${activeFloorIndex}-${mode}-${sanitizedSvg.length}-${plotWidthM}-${plotDepthM}`}
                     className="relative flex items-center justify-center max-w-full max-h-full drop-shadow-xl"
                     dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
                   />
@@ -470,28 +710,47 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
               </div>
 
               {/* Modal Footer Legend */}
-              {placements.length > 0 && (
+              {currentPlacements.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2 p-3 border-t border-[var(--hairline)] bg-[var(--fill)]/20">
-                  <span className="text-[11px] font-semibold text-[var(--text-3)] uppercase tracking-wider mr-1">
-                    Spatial Zone Allocations:
-                  </span>
-                  {placements.map((p) => {
+                  <div className="flex items-center gap-1 mr-1">
+                    <span className="text-[11px] font-semibold text-[var(--text-3)] uppercase tracking-wider">
+                      {currentFloor ? `${currentFloor.floor_name} Zones:` : 'Spatial Allocations:'}
+                    </span>
+                    {currentFloor && (
+                      <span className="text-[10px] text-[var(--text-3)] font-mono">
+                        ({currentFloor.rooms.length} spaces)
+                      </span>
+                    )}
+                  </div>
+                  {currentPlacements.map((p, pIdx) => {
                     const meta = ROOM_METADATA[p.room_id] || {
-                      dotColor: '#64748B',
+                      dotColor: p.is_core ? '#8B5CF6' : '#64748B',
                       label: p.room_name,
                       zone: p.zone,
                     };
                     return (
                       <div
-                        key={p.room_id}
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--fill)] text-[12px] font-medium text-[var(--text-1)] whitespace-nowrap select-none"
+                        key={`modal-legend-${p.room_id}-${pIdx}`}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium whitespace-nowrap select-none border ${
+                          p.is_core
+                            ? 'bg-purple-500/10 border-purple-500/30 text-purple-700 dark:text-purple-300'
+                            : 'bg-[var(--fill)] border-transparent text-[var(--text-1)]'
+                        }`}
                       >
                         <span
                           className="w-2.5 h-2.5 rounded-full shrink-0 shadow-2xs"
                           style={{ backgroundColor: meta.dotColor }}
                         />
-                        <span className="text-[12px] font-medium text-[var(--text-1)]">{meta.label}</span>
+                        <span className="text-[12px] font-medium">{meta.label}</span>
+                        {p.area_sqm && (
+                          <span className="text-[11px] font-mono opacity-80">{p.area_sqm.toFixed(1)}m²</span>
+                        )}
                         <span className="text-[11px] text-[var(--text-3)] font-normal">({p.zone})</span>
+                        {p.is_core && (
+                          <span className="text-[9px] px-1 py-0.2 rounded font-bold uppercase bg-purple-500/20 text-purple-600 dark:text-purple-300 tracking-wider">
+                            Core
+                          </span>
+                        )}
                       </div>
                     );
                   })}
@@ -504,3 +763,4 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
     </div>
   );
 };
+

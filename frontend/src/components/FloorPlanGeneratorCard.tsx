@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type { FloorPlanRequest, FloorPlanResponse } from '../services/types';
 import { generateFloorPlan } from '../services/api';
 import { BlueprintViewer } from './BlueprintViewer';
@@ -21,17 +21,88 @@ interface FloorPlanGeneratorCardProps {
   topVastuEntrances?: string[];
 }
 
-const AVAILABLE_ROOMS = [
-  { id: 'master_bed', label: 'Master Bedroom (SW)', required: true },
-  { id: 'kitchen', label: 'Kitchen (SE)', required: true },
-  { id: 'living', label: 'Living Room', required: true },
-  { id: 'puja', label: 'Puja Room (NE)', required: false },
-  { id: 'bath_1', label: 'Primary Bath', required: true },
-  { id: 'bath_2', label: 'Common Bath', required: false },
-  { id: 'bed_2', label: 'Bedroom 2', required: false },
-  { id: 'dining', label: 'Dining Area', required: false },
-  { id: 'stairs', label: 'Staircase (SW/W)', required: false },
-];
+interface RoomOption {
+  id: string;
+  label: string;
+  required: boolean;
+  isCore?: boolean;
+}
+
+export type CanonicalTypology = 'T1_SINGLE_FAMILY' | 'T2_FAMILY_APARTMENT' | 'T3_LARGE_COMPLEX' | 'T4_WAREHOUSE';
+
+export const TYPOLOGY_LABELS: Record<CanonicalTypology, string> = {
+  T1_SINGLE_FAMILY: 'Single-Family Residence (T1)',
+  T2_FAMILY_APARTMENT: 'Family Apartment (T2)',
+  T3_LARGE_COMPLEX: 'Large Commercial Complex (T3)',
+  T4_WAREHOUSE: 'Warehouse & Logistics (T4)',
+};
+
+export const TYPOLOGY_ROOM_CATALOGS: Record<CanonicalTypology, RoomOption[]> = {
+  T1_SINGLE_FAMILY: [
+    { id: 'master_bed', label: 'Master Bedroom (SW)', required: true },
+    { id: 'kitchen', label: 'Kitchen (SE)', required: true },
+    { id: 'living', label: 'Living Room (N/NE)', required: true },
+    { id: 'puja', label: 'Puja Room (NE)', required: false },
+    { id: 'bath_1', label: 'Primary Bath (W)', required: true },
+    { id: 'bath_2', label: 'Common Bath (NW)', required: false },
+    { id: 'bed_2', label: 'Bedroom 2 (NW)', required: false },
+    { id: 'dining', label: 'Dining Area (W)', required: false },
+    { id: 'stairs', label: 'Staircase Core (SW/W)', required: false, isCore: true },
+    { id: 'balcony', label: 'Balcony (N/E)', required: false },
+    { id: 'study', label: 'Study / Office (NE)', required: false },
+    { id: 'utility', label: 'Utility / Store (SE)', required: false },
+  ],
+  T2_FAMILY_APARTMENT: [
+    { id: 'staircase_core', label: 'Common Stair Core', required: true, isCore: true },
+    { id: 'lift_core', label: 'Passenger Lift Core', required: false, isCore: true },
+    { id: 'lobby', label: 'Central Floor Lobby', required: true },
+    { id: 'apt_a_living', label: 'Unit A Living Room', required: true },
+    { id: 'apt_a_kitchen', label: 'Unit A Kitchen (SE)', required: true },
+    { id: 'apt_a_bed', label: 'Unit A Master Bed (SW)', required: true },
+    { id: 'apt_a_bath', label: 'Unit A Bathroom (W)', required: true },
+    { id: 'apt_b_living', label: 'Unit B Living Room', required: false },
+    { id: 'apt_b_kitchen', label: 'Unit B Kitchen', required: false },
+    { id: 'apt_b_bed', label: 'Unit B Bedroom', required: false },
+    { id: 'apt_b_bath', label: 'Unit B Bathroom', required: false },
+    { id: 'apt_balcony', label: 'Apartment Balcony', required: false },
+  ],
+  T3_LARGE_COMPLEX: [
+    { id: 'fire_stair_1', label: 'Fire Stair Core 1', required: true, isCore: true },
+    { id: 'fire_stair_2', label: 'Fire Exit Stair 2', required: false, isCore: true },
+    { id: 'lift_bank', label: 'Dual Lift Bank & Lobby', required: true, isCore: true },
+    { id: 'corridor', label: '1.5m Spine Corridor', required: true },
+    { id: 'commercial_suite_a', label: 'Commercial Suite A', required: true },
+    { id: 'commercial_suite_b', label: 'Commercial Suite B', required: false },
+    { id: 'commercial_suite_c', label: 'Commercial Suite C', required: false },
+    { id: 'restroom_block', label: 'Public Restrooms (M/F)', required: true },
+    { id: 'mep_room', label: 'MEP & Service Room', required: false },
+  ],
+  T4_WAREHOUSE: [
+    { id: 'storage_bay', label: 'Clear-Span Storage Bay', required: true },
+    { id: 'loading_dock', label: 'Loading Dock Shutter', required: true },
+    { id: 'dispatch_buffer', label: 'Dispatch Buffer Area', required: true },
+    { id: 'staff_amenities', label: 'Staff Locker & WC', required: false },
+    { id: 'steel_stair', label: 'Industrial Steel Stair', required: false, isCore: true },
+    { id: 'mezzanine_office', label: 'Mezzanine Admin Office', required: false },
+    { id: 'conference_room', label: 'Conference Room', required: false },
+    { id: 'catwalk', label: 'Inspection Catwalk', required: false },
+  ],
+};
+
+export function normalizeTypology(raw?: string): CanonicalTypology {
+  if (!raw) return 'T1_SINGLE_FAMILY';
+  const t = raw.toLowerCase().trim();
+  if (t.includes('t2') || t.includes('apartment') || t.includes('multi') || t.includes('duplex') || t.includes('builder_floor')) {
+    return 'T2_FAMILY_APARTMENT';
+  }
+  if (t.includes('t3') || t.includes('complex') || t.includes('commercial') || t.includes('office') || t.includes('mixed')) {
+    return 'T3_LARGE_COMPLEX';
+  }
+  if (t.includes('t4') || t.includes('warehouse') || t.includes('industrial') || t.includes('logistics') || t.includes('shed') || t.includes('factory')) {
+    return 'T4_WAREHOUSE';
+  }
+  return 'T1_SINGLE_FAMILY';
+}
 
 export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   defaultWidthM = 10.0,
@@ -40,7 +111,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   activeFloorPlan = null,
   buildingTypology,
   qualityGrade,
-  floors,
+  floors = 1,
   builtUpAreaSqft,
   groundCoverageRatio,
   clientNotes,
@@ -54,13 +125,46 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   const plotWidth = userWidth ?? defaultWidthM;
   const plotDepth = userDepth ?? defaultDepthM;
 
-  const [selectedRooms, setSelectedRooms] = useState<string[]>([
-    'master_bed',
-    'kitchen',
-    'living',
-    'puja',
-    'bath_1',
-  ]);
+  const canonicalTypology = normalizeTypology(buildingTypology);
+  const availableRooms = TYPOLOGY_ROOM_CATALOGS[canonicalTypology] || TYPOLOGY_ROOM_CATALOGS.T1_SINGLE_FAMILY;
+
+  // Initialize selected rooms
+  const [selectedRooms, setSelectedRooms] = useState<string[]>(() => {
+    return availableRooms
+      .filter((r) => r.required || ((floors || 1) >= 2 && r.isCore))
+      .map((r) => r.id);
+  });
+
+  const prevTypologyRef = useRef<string>(canonicalTypology);
+  const prevFloorsRef = useRef<number>(floors || 1);
+
+  // Dynamically adapt selected rooms when Typology or Floors changes
+  useEffect(() => {
+    const isTypologyChanged = prevTypologyRef.current !== canonicalTypology;
+    const isFloorsChanged = prevFloorsRef.current !== (floors || 1);
+
+    if (isTypologyChanged || isFloorsChanged) {
+      prevTypologyRef.current = canonicalTypology;
+      prevFloorsRef.current = floors || 1;
+
+      const currentRoomIds = new Set(availableRooms.map((r) => r.id));
+      const hasValidRooms = selectedRooms.some((r) => currentRoomIds.has(r));
+
+      if (isTypologyChanged || !hasValidRooms) {
+        // Switch to sensible default selection for the newly selected typology
+        const defaultSelection = availableRooms
+          .filter((r) => r.required || ((floors || 1) >= 2 && r.isCore))
+          .map((r) => r.id);
+
+        setSelectedRooms(defaultSelection.length >= 3 ? defaultSelection : availableRooms.slice(0, 4).map((r) => r.id));
+      } else if (isFloorsChanged && (floors || 1) >= 2) {
+        // Auto-include vertical core rooms if multiple storeys requested
+        const coreRooms = availableRooms.filter((r) => r.isCore).map((r) => r.id);
+        setSelectedRooms((prev) => Array.from(new Set([...prev, ...coreRooms])));
+      }
+    }
+  }, [canonicalTypology, floors, availableRooms, selectedRooms]);
+
   const [strictness, setStrictness] = useState<'high' | 'medium' | 'low'>('high');
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [localFloorPlan, setLocalFloorPlan] = useState<FloorPlanResponse | null>(null);
@@ -68,7 +172,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Synchronize when parent activeFloorPlan changes
-  React.useEffect(() => {
+  useEffect(() => {
     if (activeFloorPlan !== undefined) {
       setLocalFloorPlan(activeFloorPlan);
     }
@@ -132,11 +236,18 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
             Generative Floor Plan Engine
           </h3>
         </div>
-        {floorPlan && (
-          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-[var(--fill)] text-[var(--text-1)] capitalize shrink-0">
-            {floorPlan.status}
-          </span>
-        )}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {floors && floors > 1 && (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25">
+              {floors} STOREYS
+            </span>
+          )}
+          {floorPlan && (
+            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-[var(--fill)] text-[var(--text-1)] capitalize shrink-0">
+              {floorPlan.status}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Error Notice */}
@@ -216,38 +327,70 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         </div>
       </div>
 
-      {/* Room Selection */}
+      {/* Dynamic Typology Room Selection */}
       <div className="space-y-1.5 min-w-0">
-        <div className="flex items-center justify-between text-[12px] text-[var(--text-3)]">
-          <span className="font-normal">
-            Rooms ({selectedRooms.length} selected)
-          </span>
-          <span className="text-[11px]">Min 3 required</span>
+        <div className="flex items-center justify-between text-[12px] text-[var(--text-3)] flex-wrap gap-1">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="font-semibold text-[var(--text-1)] truncate">
+              {TYPOLOGY_LABELS[canonicalTypology]}
+            </span>
+            <span className="text-[11px] font-mono">
+              ({selectedRooms.length} selected)
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 text-[11px]">
+            {floors && floors > 1 ? (
+              <span className="text-amber-600 dark:text-amber-400 font-medium">
+                Vertical cores anchor-locked
+              </span>
+            ) : (
+              <span>Min 3 required</span>
+            )}
+          </div>
         </div>
+
         <div className="grid grid-cols-2 gap-1.5">
-          {AVAILABLE_ROOMS.map((room) => {
+          {availableRooms.map((room) => {
             const isChecked = selectedRooms.includes(room.id);
+            const isVerticalCore = Boolean(room.isCore);
             return (
               <button
                 key={room.id}
                 type="button"
                 onClick={() => toggleRoom(room.id)}
-                className={`p-2 rounded-[8px] text-left text-[12px] flex items-center gap-2 transition-all cursor-pointer ${
+                className={`p-2 rounded-[8px] text-left text-[12px] flex items-center justify-between gap-1.5 transition-all cursor-pointer ${
                   isChecked
-                    ? 'bg-[var(--accent-tint)] text-[var(--accent)] font-semibold'
+                    ? isVerticalCore
+                      ? 'bg-purple-500/15 text-purple-700 dark:text-purple-300 font-semibold ring-1 ring-purple-500/30'
+                      : 'bg-[var(--accent-tint)] text-[var(--accent)] font-semibold'
                     : 'bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)]'
                 }`}
               >
-                <div
-                  className={`w-3.5 h-3.5 rounded-[4px] border flex items-center justify-center shrink-0 ${
-                    isChecked
-                      ? 'border-[var(--accent)] bg-[var(--accent)] text-white'
-                      : 'border-[var(--hairline)] bg-transparent'
-                  }`}
-                >
-                  {isChecked && <Icon name="check" size={10} />}
+                <div className="flex items-center gap-2 min-w-0">
+                  <div
+                    className={`w-3.5 h-3.5 rounded-[4px] border flex items-center justify-center shrink-0 ${
+                      isChecked
+                        ? isVerticalCore
+                          ? 'border-purple-600 bg-purple-600 text-white'
+                          : 'border-[var(--accent)] bg-[var(--accent)] text-white'
+                        : 'border-[var(--hairline)] bg-transparent'
+                    }`}
+                  >
+                    {isChecked && <Icon name="check" size={10} />}
+                  </div>
+                  <span className="leading-tight break-words truncate">{room.label}</span>
                 </div>
-                <span className="leading-tight break-words">{room.label}</span>
+                {isVerticalCore && (
+                  <span
+                    className={`text-[9px] px-1 py-0.2 rounded font-bold uppercase shrink-0 ${
+                      isChecked
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-purple-500/15 text-purple-600 dark:text-purple-400'
+                    }`}
+                  >
+                    Core
+                  </span>
+                )}
               </button>
             );
           })}
@@ -269,7 +412,11 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         ) : (
           <>
             <Icon name="blueprint" size={14} />
-            <span>Generate Architectural Blueprint</span>
+            <span>
+              {floors && floors > 1
+                ? `Generate ${floors}-Storey Architectural Blueprint`
+                : 'Generate Architectural Blueprint'}
+            </span>
           </>
         )}
       </button>
@@ -277,6 +424,49 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       {/* Blueprint & Metrics Display */}
       {floorPlan && (
         <div className="space-y-3 pt-1">
+          {/* Multi-Storey Stacking Verification Callout */}
+          {floorPlan.multi_storey && (
+            <div className="rounded-[10px] bg-purple-500/10 border border-purple-500/25 p-3 space-y-2">
+              <div className="flex items-center justify-between flex-wrap gap-1.5">
+                <div className="flex items-center gap-1.5">
+                  <Icon name="layers" size={14} className="text-purple-600 dark:text-purple-400" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-purple-700 dark:text-purple-300">
+                    CF-HSA Multi-Storey Core Alignment
+                  </span>
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-600 text-white select-none">
+                  {floorPlan.multi_storey.total_storeys} STOREYS VERIFIED
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                <div className="bg-[var(--fill)]/50 rounded-[6px] p-1.5 text-center">
+                  <span className="text-[var(--text-3)] block text-[10px]">Anchor Cores</span>
+                  <span className="font-semibold font-mono text-[var(--text-1)]">
+                    {floorPlan.multi_storey.vertical_cores.length} locked (X,Y)
+                  </span>
+                </div>
+                <div className="bg-[var(--fill)]/50 rounded-[6px] p-1.5 text-center">
+                  <span className="text-[var(--text-3)] block text-[10px]">Wet Stacks</span>
+                  <span className="font-semibold font-mono text-[var(--text-1)]">
+                    {floorPlan.multi_storey.duct_shafts.length} MEP shafts
+                  </span>
+                </div>
+                <div className="bg-[var(--fill)]/50 rounded-[6px] p-1.5 text-center">
+                  <span className="text-[var(--text-3)] block text-[10px]">Total Built-Up</span>
+                  <span className="font-semibold font-mono text-[var(--text-1)]">
+                    {floorPlan.multi_storey.total_built_up_area_sqm.toFixed(1)} m²
+                  </span>
+                </div>
+                <div className="bg-[var(--fill)]/50 rounded-[6px] p-1.5 text-center">
+                  <span className="text-[var(--text-3)] block text-[10px]">Ghost Overlay</span>
+                  <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                    Active on F1+
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Design Brief Accent-tinted Callout */}
           <div className="rounded-[10px] bg-[var(--accent-tint)] border border-[var(--accent)]/20 p-3 space-y-1.5">
             <div className="flex items-center justify-between flex-wrap gap-1.5">
@@ -361,7 +551,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
             })()}
           </div>
 
-          {/* Key-Value Metrics Rows (No background micro-tiles) */}
+          {/* Key-Value Metrics Rows */}
           <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
             <div className="h-10 flex items-center justify-between px-0.5">
               <span className="text-[13px] font-normal text-[var(--text-2)]">Vastu compliance</span>
@@ -432,9 +622,11 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
             placements={floorPlan.placements}
             plotWidthM={plotWidth}
             plotDepthM={plotDepth}
+            multiStorey={floorPlan.multi_storey}
           />
         </div>
       )}
     </div>
   );
 };
+
