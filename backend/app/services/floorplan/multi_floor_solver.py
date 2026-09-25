@@ -657,7 +657,7 @@ class MultiFloorSolver:
         and places windows on exterior boundary walls.
         """
         doors: List[MultiFloorDoorGeometry] = []
-        windows: List[WindowGeometry] = []
+        windows: List[MultiFloorWindowGeometry] = []
 
         # Door 1: Core Landing to Lobby
         doors.append(MultiFloorDoorGeometry(
