@@ -406,109 +406,13 @@ class MultiFloorSolver:
 
     def solve(self) -> MultiStoreyBuildingModel:
         """
-        Executes the Core-First Hierarchical Allocation algorithm.
-        Returns complete MultiStoreyBuildingModel.
+        Executes the sole ontology-driven geometry engine.
+        Returns complete MultiStoreyBuildingModel with MathematicalValidityCertificate.
         """
-        t0 = time.perf_counter()
+        from app.services.floorplan.engine import SoleGeometryEngine
+        engine = SoleGeometryEngine(self.req, self.ai_provider)
+        return engine.solve()
 
-        # Step 1: Feasibility and Envelope Determination
-        is_feasible, deg_level, envelope, warnings = GracefulDegradationManager.evaluate_envelope_and_feasibility(
-            plot_w=self.plot_w,
-            plot_d=self.plot_d,
-            coverage=self.coverage,
-            floors=self.total_storeys,
-            client_constraints=self.client_constraints,
-            requested_rooms=self.req.required_rooms,
-        )
-        self.warnings = list(warnings)
-
-        if not is_feasible:
-            # Graceful Degradation Level 5: Hard Feasibility Rejection
-            elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
-            return MultiStoreyBuildingModel(
-                building_typology=self.typology,
-                total_storeys=self.total_storeys,
-                plot_width_m=self.plot_w,
-                plot_depth_m=self.plot_d,
-                ground_coverage_ratio=self.coverage,
-                total_built_up_area_sqm=0.0,
-                vertical_cores=[],
-                duct_shafts=[],
-                floors=[],
-                global_metrics={"status": "failed", "feasibility": "rejected"},
-                qa_report={"status": "failed", "reason": "insufficient_plot_footprint", "degradation_level": deg_level},
-                warnings=warnings,
-                unmet_requirements=["all_spaces_unmet_due_to_insufficient_plot_area"],
-                solver_timing_ms=elapsed_ms,
-            )
-
-        # Step 2: Anchor Phase (Rule of Cores & Shafts)
-        invariant_mgr = VerticalStackInvariantManager(
-            envelope=envelope,
-            total_storeys=self.total_storeys,
-            typology=self.typology,
-            strictness=self.strictness,
-            degradation_level=deg_level,
-        )
-        chase_tracker = PlumbingChaseTracker(invariant_mgr.duct_shafts)
-
-        # Step 3: Synthesize Individual Floor Plates with Invariant Core Injection
-        floors: List[SingleFloorPlanModel] = []
-        previous_rooms: Optional[List[MultiFloorRoomRectangle]] = None
-
-        for z in range(self.total_storeys):
-            floor_plan = self._generate_floor_plate(
-                floor_index=z,
-                envelope=envelope,
-                invariant_mgr=invariant_mgr,
-                chase_tracker=chase_tracker,
-                previous_rooms=previous_rooms,
-            )
-            floors.append(floor_plan)
-            previous_rooms = floor_plan.rooms
-
-        total_built_up = round(sum(f.built_up_area_sqm for f in floors), 2)
-        total_carpet = round(sum(f.carpet_area_sqm for f in floors), 2)
-        avg_plumbing_pct = round(sum(f.plumbing_stack_alignment_pct for f in floors) / len(floors), 1) if floors else 0.0
-        avg_vastu_pct = round(sum(f.vastu_compliance_pct for f in floors) / len(floors), 1) if floors else 0.0
-
-        # Step 4: Verification of Stacking Invariant (EC-06)
-        stacking_valid = self._verify_stacking_invariant(floors, invariant_mgr.vertical_cores)
-        if not stacking_valid:
-            self.warnings.append("EC-06 Warning: Vertical stack coordinate drift detected between floor plates.")
-
-        elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
-
-        return MultiStoreyBuildingModel(
-            building_typology=self.typology,
-            total_storeys=self.total_storeys,
-            plot_width_m=self.plot_w,
-            plot_depth_m=self.plot_d,
-            ground_coverage_ratio=self.coverage,
-            total_built_up_area_sqm=total_built_up,
-            vertical_cores=invariant_mgr.vertical_cores,
-            duct_shafts=invariant_mgr.duct_shafts,
-            structural_grid=self.structural_grid,
-            floors=floors,
-            global_metrics={
-                "status": "optimal" if deg_level == 0 else "compromise",
-                "total_carpet_area_sqm": total_carpet,
-                "building_efficiency_pct": round((total_carpet / total_built_up * 100.0) if total_built_up > 0 else 0.0, 1),
-                "plumbing_stack_alignment_avg_pct": avg_plumbing_pct,
-                "vastu_compliance_score": avg_vastu_pct,
-                "stacking_invariant_verified": stacking_valid,
-            },
-            qa_report={
-                "status": "pass",
-                "degradation_level": deg_level,
-                "stacking_invariants": "pass" if stacking_valid else "fail",
-                "bfs_reachability": "pass" if all(f.circulation_status == "connected" for f in floors) else "partial",
-            },
-            warnings=self.warnings,
-            unmet_requirements=[],
-            seed=42,
-            solver_timing_ms=elapsed_ms,
-        )
 
     def _generate_floor_plate(
         self,
@@ -538,7 +442,7 @@ class MultiFloorSolver:
         typology_warnings: List[str] = []
 
         if canonical_typology == "T1_SINGLE_FAMILY":
-            from app.services.floorplan.typologies.t1_residence import T1ResidenceSolver
+            from app.services.floorplan.typologies.single_family import T1ResidenceSolver
             rooms, typology_warnings = T1ResidenceSolver.synthesize_floor_rooms(
                 floor_index=floor_index,
                 envelope=envelope,
@@ -549,7 +453,7 @@ class MultiFloorSolver:
             )
             vastu_score = 92.0 if self.strictness == "high" else (85.0 if self.strictness == "medium" else 78.0)
         elif canonical_typology == "T2_FAMILY_APARTMENT":
-            from app.services.floorplan.typologies.t2_apartment import T2ApartmentSolver
+            from app.services.floorplan.typologies.apartment import T2ApartmentSolver
             rooms, typology_warnings = T2ApartmentSolver.synthesize_floor_rooms(
                 floor_index=floor_index,
                 envelope=envelope,
@@ -560,7 +464,7 @@ class MultiFloorSolver:
             )
             vastu_score = 86.0 if self.strictness in ("high", "medium") else 80.0
         elif canonical_typology == "T3_LARGE_COMPLEX":
-            from app.services.floorplan.typologies.t3_complex import T3ComplexSolver
+            from app.services.floorplan.typologies.commercial_complex import T3ComplexSolver
             rooms, typology_warnings = T3ComplexSolver.synthesize_floor_rooms(
                 floor_index=floor_index,
                 envelope=envelope,
@@ -571,7 +475,7 @@ class MultiFloorSolver:
             )
             vastu_score = 82.0 if self.strictness in ("high", "medium") else 75.0
         elif canonical_typology == "T4_WAREHOUSE":
-            from app.services.floorplan.typologies.t4_warehouse import T4WarehouseSolver
+            from app.services.floorplan.typologies.warehouse import T4WarehouseSolver
             rooms, typology_warnings = T4WarehouseSolver.synthesize_floor_rooms(
                 floor_index=floor_index,
                 envelope=envelope,
@@ -582,7 +486,7 @@ class MultiFloorSolver:
             )
             vastu_score = 78.0
         else:
-            from app.services.floorplan.typologies.t1_residence import T1ResidenceSolver
+            from app.services.floorplan.typologies.single_family import T1ResidenceSolver
             rooms, typology_warnings = T1ResidenceSolver.synthesize_floor_rooms(
                 floor_index=floor_index,
                 envelope=envelope,
@@ -823,6 +727,9 @@ class MultiFloorSolver:
             include_ghost_overlay=(floor_index > 0),
             building_typology=self.typology,
             wall_graph=wall_graph,
+            plot_width_m=self.plot_w,
+            plot_depth_m=self.plot_d,
+            total_storeys=self.total_storeys,
         )
 
 

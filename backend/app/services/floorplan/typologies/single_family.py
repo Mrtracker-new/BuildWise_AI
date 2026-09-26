@@ -1,5 +1,5 @@
 """
-t1_residence.py - Typology T1: Single-Family Residence (Individual Villa / House)
+single_family.py - Typology T1: Single-Family Residence (Individual Villa / House)
 =================================================================================
 Implements architectural space program, NBC 2016 norms, and Vastu Shastra rules
 for private single-family multi-storey residences (G to G+2).
@@ -31,7 +31,7 @@ T1_CATALOG: Dict[str, Dict[str, Any]] = {
         "name": "Dining Area",
         "min_area_sqm": 8.0,
         "min_width_m": 2.40,
-        "max_aspect_ratio": 1.60,
+        "max_aspect_ratio": 2.00,
         "vastu_preferred": ["W", "CENTER", "E"],
         "vastu_prohibited": ["SW"],
         "permitted_levels": [0],
@@ -445,3 +445,100 @@ class T1ResidenceSolver:
             ))
 
         return rooms, warnings
+
+
+# =============================================================================
+# STAGE 3 PROTOCOL IMPLEMENTATION: T1ResidenceModule
+# =============================================================================
+
+class T1ResidenceModule:
+    """
+    Stage-3 typology module for T1 Single-Family Residence.
+    Implements TypologyModuleProtocol - all five classmethods.
+    Catalog and statutory data pulled exclusively from ONTOLOGY.
+    """
+
+    TYPOLOGY_KEY = "T1_SINGLE_FAMILY"
+
+    # T1 space IDs present in the UNIVERSAL_SPACE_CATALOG
+    _GROUND_IDS = ["foyer", "living", "dining", "kitchen", "utility", "puja", "bath_1"]
+    _UPPER_IDS = ["central_lobby", "master_bed", "bed_2", "bath_master", "bath_2", "balcony", "study"]
+
+    @classmethod
+    def catalog(cls):
+        """Space types pulled from ONTOLOGY - no local re-declaration."""
+        from app.services.floorplan.ontology import ONTOLOGY
+        result = {}
+        for sid in cls._GROUND_IDS + cls._UPPER_IDS:
+            spec = ONTOLOGY.get_space(sid)
+            if spec:
+                result[sid] = spec
+        return result
+
+    @classmethod
+    def vertical_program(cls, N: int):
+        """Per-level space allocation for a T1 building of N storeys (1..3)."""
+        N = max(1, min(3, N))
+        program = []
+        for level in range(N):
+            if level == 0:
+                if N == 1:
+                    ids = cls._GROUND_IDS + ["master_bed"]
+                else:
+                    ids = cls._GROUND_IDS
+                label = "Ground Floor (G)"
+            elif level == 1:
+                ids = cls._UPPER_IDS
+                label = "First Floor (G+1)"
+            else:
+                ids = ["master_bed", "bed_2", "bath_master", "bath_2", "balcony"]
+                label = "Second Floor (G+2)"
+            program.append({"level": level, "space_ids": ids, "label": label})
+        return program
+
+    @classmethod
+    def layout_strategy(cls):
+        """T1 zoning bands: public front / private rear, full Vastu weight."""
+        from app.services.floorplan.typologies.protocol import LayoutStrategy
+        return LayoutStrategy(
+            public_front_depth_frac=0.45,
+            private_rear_depth_frac=0.35,
+            exterior_wall_required=["living", "kitchen", "master_bed", "puja"],
+        )
+
+    @classmethod
+    def sheet_gates(cls):
+        """T1: Vastu diagram ON, column grid OFF, unit schedule OFF."""
+        from app.services.floorplan.typologies.protocol import SheetGates
+        return SheetGates(
+            vastu_diagram=True,
+            column_grid=False,
+            unit_schedule=False,
+            dock_apron_diagram=False,
+            mezzanine_section=False,
+            egress_travel_diagram=True,
+            dimension_chains=True,
+        )
+
+    @classmethod
+    def compose_sheet(cls, level_plan, theme: str) -> str:
+        """Delegates to shared SVG IR with T1 sheet gates applied."""
+        from app.services.floorplan.svg_generator import generate_multi_floor_blueprint_svg
+        gates = cls.sheet_gates()
+        return generate_multi_floor_blueprint_svg(
+            floor_index=level_plan["floor_index"],
+            floor_name=level_plan["floor_name"],
+            rooms=level_plan["rooms"],
+            doors=level_plan.get("doors", []),
+            windows=level_plan.get("windows", []),
+            envelope=level_plan["envelope"],
+            ground_cores=level_plan.get("ground_cores", []),
+            ground_ducts=level_plan.get("ground_ducts", []),
+            theme=theme,
+            include_ghost_overlay=(level_plan["floor_index"] > 0),
+            building_typology=cls.TYPOLOGY_KEY,
+            wall_graph=level_plan.get("wall_graph"),
+            plot_width_m=level_plan.get("plot_width_m", 0.0),
+            plot_depth_m=level_plan.get("plot_depth_m", 0.0),
+            total_storeys=level_plan.get("total_storeys", 1),
+        )

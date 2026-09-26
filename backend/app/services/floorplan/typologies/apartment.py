@@ -1,5 +1,5 @@
 """
-t2_apartment.py - Typology T2: Family Apartment Residence (Small Multi-Unit Building)
+apartment.py - Typology T2: Family Apartment Residence (Small Multi-Unit Building)
 ======================================================================================
 Implements semi-private core, dual-unit floor plates (Unit A and Unit B),
 NBC 2016 multi-family circulation norms, and unit-level Vastu compliance.
@@ -279,3 +279,98 @@ class T2ApartmentSolver:
         ))
 
         return rooms, warnings
+
+
+# =============================================================================
+# STAGE 3 PROTOCOL IMPLEMENTATION: T2ApartmentModule
+# =============================================================================
+
+class T2ApartmentModule:
+    """
+    Stage-3 typology module for T2 Family Apartment.
+    Implements TypologyModuleProtocol - all five classmethods.
+    Unit split + shared core per floor; Vastu medium weight.
+    """
+
+    TYPOLOGY_KEY = "T2_FAMILY_APARTMENT"
+
+    # T2 space IDs in UNIVERSAL_SPACE_CATALOG (shared core + per-unit spaces)
+    _SHARED_CORE_IDS = ["t2_stair", "lift_core", "floor_lobby"]
+    _UNIT_IDS = ["apt_unit_1", "apt_unit_2"]
+    _GROUND_IDS = ["floor_lobby", "apt_unit_1", "apt_unit_2", "guard_house"]
+    _UPPER_IDS = ["floor_lobby", "apt_unit_1", "apt_unit_2"]
+
+    @classmethod
+    def catalog(cls):
+        """Space types pulled from ONTOLOGY - no local re-declaration."""
+        from app.services.floorplan.ontology import ONTOLOGY
+        result = {}
+        ids = ["t2_stair", "lift_core", "floor_lobby", "apt_unit_1", "apt_unit_2",
+               "guard_house", "unit_living", "unit_kitchen", "unit_bed", "unit_bath"]
+        for sid in ids:
+            spec = ONTOLOGY.get_space(sid)
+            if spec:
+                result[sid] = spec
+        return result
+
+    @classmethod
+    def vertical_program(cls, N: int):
+        """Per-level allocation for a T2 building (1..4 storeys): unit split + shared core."""
+        N = max(1, min(4, N))
+        program = []
+        for level in range(N):
+            if level == 0:
+                ids = cls._GROUND_IDS
+                label = "Ground Floor (G)"
+            else:
+                ids = cls._UPPER_IDS
+                label = f"Floor {level} (G+{level})"
+            program.append({"level": level, "space_ids": ids, "label": label})
+        return program
+
+    @classmethod
+    def layout_strategy(cls):
+        """T2: 50/50 unit split; semi-private shared core; medium Vastu weight."""
+        from app.services.floorplan.typologies.protocol import LayoutStrategy
+        return LayoutStrategy(
+            public_front_depth_frac=0.40,
+            private_rear_depth_frac=0.40,
+            unit_split_frac=0.50,
+            exterior_wall_required=["apt_unit_1", "apt_unit_2"],
+        )
+
+    @classmethod
+    def sheet_gates(cls):
+        """T2: Vastu diagram ON (medium), unit schedule ON."""
+        from app.services.floorplan.typologies.protocol import SheetGates
+        return SheetGates(
+            vastu_diagram=True,
+            column_grid=False,
+            unit_schedule=True,
+            dock_apron_diagram=False,
+            mezzanine_section=False,
+            egress_travel_diagram=True,
+            dimension_chains=True,
+        )
+
+    @classmethod
+    def compose_sheet(cls, level_plan, theme: str) -> str:
+        """Delegates to shared SVG IR with T2 sheet gates (unit schedule)."""
+        from app.services.floorplan.svg_generator import generate_multi_floor_blueprint_svg
+        return generate_multi_floor_blueprint_svg(
+            floor_index=level_plan["floor_index"],
+            floor_name=level_plan["floor_name"],
+            rooms=level_plan["rooms"],
+            doors=level_plan.get("doors", []),
+            windows=level_plan.get("windows", []),
+            envelope=level_plan["envelope"],
+            ground_cores=level_plan.get("ground_cores", []),
+            ground_ducts=level_plan.get("ground_ducts", []),
+            theme=theme,
+            include_ghost_overlay=(level_plan["floor_index"] > 0),
+            building_typology=cls.TYPOLOGY_KEY,
+            wall_graph=level_plan.get("wall_graph"),
+            plot_width_m=level_plan.get("plot_width_m", 0.0),
+            plot_depth_m=level_plan.get("plot_depth_m", 0.0),
+            total_storeys=level_plan.get("total_storeys", 1),
+        )

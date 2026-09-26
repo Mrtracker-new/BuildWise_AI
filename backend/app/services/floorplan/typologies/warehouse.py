@@ -1,5 +1,5 @@
 """
-t4_warehouse.py - Typology T4: Warehouse / Light Industrial Facility
+warehouse.py - Typology T4: Warehouse / Light Industrial Facility
 ====================================================================
 Implements structural column bay grid (6.0m to 9.0m clear-span), clear height >= 6.0m,
 loading dock shutter bays with apron access, ground storage, and office mezzanine (+3.6m).
@@ -303,3 +303,102 @@ class T4WarehouseSolver:
             ))
 
         return rooms, warnings
+
+
+# =============================================================================
+# STAGE 3 PROTOCOL IMPLEMENTATION: T4WarehouseModule
+# =============================================================================
+
+class T4WarehouseModule:
+    """
+    Stage-3 typology module for T4 Warehouse / Light Industrial.
+    Implements TypologyModuleProtocol - all five classmethods.
+    Column grid 6m, dock apron, mezzanine +3.6m; Vastu weight OFF (0.05).
+    """
+
+    TYPOLOGY_KEY = "T4_WAREHOUSE"
+
+    _GROUND_IDS = ["dock_bay", "dispatch", "heavy_bay", "racked_storage",
+                   "worker_amenity", "guard_house"]
+    _MEZZ_IDS = ["admin_catwalk", "admin_office", "conf_room"]
+
+    @classmethod
+    def catalog(cls):
+        """Space types pulled from ONTOLOGY - no local re-declaration."""
+        from app.services.floorplan.ontology import ONTOLOGY
+        result = {}
+        ids = (cls._GROUND_IDS + cls._MEZZ_IDS +
+               ["storage_bay", "dock_bay", "dispatch", "ind_stair", "admin_catwalk"])
+        for sid in ids:
+            spec = ONTOLOGY.get_space(sid)
+            if spec:
+                result[sid] = spec
+        return result
+
+    @classmethod
+    def vertical_program(cls, N: int):
+        """
+        T4 is 1-2 levels only (NBC floor_limits (1,2)).
+        Level 0: ground logistics bay.
+        Level 1: mezzanine administrative block at +3.6m clear height.
+        """
+        N = max(1, min(2, N))
+        program = []
+        for level in range(N):
+            if level == 0:
+                ids = cls._GROUND_IDS
+                label = "Ground Level — Clear-Span Logistics Bay (6.0m clear height)"
+            else:
+                ids = cls._MEZZ_IDS
+                label = "Mezzanine Level (+3.60m) — Administrative Office Block"
+            program.append({"level": level, "space_ids": ids, "label": label})
+        return program
+
+    @classmethod
+    def layout_strategy(cls):
+        """T4: 6m column bay, 3.6m dock apron at N facade, mezzanine at +3.6m."""
+        from app.services.floorplan.typologies.protocol import LayoutStrategy
+        return LayoutStrategy(
+            public_front_depth_frac=0.30,   # Dock apron + dispatch at front
+            private_rear_depth_frac=0.50,   # Deep storage bays at rear
+            column_grid_bay_m=6.00,
+            dock_apron_depth_m=3.60,
+            mezzanine_elevation_m=3.60,
+            exterior_wall_required=["dock_bay", "storage_bay", "admin_office"],
+        )
+
+    @classmethod
+    def sheet_gates(cls):
+        """T4: column grid ON, dock apron ON, mezzanine section ON, vastu OFF."""
+        from app.services.floorplan.typologies.protocol import SheetGates
+        return SheetGates(
+            vastu_diagram=False,
+            column_grid=True,
+            unit_schedule=False,
+            dock_apron_diagram=True,
+            mezzanine_section=True,
+            egress_travel_diagram=True,
+            dimension_chains=True,
+        )
+
+    @classmethod
+    def compose_sheet(cls, level_plan, theme: str) -> str:
+        """Delegates to shared SVG IR with T4 sheet gates (column grid, dock apron)."""
+        from app.services.floorplan.svg_generator import generate_multi_floor_blueprint_svg
+        return generate_multi_floor_blueprint_svg(
+            floor_index=level_plan["floor_index"],
+            floor_name=level_plan["floor_name"],
+            rooms=level_plan["rooms"],
+            doors=level_plan.get("doors", []),
+            windows=level_plan.get("windows", []),
+            envelope=level_plan["envelope"],
+            ground_cores=level_plan.get("ground_cores", []),
+            ground_ducts=level_plan.get("ground_ducts", []),
+            theme=theme,
+            include_ghost_overlay=(level_plan["floor_index"] > 0),
+            building_typology=cls.TYPOLOGY_KEY,
+            wall_graph=level_plan.get("wall_graph"),
+            plot_width_m=level_plan.get("plot_width_m", 0.0),
+            plot_depth_m=level_plan.get("plot_depth_m", 0.0),
+            total_storeys=level_plan.get("total_storeys", 1),
+        )

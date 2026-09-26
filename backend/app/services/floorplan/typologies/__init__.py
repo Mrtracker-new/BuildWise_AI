@@ -49,19 +49,19 @@ def get_typology_solver(typology: str | None):
     """
     canonical = normalize_typology(typology)
     if canonical == TYPOLOGY_T1:
-        from app.services.floorplan.typologies.t1_residence import T1ResidenceSolver
+        from app.services.floorplan.typologies.single_family import T1ResidenceSolver
         return T1ResidenceSolver
     elif canonical == TYPOLOGY_T2:
-        from app.services.floorplan.typologies.t2_apartment import T2ApartmentSolver
+        from app.services.floorplan.typologies.apartment import T2ApartmentSolver
         return T2ApartmentSolver
     elif canonical == TYPOLOGY_T3:
-        from app.services.floorplan.typologies.t3_complex import T3ComplexSolver
+        from app.services.floorplan.typologies.commercial_complex import T3ComplexSolver
         return T3ComplexSolver
     elif canonical == TYPOLOGY_T4:
-        from app.services.floorplan.typologies.t4_warehouse import T4WarehouseSolver
+        from app.services.floorplan.typologies.warehouse import T4WarehouseSolver
         return T4WarehouseSolver
 
-    from app.services.floorplan.typologies.t1_residence import T1ResidenceSolver
+    from app.services.floorplan.typologies.single_family import T1ResidenceSolver
     return T1ResidenceSolver
 
 
@@ -71,19 +71,19 @@ def get_typology_catalog(typology: str | None) -> Dict[str, Dict[str, Any]]:
     """
     canonical = normalize_typology(typology)
     if canonical == TYPOLOGY_T1:
-        from app.services.floorplan.typologies.t1_residence import T1_CATALOG
+        from app.services.floorplan.typologies.single_family import T1_CATALOG
         return T1_CATALOG
     elif canonical == TYPOLOGY_T2:
-        from app.services.floorplan.typologies.t2_apartment import T2_CATALOG
+        from app.services.floorplan.typologies.apartment import T2_CATALOG
         return T2_CATALOG
     elif canonical == TYPOLOGY_T3:
-        from app.services.floorplan.typologies.t3_complex import T3_CATALOG
+        from app.services.floorplan.typologies.commercial_complex import T3_CATALOG
         return T3_CATALOG
     elif canonical == TYPOLOGY_T4:
-        from app.services.floorplan.typologies.t4_warehouse import T4_CATALOG
+        from app.services.floorplan.typologies.warehouse import T4_CATALOG
         return T4_CATALOG
 
-    from app.services.floorplan.typologies.t1_residence import T1_CATALOG
+    from app.services.floorplan.typologies.single_family import T1_CATALOG
     return T1_CATALOG
 
 
@@ -93,17 +93,41 @@ def get_typology_adjacency_graph(typology: str | None) -> Dict[str, List[str]]:
     """
     canonical = normalize_typology(typology)
     if canonical == TYPOLOGY_T1:
-        from app.services.floorplan.typologies.t1_residence import T1_ADJACENCY_GRAPH
+        from app.services.floorplan.typologies.single_family import T1_ADJACENCY_GRAPH
         return T1_ADJACENCY_GRAPH
     elif canonical == TYPOLOGY_T2:
-        from app.services.floorplan.typologies.t2_apartment import T2_ADJACENCY_GRAPH
+        from app.services.floorplan.typologies.apartment import T2_ADJACENCY_GRAPH
         return T2_ADJACENCY_GRAPH
     elif canonical == TYPOLOGY_T3:
-        from app.services.floorplan.typologies.t3_complex import T3_ADJACENCY_GRAPH
+        from app.services.floorplan.typologies.commercial_complex import T3_ADJACENCY_GRAPH
         return T3_ADJACENCY_GRAPH
     elif canonical == TYPOLOGY_T4:
-        from app.services.floorplan.typologies.t4_warehouse import T4_ADJACENCY_GRAPH
+        from app.services.floorplan.typologies.warehouse import T4_ADJACENCY_GRAPH
         return T4_ADJACENCY_GRAPH
 
-    from app.services.floorplan.typologies.t1_residence import T1_ADJACENCY_GRAPH
+    from app.services.floorplan.typologies.single_family import T1_ADJACENCY_GRAPH
     return T1_ADJACENCY_GRAPH
+
+
+def get_typology_module(typology: str | None):
+    """
+    Returns the Stage-3 TypologyModule class for the resolved canonical typology.
+    Each module implements TypologyModuleProtocol (catalog, vertical_program,
+    layout_strategy, compose_sheet, sheet_gates) — all as @classmethods.
+    """
+    canonical = normalize_typology(typology)
+    if canonical == TYPOLOGY_T1:
+        from app.services.floorplan.typologies.single_family import T1ResidenceModule
+        return T1ResidenceModule
+    elif canonical == TYPOLOGY_T2:
+        from app.services.floorplan.typologies.apartment import T2ApartmentModule
+        return T2ApartmentModule
+    elif canonical == TYPOLOGY_T3:
+        from app.services.floorplan.typologies.commercial_complex import T3ComplexModule
+        return T3ComplexModule
+    elif canonical == TYPOLOGY_T4:
+        from app.services.floorplan.typologies.warehouse import T4WarehouseModule
+        return T4WarehouseModule
+
+    from app.services.floorplan.typologies.single_family import T1ResidenceModule
+    return T1ResidenceModule
