@@ -582,6 +582,13 @@ def build_constructible_wall_graph(
     env_w = round(envelope["width"], 3)
     env_d = round(envelope["depth"], 3)
 
+    def _val(obj: Any, key: str, default: Any = None) -> Any:
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
     # 1. Compute Stair Geometry
     stair_geom = compute_stair_geometry(floor_to_floor_height_m, typology)
 
@@ -591,10 +598,10 @@ def build_constructible_wall_graph(
     y_cuts = {0.0, env_d}
 
     for r in raw_rooms:
-        rx = round(getattr(r, "x", 0.0), 3)
-        ry = round(getattr(r, "y", 0.0), 3)
-        rw = round(getattr(r, "width_m", 0.0), 3)
-        rd = round(getattr(r, "depth_m", 0.0), 3)
+        rx = round(float(_val(r, "x", 0.0)), 3)
+        ry = round(float(_val(r, "y", 0.0)), 3)
+        rw = round(float(_val(r, "width_m", _val(r, "width", 0.0))), 3)
+        rd = round(float(_val(r, "depth_m", _val(r, "depth", _val(r, "height", 0.0)))), 3)
         x_cuts.add(rx)
         x_cuts.add(round(rx + rw, 3))
         y_cuts.add(ry)
@@ -658,16 +665,16 @@ def build_constructible_wall_graph(
 
     # Map raw rooms to clear dimensions
     for r in raw_rooms:
-        rid = getattr(r, "room_id", "")
-        rname = getattr(r, "room_name", "Room")
-        rx = round(getattr(r, "x", 0.0), 3)
-        ry = round(getattr(r, "y", 0.0), 3)
-        rw = round(getattr(r, "width_m", 3.0), 3)
-        rd = round(getattr(r, "depth_m", 3.0), 3)
-        is_core = bool(getattr(r, "is_vertical_core", False))
-        unit = getattr(r, "unit_id", None)
-        z = getattr(r, "zone", "CENTER")
-        zcat = getattr(r, "zone_category", "public")
+        rid = str(_val(r, "room_id", "") or "")
+        rname = str(_val(r, "room_name", rid.replace("_", " ").title()) or rid)
+        rx = round(float(_val(r, "x", 0.0)), 3)
+        ry = round(float(_val(r, "y", 0.0)), 3)
+        rw = round(float(_val(r, "width_m", _val(r, "width", 3.0))), 3)
+        rd = round(float(_val(r, "depth_m", _val(r, "depth", _val(r, "height", 3.0)))), 3)
+        is_core = bool(_val(r, "is_vertical_core", False) or "stair" in rid.lower() or "lift" in rid.lower())
+        unit = _val(r, "unit_id", None)
+        z = _val(r, "zone", "CENTER")
+        zcat = _val(r, "zone_category", "public")
 
         is_bath = any(b in rid.lower() or b in rname.lower() for b in ("bath", "toilet", "wc", "sanitary"))
 

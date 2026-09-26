@@ -697,33 +697,21 @@ def test_llm_layout_critic_retry_loop():
     2. Verifies re-solve with forced template seed is triggered.
     3. Verifies critic verdict and warnings are recorded in solver output.
     """
-    import app.services.floorplan.floorplan_service as fps
-
-    original_critic = fps.evaluate_layout_critic
-    call_count = 0
-
-    def mock_critic_fail_then_pass(rect_model, plot_w, plot_d, ai_provider):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return "fail", ["Simulated rejection: bathroom in central position"]
-        return "pass", []
-
-    fps.evaluate_layout_critic = mock_critic_fail_then_pass
-    try:
-        req = FloorPlanRequest(
-            plot_width_m=10.9,
-            plot_depth_m=10.6,
-            required_rooms=["master_bed", "kitchen", "living", "puja", "bath_1"],
-            vastu_strictness="high",
-            ai_provider="groq"
-        )
-        res = generate_floor_plan(req)
-        assert res.qa.critic == "pass"
-        assert any("Architect Layout Critic rejected layout" in w for w in res.warnings)
-        assert call_count == 2
-    finally:
-        fps.evaluate_layout_critic = original_critic
+    # STAGE 2: LLM critic retired from geometry loop; engine is deterministic & ontology-driven
+    req = FloorPlanRequest(
+        plot_width_m=10.9,
+        plot_depth_m=10.6,
+        required_rooms=["master_bed", "kitchen", "living", "puja", "bath_1"],
+        vastu_strictness="high",
+        ai_provider="groq"
+    )
+    res = generate_floor_plan(req)
+    assert res.qa.critic == "pass"
+    assert res.mathematical_certificate is not None
+    assert res.mathematical_certificate["is_valid"] is True
+    assert res.mathematical_certificate["zero_forbidden_violations"] is True
+    assert res.mathematical_certificate["connectivity_bfs"] is True
+    assert res.mathematical_certificate["chain_sums_match"] is True
 
 
 

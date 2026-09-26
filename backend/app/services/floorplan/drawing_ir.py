@@ -1,0 +1,2396 @@
+"""
+drawing_ir.py - Shared Architectural Drawing Intermediate Representation (IR)
+=============================================================================
+Unified geometry intermediate for both SVG (web viewer) and ReportLab (PDF dossier/report).
+Eliminates all backend coordinate discrepancies, scaling inconsistencies, and duplicate
+geometry interpretation.
+
+DOCUMENTED AXIS CONVENTION (METRIC CARTESIAN Y-UP):
+---------------------------------------------------
+- Spatial Units: METERS.
+- Origin (0.0, 0.0): South-West corner of the building envelope.
+- +X axis: Points East (Right), domain [0.0, envelope_width_m].
+- +Y axis: Points North (Up), domain [0.0, envelope_depth_m].
+
+CONVERSION FROM MODEL SPACE:
+----------------------------
+In MultiStoreyBuildingModel / wall_graph, coordinates are conventionally stored in screen space
+where model Y increases Southwards (Y-down) from the North envelope boundary:
+  x_ir = x_model
+  y_ir = envelope_depth_m - y_model
+For a rectangular bounding box (x, y, width, depth) in model space:
+  x_ir = x
+  y_ir = envelope_depth_m - (y + depth)
+  w_ir = width
+  h_ir = depth
+
+BACKEND RENDERER TRANSFORMS:
+----------------------------
+1. SVG Backend (Y-Down, Canvas Origin at Top-Left):
+   Flips Y ONCE at the top-level viewport projection:
+     x_svg = margin_x + (x_ir * scale_px)
+     y_svg = margin_y + ((envelope_depth_m - y_ir) * scale_px)
+
+2. ReportLab PDF Backend (Y-Up, Canvas Origin at Bottom-Left):
+   Natively matches IR Y-up orientation with a single uniform scale and origin per sheet:
+     x_pt = origin_x + (x_ir * scale_pt)
+     y_pt = origin_y + (y_ir * scale_pt)
+   NO Y-FLIP IN REPORTLAB. Zero cumulative canvas transforms.
+
+LAYER TAGS:
+-----------
+- 'fills': Room pastel fills, background panels.
+- 'walls': Structural W1 exterior walls, W2 interior partitions, W3 lightweight shaft walls.
+- 'openings': Hosted doors (leaf line + swing arc + tags + jamb rebates), windows (3-line symbol + tags).
+- 'dims': 3-line dimension chains (overall, clear rooms, opening offsets) with 45° ticks.
+- 'text': Room names, clear dimensions, area badges with halo pills.
+- 'cores': Vertical circulation (stair flights, mid-landing, treads, UP/DN arrows, headroom text).
+- 'ghost': Ground-floor anchor overlays on upper floors (F1+), MEP duct shafts.
+- 'annotations': North arrow, metric graphic scale bar, title block with freshness token, structural tags.
+"""
+
+from __future__ import annotations
+
+import math
+import html
+from dataclasses import dataclass, field
+from typing import List, Dict, Tuple, Optional, Any, Literal
+
+# ReportLab imports (lazy or guarded if needed)
+try:
+    from reportlab.graphics.shapes import Drawing, Rect, Line, String, ArcPath, Circle, Polygon, Group
+    from reportlab.lib import colors
+except ImportError:
+    Drawing = Rect = Line = String = ArcPath = Circle = Polygon = Group = colors = None
+
+
+# =============================================================================
+# 1. DATA STRUCTURES FOR NORMALIZED PRIMITIVES
+# =============================================================================
+
+LayerTag = Literal["walls", "fills", "openings", "dims", "text", "cores", "ghost", "annotations"]
+
+
+@dataclass
+class DrawingPrimitive:
+    """Base class for all normalized drawing primitives."""
+    layer: LayerTag
+
+
+@dataclass
+class FillPrimitive(DrawingPrimitive):
+    """Room fill rectangle or background patch in meters."""
+    x: float          # SW corner X (meters)
+    y: float          # SW corner Y (meters)
+    w: float          # Width Eastward (meters)
+    h: float          # Height Northward (meters)
+    fill_color: str   # Hex or rgba string
+    stroke_color: Optional[str] = None
+    stroke_width_m: float = 0.0
+    dash_array: Optional[List[float]] = None
+    room_id: str = ""
+    room_name: str = ""
+    zone: str = ""
+    is_core: bool = False
+
+
+@dataclass
+class WallPrimitive(DrawingPrimitive):
+    """Constructible wall segment in meters."""
+    wall_id: str
+    wall_type: Literal["W1", "W2", "W3"]
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+    thickness_m: float
+    is_exterior: bool = False
+    is_load_bearing: bool = False
+    dash_array: Optional[List[float]] = None
+
+
+@dataclass
+class OpeningPrimitive(DrawingPrimitive):
+    """Hosted architectural opening (door or window) in meters."""
+    opening_id: str
+    opening_type: Literal["door", "window"]
+    tag: str  # D1, D2..., W1, W2...
+    wall_edge: str  # north, south, east, west, vertical, horizontal
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+
+    # Door specifics
+    hinge_x: float = 0.0
+    hinge_y: float = 0.0
+    leaf_x: float = 0.0
+    leaf_y: float = 0.0
+    arc_center_x: float = 0.0
+    arc_center_y: float = 0.0
+    arc_radius_m: float = 0.9
+    arc_start_deg: float = 0.0  # Counter-clockwise degrees from East (0°) in Y-up space
+    arc_end_deg: float = 90.0
+    arc_start_pt: Tuple[float, float] = (0.0, 0.0)
+    arc_end_pt: Tuple[float, float] = (0.0, 0.0)
+    svg_sweep_flag: int = 0
+    door_jambs: List[Tuple[Tuple[float, float], Tuple[float, float]]] = field(default_factory=list)
+    tag_x: float = 0.0
+    tag_y: float = 0.0
+    unit_badge: Optional[Dict[str, Any]] = None
+
+    # Window specifics
+    outer_line: Optional[Tuple[Tuple[float, float], Tuple[float, float]]] = None
+    glass_line: Optional[Tuple[Tuple[float, float], Tuple[float, float]]] = None
+    inner_line: Optional[Tuple[Tuple[float, float], Tuple[float, float]]] = None
+    window_jambs: List[Tuple[Tuple[float, float], Tuple[float, float]]] = field(default_factory=list)
+
+
+@dataclass
+class StairPrimitive(DrawingPrimitive):
+    """Constructed staircase core with flights, landing, treads, and annotations."""
+    boundary: Tuple[float, float, float, float]  # (x, y, w, h) in meters
+    landing_line: Tuple[Tuple[float, float], Tuple[float, float]]
+    dividing_line: Tuple[Tuple[float, float], Tuple[float, float]]
+    treads: List[Tuple[Tuple[float, float], Tuple[float, float]]] = field(default_factory=list)
+    up_line: Tuple[Tuple[float, float], Tuple[float, float]] = ((0.0, 0.0), (0.0, 0.0))
+    up_tip: List[Tuple[float, float]] = field(default_factory=list)
+    up_text_pos: Tuple[float, float] = (0.0, 0.0)
+    dn_line: Optional[Tuple[Tuple[float, float], Tuple[float, float]]] = None
+    dn_tip: Optional[List[Tuple[float, float]]] = None
+    dn_text_pos: Optional[Tuple[float, float]] = None
+    headroom_text_pos: Tuple[float, float] = (0.0, 0.0)
+    headroom_text: str = "HEADROOM >= 2.0m CLEAR"
+
+
+@dataclass
+class DimensionChainPrimitive(DrawingPrimitive):
+    """3-line architectural dimension chain with 45° slash ticks and witness lines."""
+    chain_id: str
+    axis: Literal["horizontal", "vertical"]
+    level: Literal["overall", "clear_rooms", "openings"]
+    main_line: Tuple[Tuple[float, float], Tuple[float, float]]
+    ticks: List[Tuple[float, float]] = field(default_factory=list)
+    witness_lines: List[Tuple[Tuple[float, float], Tuple[float, float]]] = field(default_factory=list)
+    segments: List[Dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class TextPrimitive(DrawingPrimitive):
+    """On-plan typography with halo pill and metric clear dims."""
+    x: float
+    y: float
+    text: str
+    font_size_pt: float = 8.5
+    font_weight: str = "bold"
+    color: str = "#0F172A"
+    halo: bool = True
+    halo_w_m: float = 1.8
+    halo_h_m: float = 0.55
+    subtext: Optional[str] = None
+    subtext_pt: float = 7.0
+    subtext_color: str = "#64748B"
+    lines: List[str] = field(default_factory=list)
+    dims_str: Optional[str] = None
+    dims_fs: float = 7.0
+    total_h_m: float = 0.55
+    room_tag_circle: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class GhostPrimitive(DrawingPrimitive):
+    """Ghost core overlay for upper floors (F1+) showing foundation stacking."""
+    core_rects: List[Tuple[float, float, float, float]] = field(default_factory=list)
+    ghost_treads: List[Tuple[Tuple[float, float], Tuple[float, float]]] = field(default_factory=list)
+    anchor_badge: Optional[Dict[str, Any]] = None
+    duct_shafts: List[Tuple[float, float, float, float]] = field(default_factory=list)
+
+
+@dataclass
+class AnnotationPrimitive(DrawingPrimitive):
+    """North arrow, graphic scale bar, title badge, and structural tags."""
+    compass: Optional[Dict[str, Any]] = None
+    scale_bar: Optional[Dict[str, Any]] = None
+    title_block: Optional[Dict[str, Any]] = None
+    entrance_pointer: Optional[Dict[str, Any]] = None
+    structural_tags: List[Dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class SheetHeaderInfo:
+    """Freshness verification and sheet metadata."""
+    gen_id: str
+    plot_w_m: float
+    plot_d_m: float
+    storeys: int
+    storeys_label: str
+    floor_index: int
+    floor_name: str
+    elevation_m: float
+    envelope_w_m: float
+    envelope_d_m: float
+    freshness_token: str
+    typology: str = "T1_SINGLE_FAMILY"
+
+
+@dataclass
+class FloorDrawingIR:
+    """Complete, self-contained Normalized Architectural Drawing IR for a single storey."""
+    envelope_w: float
+    envelope_d: float
+    header: SheetHeaderInfo
+    primitives: List[DrawingPrimitive] = field(default_factory=list)
+    door_schedule: List[Dict[str, Any]] = field(default_factory=list)
+    window_schedule: List[Dict[str, Any]] = field(default_factory=list)
+    room_schedule: List[Dict[str, Any]] = field(default_factory=list)
+
+    def primitives_by_layer(self, layer: LayerTag) -> List[DrawingPrimitive]:
+        return [p for p in self.primitives if p.layer == layer]
+
+    def get_bbox_m(self) -> Tuple[float, float, float, float]:
+        """Returns overall bounding box in IR meters: (min_x, min_y, max_x, max_y)."""
+        # Base envelope
+        min_x = 0.0
+        max_x = self.envelope_w
+        min_y = 0.0
+        max_y = self.envelope_d
+
+        # Include dimension chains & annotations margin
+        return (-1.4, -0.6, max_x + 0.6, max_y + 1.4)
+
+
+# =============================================================================
+# 2. COLLISION AVOIDANCE HELPERS & IR BUILDER
+# =============================================================================
+
+ROOM_ABBREV_MAP: Dict[str, str] = {
+    # T1
+    "MASTER BEDROOM": "M.BED",
+    "GUEST BATHROOM": "G.BATH",
+    "ENTRANCE FOYER": "FOYER",
+    "PRIVATE STAIRCASE": "STAIR",
+    "LIVING ROOM": "LIVING",
+    "DINING AREA": "DINING",
+    "KITCHEN": "KTCHN",
+    "PUJA ROOM": "PUJA",
+    "CENTRAL LOBBY": "LOBBY",
+    "BALCONY": "BALC",
+    "CORRIDOR": "CORR",
+    "BEDROOM 2": "BED 2",
+    "BEDROOM 3": "BED 3",
+    "BATHROOM 1": "BATH 1",
+    "BATHROOM 2": "BATH 2",
+    # T2
+    "SHARED STAIRCASE CORE": "STAIR",
+    "FLOOR ELEVATOR & STAIR LOBBY": "LOBBY",
+    "UNIT A: LIVING & DINING": "U.A LIV",
+    "UNIT A: BEDROOM": "U.A BED",
+    "UNIT B: LIVING & DINING": "U.B LIV",
+    "UNIT B: BEDROOM": "U.B BED",
+    "SANITARY & UTILITY BLOCK": "UTILITY",
+    # T3
+    "ENCLOSED FIRE STAIR 1": "STAIR 1",
+    "ENCLOSED FIRE STAIR 2": "STAIR 2",
+    "ELEVATOR BANK & MAIN LOBBY": "LOBBY",
+    "1.5M DOUBLE-LOADED CORRIDOR": "CORR",
+    "COMMERCIAL SUITE NORTH (OPEN OFFICE)": "SUITE N",
+    "COMMERCIAL SUITE SOUTH (EXECUTIVE)": "SUITE S",
+    "COMMERCIAL SANITARY & RESTROOM CORE": "SAN/WC",
+    # T4
+    "INDUSTRIAL STEEL STAIRCASE CORE": "IND STAIR",
+    "GROUND STAGING LOBBY": "STAGING",
+    "LOADING DOCK BAYS (ROLLING SHUTTERS)": "DOCK BAYS",
+    "DISPATCH & PALLET STAGING AREA": "DISPATCH",
+    "CLEAR-SPAN INDUSTRIAL STORAGE BAY": "STORAGE",
+    "STAFF LOCKER & SANITARY AMENITIES": "AMENITIES",
+    "MEZZANINE ADMINISTRATIVE SUITE": "MEZZ ADMIN",
+}
+
+
+def _approx_text_width(text: str, fs: float) -> float:
+    """Approximate rendered text width in pixels: ≈ 0.6 * font_size * char_count."""
+    return 0.6 * fs * len(text)
+
+
+def _get_abbrev(name: str) -> str:
+    cleaned = name.strip().upper()
+    if cleaned in ROOM_ABBREV_MAP:
+        return ROOM_ABBREV_MAP[cleaned]
+    short = cleaned
+    for o, n in [
+        ("BATHROOM", "BATH"),
+        ("BEDROOM", "BED"),
+        ("STAIRCASE", "STAIR"),
+        ("CORRIDOR", "CORR"),
+        ("ELEVATOR", "LIFT"),
+        ("COMMERCIAL", "COMM"),
+        ("INDUSTRIAL", "IND"),
+        ("ADMINISTRATIVE", "ADMIN"),
+    ]:
+        short = short.replace(o, n)
+    return short
+
+
+def _wrap_text(text: str, max_w: float, fs: float) -> Optional[List[str]]:
+    words = text.split()
+    if not words:
+        return []
+    for w in words:
+        if _approx_text_width(w, fs) > max_w:
+            return None
+    lines = []
+    curr = words[0]
+    for w in words[1:]:
+        test_line = f"{curr} {w}"
+        if _approx_text_width(test_line, fs) <= max_w:
+            curr = test_line
+        else:
+            lines.append(curr)
+            curr = w
+    lines.append(curr)
+    return lines
+
+
+class BBox:
+    def __init__(self, xmin: float, ymin: float, xmax: float, ymax: float):
+        self.xmin = xmin
+        self.ymin = ymin
+        self.xmax = xmax
+        self.ymax = ymax
+
+    def intersects(self, other: "BBox", pad: float = 0.5) -> bool:
+        return not (
+            self.xmax + pad <= other.xmin or
+            self.xmin - pad >= other.xmax or
+            self.ymax + pad <= other.ymin or
+            self.ymin - pad >= other.ymax
+        )
+
+
+def _get(obj: Any, key: str, default: Any = None) -> Any:
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        res = obj.get(key, default)
+        return default if res is None else res
+    res = getattr(obj, key, default)
+    return default if res is None else res
+
+def _safe_float(val: Any, default: float = 0.0) -> float:
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+def _safe_int(val: Any, default: int = 0) -> int:
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
+
+
+def build_drawing_ir(
+    floor_data: Any,
+    building_model: Optional[Any] = None,
+    gen_id: Optional[str] = None,
+    typology: Optional[str] = None,
+    theme: str = "cad",
+    plot_width_m: Optional[float] = None,
+    plot_depth_m: Optional[float] = None,
+    total_storeys: Optional[int] = None,
+    elevation_m: Optional[float] = None,
+) -> FloorDrawingIR:
+    """
+    Constructs a normalized FloorDrawingIR in meters, Y-up convention.
+    Accepts SingleFloorPlanModel, dictionary payload, or RectanglesModel.
+    """
+    # 1. Resolve Envelope Dimensions
+    env_obj = _get(floor_data, "envelope", {}) or {}
+    if not env_obj or not _get(env_obj, "width"):
+        rects_sub = _get(floor_data, "rectangles")
+        if rects_sub:
+            env_obj = _get(rects_sub, "envelope", {}) or {}
+    env_w = _safe_float(_get(env_obj, "width", 10.0), 10.0)
+    env_d = _safe_float(_get(env_obj, "depth", _get(env_obj, "height", 12.0)), 12.0)
+    env_x = _safe_float(_get(env_obj, "x", 0.0), 0.0)
+    env_y = _safe_float(_get(env_obj, "y", 0.0), 0.0)
+    if env_w <= 0.0:
+        env_w = 10.0
+    if env_d <= 0.0:
+        env_d = 12.0
+
+    f_idx = _safe_int(_get(floor_data, "floor_index", 0), 0)
+    f_name = str(_get(floor_data, "floor_name", f"Floor {f_idx}"))
+    elevation_m = _safe_float(elevation_m, f_idx * 3.0) if elevation_m is not None else float(f_idx * 3.0)
+
+    # Building parameters
+    if plot_width_m is not None:
+        plot_w = _safe_float(plot_width_m, env_w + 2.6)
+    else:
+        plot_w = _safe_float(_get(building_model, "plot_width_m", _get(floor_data, "plot_width_m", env_w + 2.6)), env_w + 2.6)
+
+    if plot_depth_m is not None:
+        plot_d = _safe_float(plot_depth_m, env_d + 3.8)
+    else:
+        plot_d = _safe_float(_get(building_model, "plot_depth_m", _get(floor_data, "plot_depth_m", env_d + 3.8)), env_d + 3.8)
+
+    total_storeys = _safe_int(total_storeys, 1) if total_storeys is not None else _safe_int(_get(building_model, "total_storeys", _get(floor_data, "total_storeys", 1)), 1)
+
+    bldg_typ = str(typology or _get(building_model, "building_typology", _get(floor_data, "building_typology", "T1_SINGLE_FAMILY"))).upper()
+
+    storeys_label = f"G+{total_storeys - 1}" if total_storeys > 1 else "G"
+    clean_gen = str(gen_id or _get(building_model, "seed", _get(floor_data, "seed", "GEN-F01")))
+    freshness_token = f"GEN {clean_gen} | PLOT {plot_w:.1f}m FRONTAGE x {plot_d:.1f}m DEPTH | {storeys_label} | ENV {env_w:.2f}x{env_d:.2f}m"
+
+    header = SheetHeaderInfo(
+        gen_id=clean_gen,
+        plot_w_m=plot_w,
+        plot_d_m=plot_d,
+        storeys=total_storeys,
+        storeys_label=storeys_label,
+        floor_index=f_idx,
+        floor_name=f_name,
+        elevation_m=elevation_m,
+        envelope_w_m=env_w,
+        envelope_d_m=env_d,
+        freshness_token=freshness_token,
+        typology=bldg_typ
+    )
+
+    primitives: List[DrawingPrimitive] = []
+
+    # 2. Extract Raw Components & Normalize Coordinates (Site Setback Resolution)
+    rooms_list = _get(floor_data, "rooms", [])
+    if not rooms_list:
+        rects_sub = _get(floor_data, "rectangles")
+        if rects_sub:
+            rooms_list = _get(rects_sub, "rooms", []) or _get(rects_sub, "rectangles", [])
+    if not rooms_list:
+        rooms_list = _get(floor_data, "placements", []) or []
+
+    doors_data = _get(floor_data, "doors", [])
+    if not doors_data:
+        rects_sub = _get(floor_data, "rectangles")
+        if rects_sub:
+            doors_data = _get(rects_sub, "doors", [])
+    doors_data = doors_data or []
+
+    windows_data = _get(floor_data, "windows", [])
+    if not windows_data:
+        rects_sub = _get(floor_data, "rectangles")
+        if rects_sub:
+            windows_data = _get(rects_sub, "windows", [])
+    windows_data = windows_data or []
+
+    # Detect if room coordinates are in site coordinates (setback included) rather than local envelope space
+    raw_min_x = min((_safe_float(_get(r, "x", 0.0), 0.0) for r in rooms_list), default=0.0)
+    raw_min_y = min((_safe_float(_get(r, "y", 0.0), 0.0) for r in rooms_list), default=0.0)
+    raw_max_x = max((_safe_float(_get(r, "x", 0.0), 0.0) + _safe_float(_get(r, "width_m", _get(r, "width", 0.0)), 0.0) for r in rooms_list), default=env_w)
+    raw_max_y = max((_safe_float(_get(r, "y", 0.0), 0.0) + _safe_float(_get(r, "depth_m", _get(r, "height", _get(r, "depth", 0.0))), 0.0) for r in rooms_list), default=env_d)
+
+    offset_x = 0.0
+    offset_y = 0.0
+
+    if env_x > 0.01 and raw_min_x >= env_x - 0.05:
+        offset_x = env_x
+    elif raw_max_x > env_w + 0.05 and raw_min_x > 0.05:
+        offset_x = raw_min_x
+
+    if env_y > 0.01 and raw_min_y >= env_y - 0.05:
+        offset_y = env_y
+    elif raw_max_y > env_d + 0.05 and raw_min_y > 0.05:
+        offset_y = raw_min_y
+
+    # Build normalized rooms in local envelope coordinates [0.0, env_w] × [0.0, env_d]
+    norm_rooms: List[Dict[str, Any]] = []
+    for r in rooms_list:
+        rid = str(_get(r, "room_id", "") or "")
+        rname = str(_get(r, "room_name", rid.replace("_", " ").title()) or rid)
+        rx = _safe_float(_get(r, "x", 0.0), 0.0) - offset_x
+        ry = _safe_float(_get(r, "y", 0.0), 0.0) - offset_y
+        rw = _safe_float(_get(r, "width_m", _get(r, "width", 0.0)), 0.0)
+        rd = _safe_float(_get(r, "depth_m", _get(r, "height", _get(r, "depth", 0.0))), 0.0)
+        area = _safe_float(_get(r, "area_sqm", rw * rd), rw * rd)
+        zone = str(_get(r, "zone", "General"))
+        is_core = bool(_get(r, "is_vertical_core", False) or "stair" in rid.lower() or "lift" in rid.lower())
+        u_id = _get(r, "unit_id", None)
+        norm_rooms.append({
+            "room_id": rid,
+            "room_name": rname,
+            "x": rx,
+            "y": ry,
+            "width_m": rw,
+            "depth_m": rd,
+            "width": rw,
+            "height": rd,
+            "area_sqm": area,
+            "zone": zone,
+            "is_vertical_core": is_core,
+            "unit_id": u_id,
+            "raw": r,
+        })
+
+    # Build normalized doors
+    norm_doors: List[Dict[str, Any]] = []
+    for d in doors_data:
+        did = str(_get(d, "door_id", ""))
+        mx1 = _safe_float(_get(d, "x1", 0.0), 0.0) - offset_x
+        my1 = _safe_float(_get(d, "y1", 0.0), 0.0) - offset_y
+        mx2 = _safe_float(_get(d, "x2", 0.0), 0.0) - offset_x
+        my2 = _safe_float(_get(d, "y2", 0.0), 0.0) - offset_y
+        mhx = _safe_float(_get(d, "hinge_x", mx1 + offset_x), mx1 + offset_x) - offset_x
+        mhy = _safe_float(_get(d, "hinge_y", my1 + offset_y), my1 + offset_y) - offset_y
+        norm_doors.append({
+            "door_id": did,
+            "from_room": str(_get(d, "from_room", "")),
+            "to_room": str(_get(d, "to_room", "")),
+            "wall_edge": str(_get(d, "wall_edge", "vertical")),
+            "x1": mx1, "y1": my1,
+            "x2": mx2, "y2": my2,
+            "hinge_x": mhx, "hinge_y": mhy,
+            "swing_direction": str(_get(d, "swing_direction", "inward_right")),
+            "width_m": _safe_float(_get(d, "width_m", 0.9), 0.9),
+            "name": str(_get(d, "name", "")),
+            "raw": d,
+        })
+
+    # Build normalized windows
+    norm_windows: List[Dict[str, Any]] = []
+    for win in windows_data:
+        wid = str(_get(win, "window_id", ""))
+        mx1 = _safe_float(_get(win, "x1", 0.0), 0.0) - offset_x
+        my1 = _safe_float(_get(win, "y1", 0.0), 0.0) - offset_y
+        mx2 = _safe_float(_get(win, "x2", 0.0), 0.0) - offset_x
+        my2 = _safe_float(_get(win, "y2", 0.0), 0.0) - offset_y
+        norm_windows.append({
+            "window_id": wid,
+            "room_id": str(_get(win, "room_id", "")),
+            "wall_edge": str(_get(win, "wall_edge", "north")),
+            "x1": mx1, "y1": my1,
+            "x2": mx2, "y2": my2,
+            "width_m": _safe_float(_get(win, "width_m", 1.2), 1.2),
+            "raw": win,
+        })
+
+    # Color palette
+    color_map = {
+        "master_bed": "#E0F2FE",
+        "living": "#DCFCE7",
+        "kitchen": "#FEF3C7",
+        "puja": "#FEF9C3",
+        "bath_1": "#E0F2FE",
+        "bath_2": "#E0F2FE",
+        "bed_2": "#F1F5F9",
+        "dining": "#FCE7F3",
+        "stairs": "#F5F3FF",
+        "corridor": "#FFFFFF",
+        "lobby": "#F1F5F9",
+    }
+
+    # Generate Room Fills Layer
+    parsed_rooms = []
+    for r in norm_rooms:
+        rid = r["room_id"]
+        rname = r["room_name"]
+        rx = r["x"]
+        ry = r["y"]
+        rw = r["width_m"]
+        rd = r["depth_m"]
+        area = r["area_sqm"]
+        zone = r["zone"]
+        is_core = r["is_vertical_core"]
+
+        # Map to IR SW corner (Y-up convention)
+        rx_ir = round(rx, 3)
+        if abs(rx_ir) < 1e-4:
+            rx_ir = 0.0
+        ry_ir = round(env_d - (ry + rd), 3)
+        if abs(ry_ir) < 1e-4:
+            ry_ir = 0.0
+
+        base_rid = rid
+        for u in ("_u1", "_u2", "_u3", "_u4"):
+            if base_rid.endswith(u):
+                base_rid = base_rid[:-len(u)]
+                break
+
+        fc = color_map.get(rid, color_map.get(base_rid, "#F8FAFC"))
+        if is_core:
+            fc = "#FAF5FF"
+
+        fill_prim = FillPrimitive(
+            layer="fills",
+            x=rx_ir,
+            y=ry_ir,
+            w=rw,
+            h=rd,
+            fill_color=fc,
+            room_id=rid,
+            room_name=rname,
+            zone=zone,
+            is_core=is_core
+        )
+        primitives.append(fill_prim)
+        parsed_rooms.append((r["raw"], rx_ir, ry_ir, rw, rd, rid, rname, area, zone, is_core))
+
+    # 3. Wall Graph & Walls Layer
+    wg_dict = _get(floor_data, "wall_graph")
+    if wg_dict is not None and hasattr(wg_dict, "to_dict"):
+        wg_dict = wg_dict.to_dict()
+    if wg_dict is None:
+        try:
+            from app.services.floorplan.wall_graph import build_constructible_wall_graph
+            raw_wg = build_constructible_wall_graph(
+                floor_index=f_idx,
+                envelope={"width": env_w, "depth": env_d},
+                raw_rooms=norm_rooms,
+                typology=bldg_typ,
+                floor_to_floor_height_m=3.0,
+                doors_in=norm_doors,
+                windows_in=norm_windows,
+            )
+            if raw_wg:
+                wg_dict = raw_wg.to_dict()
+        except Exception:
+            wg_dict = None
+
+    if wg_dict and isinstance(wg_dict, dict) and "walls" in wg_dict:
+        walls_data = wg_dict.get("walls", [])
+        if isinstance(walls_data, dict):
+            walls_data = list(walls_data.values())
+        for w in walls_data:
+            wt = str(_get(w, "wall_type", "W2"))
+            wx1 = _safe_float(_get(w, "x1", 0.0), 0.0)
+            wy1 = _safe_float(_get(w, "y1", 0.0), 0.0)
+            wx2 = _safe_float(_get(w, "x2", 0.0), 0.0)
+            wy2 = _safe_float(_get(w, "y2", 0.0), 0.0)
+            th = _safe_float(_get(w, "thickness_m", 0.115), 0.115)
+            is_ext = bool(_get(w, "is_exterior", wt == "W1"))
+            is_lb = bool(_get(w, "is_load_bearing", wt == "W1"))
+
+            # Convert to Y-up
+            wx1_ir = wx1
+            wy1_ir = env_d - wy1
+            wx2_ir = wx2
+            wy2_ir = env_d - wy2
+
+            primitives.append(WallPrimitive(
+                layer="walls",
+                wall_id=str(_get(w, "wall_id", "")),
+                wall_type=wt if wt in ("W1", "W2", "W3") else "W2",
+                x1=wx1_ir,
+                y1=wy1_ir,
+                x2=wx2_ir,
+                y2=wy2_ir,
+                thickness_m=th,
+                is_exterior=is_ext,
+                is_load_bearing=is_lb,
+                dash_array=[0.08, 0.06] if wt == "W3" else None
+            ))
+    else:
+        # Fallback wall construction from envelope & room borders
+        # Exterior Envelope W1 (230mm)
+        primitives.append(WallPrimitive(layer="walls", wall_id="W_EXT_S", wall_type="W1", x1=0.0, y1=0.0, x2=env_w, y2=0.0, thickness_m=0.23, is_exterior=True, is_load_bearing=True))
+        primitives.append(WallPrimitive(layer="walls", wall_id="W_EXT_N", wall_type="W1", x1=0.0, y1=env_d, x2=env_w, y2=env_d, thickness_m=0.23, is_exterior=True, is_load_bearing=True))
+        primitives.append(WallPrimitive(layer="walls", wall_id="W_EXT_W", wall_type="W1", x1=0.0, y1=0.0, x2=0.0, y2=env_d, thickness_m=0.23, is_exterior=True, is_load_bearing=True))
+        primitives.append(WallPrimitive(layer="walls", wall_id="W_EXT_E", wall_type="W1", x1=env_w, y1=0.0, x2=env_w, y2=env_d, thickness_m=0.23, is_exterior=True, is_load_bearing=True))
+
+        # Interior Room Partitions W2 (115mm) from adjacent room borders
+        seen_fallback_walls = set()
+        for i, rA in enumerate(norm_rooms):
+            for j in range(i + 1, len(norm_rooms)):
+                rB = norm_rooms[j]
+                # Check vertical boundary
+                if abs((rA["x"] + rA["width_m"]) - rB["x"]) < 0.05 or abs((rB["x"] + rB["width_m"]) - rA["x"]) < 0.05:
+                    x_b = (rA["x"] + rA["width_m"] + rB["x"]) / 2.0 if abs((rA["x"] + rA["width_m"]) - rB["x"]) < 0.05 else (rB["x"] + rB["width_m"] + rA["x"]) / 2.0
+                    y_min = max(rA["y"], rB["y"])
+                    y_max = min(rA["y"] + rA["depth_m"], rB["y"] + rB["depth_m"])
+                    if y_max - y_min >= 0.40:
+                        ekey = ("V", round(x_b, 2), round(y_min, 2), round(y_max, 2))
+                        if ekey not in seen_fallback_walls:
+                            seen_fallback_walls.add(ekey)
+                            primitives.append(WallPrimitive(
+                                layer="walls",
+                                wall_id=f"W_INT_V_{len(seen_fallback_walls)}",
+                                wall_type="W2",
+                                x1=x_b,
+                                y1=env_d - y_min,
+                                x2=x_b,
+                                y2=env_d - y_max,
+                                thickness_m=0.115,
+                                is_exterior=False,
+                                is_load_bearing=False
+                            ))
+                # Check horizontal boundary
+                if abs((rA["y"] + rA["depth_m"]) - rB["y"]) < 0.05 or abs((rB["y"] + rB["depth_m"]) - rA["y"]) < 0.05:
+                    y_b = (rA["y"] + rA["depth_m"] + rB["y"]) / 2.0 if abs((rA["y"] + rA["depth_m"]) - rB["y"]) < 0.05 else (rB["y"] + rB["depth_m"] + rA["y"]) / 2.0
+                    x_min = max(rA["x"], rB["x"])
+                    x_max = min(rA["x"] + rA["width_m"], rB["x"] + rB["width_m"])
+                    if x_max - x_min >= 0.40:
+                        ekey = ("H", round(y_b, 2), round(x_min, 2), round(x_max, 2))
+                        if ekey not in seen_fallback_walls:
+                            seen_fallback_walls.add(ekey)
+                            primitives.append(WallPrimitive(
+                                layer="walls",
+                                wall_id=f"W_INT_H_{len(seen_fallback_walls)}",
+                                wall_type="W2",
+                                x1=x_min,
+                                y1=env_d - y_b,
+                                x2=x_max,
+                                y2=env_d - y_b,
+                                thickness_m=0.115,
+                                is_exterior=False,
+                                is_load_bearing=False
+                            ))
+
+    # 4. Openings Layer (Doors & Windows)
+    d_counter = 1
+    for d in norm_doors:
+        did = str(_get(d, "door_id", f"D{d_counter}"))
+        wedge = str(_get(d, "wall_edge", "vertical"))
+        swing = str(_get(d, "swing_direction", "inward_right"))
+        dw = _safe_float(_get(d, "width_m", 0.9), 0.9)
+
+        mx1 = _safe_float(_get(d, "x1", 0.0), 0.0)
+        my1 = _safe_float(_get(d, "y1", 0.0), 0.0)
+        mx2 = _safe_float(_get(d, "x2", 0.0), 0.0)
+        my2 = _safe_float(_get(d, "y2", 0.0), 0.0)
+        mhx = _safe_float(_get(d, "hinge_x", mx1), mx1)
+        mhy = _safe_float(_get(d, "hinge_y", my1), my1)
+
+        hx_ir = mhx
+        hy_ir = env_d - mhy
+
+        if abs(mx1 - mhx) < 0.02 and abs(my1 - mhy) < 0.02:
+            mcx, mcy = mx2, my2
+        else:
+            mcx, mcy = mx1, my1
+        cx_ir = mcx
+        cy_ir = env_d - mcy
+
+        if wedge in ("vertical", "east", "west"):
+            mlx = mhx - dw if "left" in swing else mhx + dw
+            mly = mhy
+        else:
+            mlx = mhx
+            mly = mhy - dw if "left" in swing else mhy + dw
+
+        lx_ir = mlx
+        ly_ir = env_d - mly
+
+        ang_closed = round(math.degrees(math.atan2(cy_ir - hy_ir, cx_ir - hx_ir))) % 360
+        ang_open = round(math.degrees(math.atan2(ly_ir - hy_ir, lx_ir - hx_ir))) % 360
+
+        diff = (ang_open - ang_closed) % 360
+        if diff == 90:
+            start_deg = ang_closed
+            end_deg = ang_closed + 90
+        elif diff == 270:
+            start_deg = ang_open
+            end_deg = ang_open + 90
+        else:
+            start_deg = min(ang_closed, ang_open)
+            end_deg = start_deg + 90
+
+        v1_x = mcx - mhx
+        v1_y = mcy - mhy
+        v2_x = mlx - mhx
+        v2_y = mly - mhy
+        cp = (v1_x * v2_y) - (v1_y * v2_x)
+        svg_swp = 1 if cp > 0 else 0
+
+        jambs = []
+        if wedge in ("vertical", "east", "west"):
+            jambs.append(((hx_ir - 0.08, hy_ir), (hx_ir + 0.08, hy_ir)))
+            jambs.append(((cx_ir - 0.08, cy_ir), (cx_ir + 0.08, cy_ir)))
+        else:
+            jambs.append(((hx_ir, hy_ir - 0.08), (hx_ir, hy_ir + 0.08)))
+            jambs.append(((cx_ir, cy_ir - 0.08), (cx_ir, cy_ir + 0.08)))
+
+        d_tag = f"D{d_counter}"
+        d_counter += 1
+
+        tag_x = (hx_ir + lx_ir) / 2.0
+        tag_y = (hy_ir + ly_ir) / 2.0
+
+        # Requirement C: T2/T3 unit entry door badges
+        to_rm_id = str(_get(d, "to_room", ""))
+        from_rm_id = str(_get(d, "from_room", ""))
+        to_rm = next((r for r in rooms_list if str(_get(r, "room_id", "")) == to_rm_id), None)
+        from_rm = next((r for r in rooms_list if str(_get(r, "room_id", "")) == from_rm_id), None)
+        matched_rm = to_rm if (to_rm and _get(to_rm, "unit_id")) else (from_rm if (from_rm and _get(from_rm, "unit_id")) else (to_rm or from_rm))
+        unit_badge = None
+        if matched_rm:
+            u_id = str(_get(matched_rm, "unit_id", "") or "")
+            r_name = str(_get(matched_rm, "room_name", "") or "")
+            r_id = str(_get(matched_rm, "room_id", "") or "")
+            comb = f"{u_id} {r_name} {r_id}"
+            if "A" in u_id or "North" in comb or "suite_north" in r_id.lower() or "unit 1" in r_name.lower() or ("T3" in bldg_typ and ("reception" in r_id.lower() or "main_entry" in did.lower() or "reception" in to_rm_id.lower() or "reception" in from_rm_id.lower())):
+                unit_badge = {"tag": "UNIT A", "x": hx_ir + 0.1, "y": hy_ir - 0.35}
+            elif "B" in u_id or "South" in comb or "suite_south" in r_id.lower() or "unit 2" in r_name.lower() or ("T3" in bldg_typ and ("conference" in r_id.lower() or "lounge" in r_id.lower() or "conference" in to_rm_id.lower() or "visitor_lounge" in to_rm_id.lower())):
+                unit_badge = {"tag": "UNIT B", "x": hx_ir + 0.1, "y": hy_ir - 0.35}
+            elif u_id:
+                unit_badge = {"tag": u_id.replace("_", " ").upper(), "x": hx_ir + 0.1, "y": hy_ir - 0.35}
+
+        op_prim = OpeningPrimitive(
+            layer="openings",
+            opening_id=did,
+            opening_type="door",
+            tag=d_tag,
+            wall_edge=wedge,
+            x1=min(hx_ir, cx_ir),
+            y1=min(hy_ir, cy_ir),
+            x2=max(hx_ir, cx_ir),
+            y2=max(hy_ir, cy_ir),
+            hinge_x=hx_ir,
+            hinge_y=hy_ir,
+            leaf_x=lx_ir,
+            leaf_y=ly_ir,
+            arc_center_x=hx_ir,
+            arc_center_y=hy_ir,
+            arc_radius_m=dw,
+            arc_start_deg=start_deg,
+            arc_end_deg=end_deg,
+            arc_start_pt=(cx_ir, cy_ir),
+            arc_end_pt=(lx_ir, ly_ir),
+            svg_sweep_flag=svg_swp,
+            door_jambs=jambs,
+            tag_x=tag_x,
+            tag_y=tag_y,
+            unit_badge=unit_badge
+        )
+        primitives.append(op_prim)
+
+    # Windows
+    w_counter = 1
+    for win in norm_windows:
+        wid = str(_get(win, "window_id", f"W{w_counter}"))
+        wedge = str(_get(win, "wall_edge", "north"))
+        mx1 = _safe_float(_get(win, "x1", 0.0), 0.0)
+        my1 = _safe_float(_get(win, "y1", 0.0), 0.0)
+        mx2 = _safe_float(_get(win, "x2", 0.0), 0.0)
+        my2 = _safe_float(_get(win, "y2", 0.0), 0.0)
+
+        x1_ir = mx1
+        y1_ir = env_d - my1
+        x2_ir = mx2
+        y2_ir = env_d - my2
+
+        length = math.hypot(x2_ir - x1_ir, y2_ir - y1_ir)
+        if length > 0.01:
+            ux = (x2_ir - x1_ir) / length
+            uy = (y2_ir - y1_ir) / length
+            nx = -uy
+            ny = ux
+        else:
+            nx, ny = 0.0, 1.0
+
+        offset_m = 0.06
+        outer_p1 = (x1_ir + nx * offset_m, y1_ir + ny * offset_m)
+        outer_p2 = (x2_ir + nx * offset_m, y2_ir + ny * offset_m)
+        glass_p1 = (x1_ir, y1_ir)
+        glass_p2 = (x2_ir, y2_ir)
+        inner_p1 = (x1_ir - nx * offset_m, y1_ir - ny * offset_m)
+        inner_p2 = (x2_ir - nx * offset_m, y2_ir - ny * offset_m)
+
+        wjambs = [
+            (outer_p1, inner_p1),
+            (outer_p2, inner_p2),
+        ]
+
+        w_tag = f"W{w_counter}"
+        w_counter += 1
+        tag_x = (x1_ir + x2_ir) / 2.0
+        tag_y = (y1_ir + y2_ir) / 2.0
+
+        win_prim = OpeningPrimitive(
+            layer="openings",
+            opening_id=wid,
+            opening_type="window",
+            tag=w_tag,
+            wall_edge=wedge,
+            x1=min(x1_ir, x2_ir),
+            y1=min(y1_ir, y2_ir),
+            x2=max(x1_ir, x2_ir),
+            y2=max(y1_ir, y2_ir),
+            outer_line=(outer_p1, outer_p2),
+            glass_line=(glass_p1, glass_p2),
+            inner_line=(inner_p1, inner_p2),
+            window_jambs=wjambs,
+            tag_x=tag_x,
+            tag_y=tag_y
+        )
+        primitives.append(win_prim)
+
+    # 5. Staircase Primitive Layer
+    stair_room = next((r for r in parsed_rooms if r[9]), None)
+    if stair_room:
+        _, s_rx, s_ry, s_rw, s_rd, _, _, _, _, _ = stair_room
+        stair_geom = _get(floor_data, "stair_geometry")
+        treads_per_fl = _safe_int(_get(stair_geom, "treads_per_flight", 8), 8)
+        landing_depth = _safe_float(_get(stair_geom, "landing_depth_m", 1.2), 1.2)
+
+        landing_d = max(0.9, min(s_rd * 0.40, landing_depth))
+        landing_y = s_ry + s_rd - landing_d
+        flight_h = s_rd - landing_d
+        mid_x = s_rx + s_rw / 2.0
+
+        treads_lines = []
+        num_treads = max(4, min(12, treads_per_fl))
+        for t in range(1, num_treads):
+            ty = s_ry + (flight_h / num_treads) * t
+            treads_lines.append(((s_rx + 0.05, ty), (mid_x - 0.05, ty)))
+            treads_lines.append(((mid_x + 0.05, ty), (s_rx + s_rw - 0.05, ty)))
+
+        fl1_cx = s_rx + (mid_x - s_rx) / 2.0
+        up_arr_p1 = (fl1_cx, s_ry + 0.3)
+        up_arr_p2 = (fl1_cx, landing_y - 0.2)
+        up_tip = [(fl1_cx - 0.12, landing_y - 0.35), (fl1_cx, landing_y - 0.15), (fl1_cx + 0.12, landing_y - 0.35)]
+        up_txt = (fl1_cx, s_ry + 0.2)
+
+        dn_arr = None
+        dn_tip = None
+        dn_txt = None
+        if f_idx > 0:
+            fl2_cx = mid_x + (s_rx + s_rw - mid_x) / 2.0
+            dn_arr = ((fl2_cx, landing_y - 0.2), (fl2_cx, s_ry + 0.3))
+            dn_tip = [(fl2_cx - 0.12, s_ry + 0.45), (fl2_cx, s_ry + 0.25), (fl2_cx + 0.12, s_ry + 0.45)]
+            dn_txt = (fl2_cx, landing_y - 0.35)
+
+        stair_prim = StairPrimitive(
+            layer="cores",
+            boundary=(s_rx, s_ry, s_rw, s_rd),
+            landing_line=((s_rx, landing_y), (s_rx + s_rw, landing_y)),
+            dividing_line=((mid_x, s_ry), (mid_x, landing_y)),
+            treads=treads_lines,
+            up_line=(up_arr_p1, up_arr_p2),
+            up_tip=up_tip,
+            up_text_pos=up_txt,
+            dn_line=dn_arr,
+            dn_tip=dn_tip,
+            dn_text_pos=dn_txt,
+            headroom_text_pos=(s_rx + s_rw / 2.0, landing_y + landing_d / 2.0),
+            headroom_text="HEADROOM >= 2.0m CLEAR"
+        )
+        primitives.append(stair_prim)
+
+    # 6. Ghost Core Overlay Layer (F1+)
+    if f_idx > 0 and building_model:
+        v_cores = _get(building_model, "vertical_cores", []) or []
+        d_shafts = _get(building_model, "duct_shafts", []) or []
+        ghost_core_rects = []
+        ghost_tread_lines = []
+        for gc in v_cores:
+            gc_x = _safe_float(_get(gc, "x", 0.0), 0.0)
+            gc_y = _safe_float(_get(gc, "y", 0.0), 0.0)
+            gc_w = _safe_float(_get(gc, "width_m", _get(gc, "width", 0.0)), 0.0)
+            gc_d = _safe_float(_get(gc, "depth_m", _get(gc, "depth", _get(gc, "height", 0.0))), 0.0)
+            gc_x_ir = gc_x
+            gc_y_ir = env_d - (gc_y + gc_d)
+            ghost_core_rects.append((gc_x_ir, gc_y_ir, gc_w, gc_d))
+
+            has_matching_stair = any(
+                r[9] and abs(r[1] - gc_x_ir) < 0.2 and abs(r[2] - gc_y_ir) < 0.2
+                for r in parsed_rooms
+            )
+            if not has_matching_stair:
+                for t in range(1, 6):
+                    t_y = gc_y_ir + (gc_d / 6.0) * t
+                    ghost_tread_lines.append(((gc_x_ir + 0.1, t_y), (gc_x_ir + gc_w - 0.1, t_y)))
+
+        ghost_shaft_rects = []
+        for ds in d_shafts:
+            ds_x = _safe_float(_get(ds, "x", 0.0), 0.0)
+            ds_y = _safe_float(_get(ds, "y", 0.0), 0.0)
+            ds_w = _safe_float(_get(ds, "width_m", _get(ds, "width", 0.0)), 0.0)
+            ds_d = _safe_float(_get(ds, "depth_m", _get(ds, "depth", _get(ds, "height", 0.0))), 0.0)
+            ghost_shaft_rects.append((ds_x, env_d - (ds_y + ds_d), ds_w, ds_d))
+
+        badge_dict = None
+        if ghost_core_rects:
+            # Match svg_generator.py candidate placement around core in circulation lobby
+            gc_0 = v_cores[0] if v_cores else None
+            gc_x_m = _safe_float(_get(gc_0, "x", 0.0), 0.0)
+            gc_y_m = _safe_float(_get(gc_0, "y", 0.0), 0.0)
+            gc_w_m = _safe_float(_get(gc_0, "width_m", _get(gc_0, "width", 0.0)), 0.0)
+            gc_d_m = _safe_float(_get(gc_0, "depth_m", _get(gc_0, "depth", _get(gc_0, "height", 0.0))), 0.0)
+
+            c_scale = 36.0
+            c_mx = 75.0
+            c_my = 75.0
+            gx_s = c_mx + gc_x_m * c_scale
+            gy_s = c_my + gc_y_m * c_scale
+            gw_s = gc_w_m * c_scale
+            gh_s = gc_d_m * c_scale
+            l_len = 0.3 * c_scale
+            b_w = 68.0
+            b_h = 14.0
+
+            # Door boxes in svg space
+            d_boxes = []
+            for d_tmp in doors_data:
+                mhx_t = _safe_float(_get(d_tmp, "hinge_x", _get(d_tmp, "x1", 0.0)), 0.0)
+                mhy_t = _safe_float(_get(d_tmp, "hinge_y", _get(d_tmp, "y1", 0.0)), 0.0)
+                mdw_t = max(_safe_float(_get(d_tmp, "width_m", 0.9), 0.9) * c_scale, 22.0)
+                wedge_t = str(_get(d_tmp, "wall_edge", "vertical"))
+                swing_t = str(_get(d_tmp, "swing_direction", "inward_right"))
+                if wedge_t in ("vertical", "east", "west"):
+                    mlx_t = mhx_t - mdw_t if swing_t == "inward_left" else mhx_t + mdw_t
+                    mly_t = mhy_t
+                else:
+                    mlx_t = mhx_t
+                    mly_t = mhy_t - mdw_t if swing_t == "inward_left" else mhy_t + mdw_t
+                thx_s = c_mx + mhx_t * c_scale
+                thy_s = c_my + mhy_t * c_scale
+                tlx_s = c_mx + mlx_t * c_scale
+                tly_s = c_my + mly_t * c_scale
+                td_cx = (thx_s + tlx_s) / 2.0
+                td_cy = (thy_s + tly_s) / 2.0
+                d_boxes.append(BBox(td_cx - 10.0, td_cy - 8.0, td_cx + 10.0, td_cy + 8.0))
+
+            cands = [
+                (gx_s + gw_s + l_len, gy_s + gh_s - b_h - 4.0, gx_s + gw_s, gy_s + gh_s - 10.0, gx_s + gw_s + l_len, gy_s + gh_s - 4.0 - b_h / 2.0),
+                (gx_s + gw_s + l_len, gy_s + gh_s / 2.0 - b_h / 2.0, gx_s + gw_s, gy_s + gh_s / 2.0, gx_s + gw_s + l_len, gy_s + gh_s / 2.0),
+                (gx_s + gw_s / 2.0 - b_w / 2.0, gy_s + gh_s + l_len, gx_s + gw_s / 2.0, gy_s + gh_s, gx_s + gw_s / 2.0, gy_s + gh_s + l_len),
+                (gx_s - l_len - b_w, gy_s + gh_s - b_h - 4.0, gx_s, gy_s + gh_s - 10.0, gx_s - l_len, gy_s + gh_s - 4.0 - b_h / 2.0),
+            ]
+            chosen = cands[0]
+            for c_cand in cands:
+                cbx, cby = c_cand[0], c_cand[1]
+                c_bbox = BBox(cbx, cby, cbx + b_w, cby + b_h)
+                collides_d = any(c_bbox.intersects(db) for db in d_boxes)
+                in_env = (
+                    cbx >= c_mx and cbx + b_w <= c_mx + env_w * c_scale and
+                    cby >= c_my and cby + b_h <= c_my + env_d * c_scale
+                )
+                if not collides_d and in_env:
+                    chosen = c_cand
+                    break
+
+            ch_bx, ch_by, ch_lx1, ch_ly1, ch_lx2, ch_ly2 = chosen
+            # Convert chosen candidate to IR Y-up meters
+            bx_ir = (ch_bx - c_mx) / c_scale
+            by_ir = env_d - ((ch_by + b_h - c_my) / c_scale)
+            bw_ir = b_w / c_scale
+            bh_ir = b_h / c_scale
+            lx1_ir = (ch_lx1 - c_mx) / c_scale
+            ly1_ir = env_d - ((ch_ly1 - c_my) / c_scale)
+            lx2_ir = (ch_lx2 - c_mx) / c_scale
+            ly2_ir = env_d - ((ch_ly2 - c_my) / c_scale)
+
+            badge_dict = {
+                "badge_x": bx_ir,
+                "badge_y": by_ir,
+                "badge_w": bw_ir,
+                "badge_h": bh_ir,
+                "leader_p1": (lx1_ir, ly1_ir),
+                "leader_p2": (lx2_ir, ly2_ir),
+                "text": "F0 CORE ANCHOR",
+                "svg_badge_x": ch_bx,
+                "svg_badge_y": ch_by,
+                "svg_badge_w": b_w,
+                "svg_badge_h": b_h,
+            }
+
+        ghost_prim = GhostPrimitive(
+            layer="ghost",
+            core_rects=ghost_core_rects,
+            ghost_treads=ghost_tread_lines,
+            anchor_badge=badge_dict,
+            duct_shafts=ghost_shaft_rects
+        )
+        primitives.append(ghost_prim)
+
+    # 7. Text & Typography Layer (Global Collision Resolution Engine)
+    col_scale = 36.0
+    col_mx = 75.0
+    col_my = 75.0
+
+    def col_px(xm: float) -> float:
+        return col_mx + (xm * col_scale)
+
+    def col_py(ym_from_north: float) -> float:
+        return col_my + (ym_from_north * col_scale)
+
+    fixed_obstacles: List[Tuple[str, BBox]] = []
+
+    # Obstacle 1: Compass
+    compass_cx = col_mx + env_w * col_scale + 20.0
+    compass_cy = col_my - 39.0
+    fixed_obstacles.append(("compass", BBox(compass_cx - 16.0, compass_cy - 16.0, compass_cx + 16.0, compass_cy + 16.0)))
+
+    # Obstacle 2: Main Entrance
+    if f_idx == 0:
+        main_door = next((d for d in doors_data if _get(d, "door_id") == "D1" or "main" in str(_get(d, "name", "")).lower()), None)
+        door_x_m = env_w * 0.45
+        if main_door:
+            mx1 = _safe_float(_get(main_door, "x1", 0.0), 0.0)
+            mx2 = _safe_float(_get(main_door, "x2", 0.0), 0.0)
+            if mx1 > 0.0 or mx2 > 0.0:
+                door_x_m = (mx1 + mx2) / 2.0
+        door_x = col_px(door_x_m)
+        arr_y1 = col_my - 8.5
+        arr_y2 = col_my - 1.0
+        cap_y = col_my - 66.0
+        cap_w = 72.0
+        cap_x = min(door_x, compass_cx - 22.0 - cap_w / 2.0)
+        fixed_obstacles.append(("main_entrance_cap", BBox(cap_x - cap_w / 2.0, cap_y - 8.0, cap_x + cap_w / 2.0, cap_y + 2.0)))
+        fixed_obstacles.append(("main_entrance_arrow", BBox(door_x - 5.0, arr_y1, door_x + 5.0, arr_y2)))
+
+    # Obstacle 3: Structural Tags
+    if "T1" in bldg_typ or "SINGLE" in bldg_typ:
+        lbw_x = col_px(0.4)
+        lbw_y = col_py(0.35)
+        fixed_obstacles.append(("lbw_tag", BBox(lbw_x - 2.0, lbw_y - 5.5, lbw_x + 42.0, lbw_y + 2.0)))
+    elif "T3" in bldg_typ or "T4" in bldg_typ or "COMPLEX" in bldg_typ or "WAREHOUSE" in bldg_typ:
+        for gtag, gx_m in [("1", 0.0), ("2", env_w / 2.0), ("3", env_w)]:
+            gx = col_px(gx_m)
+            fixed_obstacles.append((f"col_bubble_{gtag}", BBox(gx - 7.0, col_my - 61.0, gx + 7.0, col_my - 47.0)))
+        for gtag, gy_m in [("A", 0.0), ("B", env_d / 2.0), ("C", env_d)]:
+            gy = col_py(gy_m)
+            fixed_obstacles.append((f"col_bubble_{gtag}", BBox(col_mx - 61.0, gy - 7.0, col_mx - 47.0, gy + 7.0)))
+
+    # Obstacle 4: Ghost Anchor Badge
+    if f_idx > 0 and ghost_prim and ghost_prim.anchor_badge:
+        ab = ghost_prim.anchor_badge
+        if "svg_badge_x" in ab:
+            bx_svg = ab["svg_badge_x"]
+            by_svg = ab["svg_badge_y"]
+            bw_svg = ab["svg_badge_w"]
+            bh_svg = ab["svg_badge_h"]
+        else:
+            bx_svg = col_px(ab["badge_x"])
+            by_svg = col_my + (env_d - (ab["badge_y"] + ab["badge_h"])) * col_scale
+            bw_svg = ab["badge_w"] * col_scale
+            bh_svg = ab["badge_h"] * col_scale
+        fixed_obstacles.append(("core_badge", BBox(bx_svg, by_svg, bx_svg + bw_svg, by_svg + bh_svg)))
+
+    # Obstacle 5: Staircase core annotations
+    if stair_room and stair_prim:
+        up_x = col_px(stair_prim.up_text_pos[0])
+        up_y = col_my + (env_d - stair_prim.up_text_pos[1]) * col_scale
+        fixed_obstacles.append(("up_label", BBox(up_x - 18.0, up_y - 8.0, up_x + 18.0, up_y + 8.0)))
+        if stair_prim.dn_text_pos:
+            dn_x = col_px(stair_prim.dn_text_pos[0])
+            dn_y = col_my + (env_d - stair_prim.dn_text_pos[1]) * col_scale
+            fixed_obstacles.append(("dn_label", BBox(dn_x - 18.0, dn_y - 8.0, dn_x + 18.0, dn_y + 8.0)))
+        hr_x = col_px(stair_prim.headroom_text_pos[0])
+        hr_y = col_my + (env_d - stair_prim.headroom_text_pos[1]) * col_scale
+        fixed_obstacles.append(("headroom_note", BBox(hr_x - 55.0, hr_y - 8.0, hr_x + 55.0, hr_y + 8.0)))
+
+    # Obstacle 6: Door and Window Tags
+    for op in primitives:
+        if isinstance(op, OpeningPrimitive):
+            if op.opening_type == "door":
+                dtag_x = col_px(op.tag_x)
+                dtag_y = col_my + (env_d - op.tag_y) * col_scale
+                fixed_obstacles.append((f"door_tag_{op.tag}", BBox(dtag_x - 7.0, dtag_y - 4.5, dtag_x + 7.0, dtag_y + 4.5)))
+            elif op.opening_type == "window":
+                wtag_x = col_px(op.tag_x)
+                wtag_y = col_my + (env_d - op.tag_y) * col_scale
+                fixed_obstacles.append((f"win_tag_{op.tag}", BBox(wtag_x - 6.0, wtag_y - 5.5, wtag_x + 6.0, wtag_y + 2.0)))
+
+    # Candidate room options ladder
+    room_options: List[Tuple[Any, List[Dict[str, Any]]]] = []
+    for idx, r_data in enumerate(parsed_rooms, 1):
+        r_raw, rx_ir, ry_ir, rw_m, rd_m, rid, rname, area_m2, zone_str, is_core_rm = r_data
+        rx_px = col_px(rx_ir)
+        ry_north_m = env_d - (ry_ir + rd_m)
+        ry_px = col_py(ry_north_m)
+        rw_px = rw_m * col_scale
+        rh_px = rd_m * col_scale
+        cx_px = rx_px + rw_px / 2.0
+        cy_px = ry_px + rh_px / 2.0
+
+        avail_w = max(4.0, rw_px - 6.0)
+        avail_h = max(4.0, rh_px - 6.0)
+
+        full_name = rname.upper()
+        abbrev_name = _get_abbrev(rname)
+        zone_info = f" [{zone_str}]" if zone_str else ""
+        dims_full = f"{rw_m:.1f}m × {rd_m:.1f}m ({area_m2:.1f}m²){zone_info}"
+        dims_short = f"{rw_m:.1f}m × {rd_m:.1f}m"
+
+        opts: List[Dict[str, Any]] = []
+
+        # Level 1: Full name + dims inside room, word-wrapped, adaptive font 8-11pt
+        for fs in [11.0, 10.0, 9.5, 9.0, 8.5, 8.0]:
+            lines = _wrap_text(full_name, avail_w, fs)
+            if not lines or len(lines) > 2:
+                continue
+            name_h = len(lines) * fs * 1.25
+            dims_fs = min(8.0, fs - 1.0)
+            dims_to_use = None
+            if name_h + 3.0 + dims_fs * 1.2 <= avail_h:
+                if _approx_text_width(dims_full, dims_fs) <= avail_w:
+                    dims_to_use = dims_full
+                elif _approx_text_width(dims_short, dims_fs) <= avail_w:
+                    dims_to_use = dims_short
+
+            total_h = name_h + (3.0 + dims_fs * 1.2 if dims_to_use else 0.0)
+            if total_h <= avail_h:
+                opts.append({
+                    "level": 1,
+                    "name_lines": lines,
+                    "font_size": fs,
+                    "dims_str": dims_to_use,
+                    "dims_fs": dims_fs if dims_to_use else 0.0,
+                    "total_h": total_h,
+                    "cx": cx_px, "cy": cy_px,
+                    "rx": rx_px, "ry": ry_px, "rw": rw_px, "rh": rh_px,
+                })
+                break
+
+        # Level 2: Abbreviated name via ABBREV map, dims line hidden
+        for fs in [9.5, 9.0, 8.5, 8.0]:
+            lines = _wrap_text(abbrev_name, avail_w, fs)
+            if not lines or len(lines) > 2:
+                continue
+            total_h = len(lines) * fs * 1.25
+            if total_h <= avail_h:
+                opts.append({
+                    "level": 2,
+                    "name_lines": lines,
+                    "font_size": fs,
+                    "dims_str": None,
+                    "dims_fs": 0.0,
+                    "total_h": total_h,
+                    "cx": cx_px, "cy": cy_px,
+                    "rx": rx_px, "ry": ry_px, "rw": rw_px, "rh": rh_px,
+                })
+                break
+
+        # Level 3: Numbered tag only (small filled circle badge with room index at centroid)
+        opts.append({
+            "level": 3,
+            "room_idx": idx,
+            "radius": 7.5,
+            "cx": cx_px, "cy": cy_px,
+            "rx": rx_px, "ry": ry_px, "rw": rw_px, "rh": rh_px,
+        })
+
+        room_options.append((r_data, opts))
+
+    # Active ladder level index for each room (starts at best L1/L2)
+    active_levels = [0 for _ in room_options]
+
+    def get_cand_bbox(cand: Dict[str, Any]) -> BBox:
+        ccx = cand["cx"]
+        ccy = cand["cy"]
+        if cand["level"] in (1, 2):
+            lines = cand["name_lines"]
+            fs = cand["font_size"]
+            w = max(_approx_text_width(l, fs) for l in lines)
+            if cand.get("dims_str"):
+                w = max(w, _approx_text_width(cand["dims_str"], cand["dims_fs"]))
+            h = cand["total_h"]
+            pad = 0.5
+            return BBox(ccx - w / 2.0 - pad, ccy - h / 2.0 - pad, ccx + w / 2.0 + pad, ccy + h / 2.0 + pad)
+        else:
+            rad = cand["radius"]
+            pad = 0.5
+            return BBox(ccx - rad - pad, ccy - rad - pad, ccx + rad + pad, ccy + rad + pad)
+
+    def has_any_conflict(i_idx: int, cand_item: Dict[str, Any], current_bboxes: List[BBox]) -> bool:
+        b = get_cand_bbox(cand_item)
+        for obs_name, b_obs in fixed_obstacles:
+            if b.intersects(b_obs):
+                return True
+        for o_idx, b_other in enumerate(current_bboxes):
+            if o_idx != i_idx and b.intersects(b_other):
+                return True
+        return False
+
+    for iteration in range(35):
+        collision_detected = False
+        bboxes = [get_cand_bbox(opts[active_levels[i]]) for i, (r_d, opts) in enumerate(room_options)]
+
+        for i, (r_d, opts) in enumerate(room_options):
+            b_cand = bboxes[i]
+            cand = opts[active_levels[i]]
+            for obs_name, b_obs in fixed_obstacles:
+                if b_cand.intersects(b_obs):
+                    collision_detected = True
+                    base_cy = cand["ry"] + cand["rh"] / 2.0
+                    nudged = False
+                    for dy in [-2, 2, -4, 4, -6, 6, -8, 8, -12, 12]:
+                        test_cy = base_cy + dy
+                        h = cand["total_h"] if cand["level"] in (1, 2) else cand["radius"] * 2
+                        if test_cy - h / 2.0 >= cand["ry"] + 3.0 and test_cy + h / 2.0 <= cand["ry"] + cand["rh"] - 3.0:
+                            cand["cy"] = test_cy
+                            if not has_any_conflict(i, cand, bboxes):
+                                nudged = True
+                                break
+                    if not nudged:
+                        cand["cy"] = base_cy
+                        if active_levels[i] + 1 < len(opts):
+                            active_levels[i] += 1
+                            cand = opts[active_levels[i]]
+                            cand["cy"] = cand["ry"] + cand["rh"] / 2.0
+                    break
+            if collision_detected:
+                break
+
+        if collision_detected:
+            continue
+
+        for i in range(len(bboxes)):
+            for j in range(i + 1, len(bboxes)):
+                if bboxes[i].intersects(bboxes[j]):
+                    collision_detected = True
+                    r1_d, opts1 = room_options[i]
+                    r2_d, opts2 = room_options[j]
+                    cand1 = opts1[active_levels[i]]
+                    cand2 = opts2[active_levels[j]]
+
+                    base_cy1 = cand1["ry"] + cand1["rh"] / 2.0
+                    base_cy2 = cand2["ry"] + cand2["rh"] / 2.0
+
+                    nudged = False
+                    for dy in [-2, 2, -4, 4, -6, 6, -8, 8, -10, 10]:
+                        test_cy = base_cy1 + dy
+                        h = cand1["total_h"] if cand1["level"] in (1, 2) else cand1["radius"] * 2
+                        if test_cy - h / 2.0 >= cand1["ry"] + 3.0 and test_cy + h / 2.0 <= cand1["ry"] + cand1["rh"] - 3.0:
+                            cand1["cy"] = test_cy
+                            if not has_any_conflict(i, cand1, bboxes):
+                                nudged = True
+                                break
+                    if not nudged:
+                        cand1["cy"] = base_cy1
+                        for dy in [-2, 2, -4, 4, -6, 6, -8, 8, -10, 10]:
+                            test_cy = base_cy2 + dy
+                            h = cand2["total_h"] if cand2["level"] in (1, 2) else cand2["radius"] * 2
+                            if test_cy - h / 2.0 >= cand2["ry"] + 3.0 and test_cy + h / 2.0 <= cand2["ry"] + cand2["rh"] - 3.0:
+                                cand2["cy"] = test_cy
+                                if not has_any_conflict(j, cand2, bboxes):
+                                    nudged = True
+                                    break
+                        if not nudged:
+                            cand2["cy"] = base_cy2
+                            if r1_d[7] <= r2_d[7]:
+                                if active_levels[i] + 1 < len(opts1):
+                                    active_levels[i] += 1
+                                    cand1 = opts1[active_levels[i]]
+                                    cand1["cy"] = cand1["ry"] + cand1["rh"] / 2.0
+                            else:
+                                if active_levels[j] + 1 < len(opts2):
+                                    active_levels[j] += 1
+                                    cand2 = opts2[active_levels[j]]
+                                    cand2["cy"] = cand2["ry"] + cand2["rh"] / 2.0
+                    break
+            if collision_detected:
+                break
+
+        if not collision_detected:
+            break
+
+    # Build TextPrimitives from resolved candidates
+    for i, (r_data, opts) in enumerate(room_options):
+        cand = opts[active_levels[i]]
+        cand_cx = cand["cx"]
+        cand_cy = cand["cy"]
+
+        cx_ir = (cand_cx - col_mx) / col_scale
+        cy_ir = env_d - ((cand_cy - col_my) / col_scale)
+
+        if cand["level"] in (1, 2):
+            lines = cand["name_lines"]
+            fs = cand["font_size"]
+            dims_str = cand.get("dims_str")
+            dims_fs = cand.get("dims_fs", 7.0)
+            total_h = cand["total_h"]
+
+            w_px = max(_approx_text_width(l, fs) for l in lines)
+            if dims_str:
+                w_px = max(w_px, _approx_text_width(dims_str, dims_fs))
+
+            primitives.append(TextPrimitive(
+                layer="text",
+                x=cx_ir,
+                y=cy_ir,
+                text=lines[0] if lines else "",
+                font_size_pt=fs,
+                font_weight="bold",
+                color="#0F172A",
+                halo=True,
+                halo_w_m=w_px / col_scale + 0.3,
+                halo_h_m=total_h / col_scale + 0.15,
+                subtext=dims_str,
+                subtext_pt=dims_fs,
+                subtext_color="#64748B",
+                lines=lines,
+                dims_str=dims_str,
+                dims_fs=dims_fs,
+                total_h_m=total_h / col_scale
+            ))
+        else:
+            rad_px = cand["radius"]
+            tag_num = cand["room_idx"]
+            primitives.append(TextPrimitive(
+                layer="text",
+                x=cx_ir,
+                y=cy_ir,
+                text=str(tag_num),
+                font_size_pt=7.5,
+                font_weight="bold",
+                color="#0F172A",
+                halo=False,
+                room_tag_circle={
+                    "room_idx": tag_num,
+                    "radius_px": rad_px,
+                    "radius_m": rad_px / col_scale,
+                    "radius_pt": 7.5
+                }
+            ))
+
+    # 8. 3-Line Dimension Chains Layer
+    dim_offsets_y = [0.35, 0.70, 1.05]
+    chain_x_overall = DimensionChainPrimitive(
+        layer="dims",
+        chain_id="DIM_X_OVERALL",
+        axis="horizontal",
+        level="overall",
+        main_line=((0.0, env_d + dim_offsets_y[2]), (env_w, env_d + dim_offsets_y[2])),
+        ticks=[(0.0, env_d + dim_offsets_y[2]), (env_w, env_d + dim_offsets_y[2])],
+        witness_lines=[
+            ((0.0, env_d + 0.05), (0.0, env_d + dim_offsets_y[2] + 0.15)),
+            ((env_w, env_d + 0.05), (env_w, env_d + dim_offsets_y[2] + 0.15)),
+        ],
+        segments=[{
+            "label": f"{env_w:.2f}m OVERALL",
+            "length_m": env_w,
+            "center_x": env_w / 2.0,
+            "center_y": env_d + dim_offsets_y[2] + 0.10,
+            "font_size_pt": 8.0,
+            "is_vertical": False
+        }]
+    )
+    primitives.append(chain_x_overall)
+
+    x_chains_data = wg_dict.get("dim_chains_x", []) if wg_dict else []
+    for c_data in x_chains_data:
+        lvl = str(_get(c_data, "level", ""))
+        if lvl == "clear_rooms":
+            segs = _get(c_data, "segments", [])
+            ticks = [0.0]
+            seg_list = []
+            for s in segs:
+                s_end = _safe_float(_get(s, "end_m", 0.0), 0.0)
+                ticks.append(s_end)
+                len_m = _safe_float(_get(s, "length_m", 0.0), 0.0)
+                if len_m >= 0.75:
+                    seg_list.append({
+                        "label": f"{len_m:.2f}",
+                        "length_m": len_m,
+                        "center_x": (_safe_float(_get(s, "start_m", 0.0), 0.0) + s_end) / 2.0,
+                        "center_y": env_d + dim_offsets_y[1] + 0.08,
+                        "font_size_pt": 6.5,
+                        "is_vertical": False
+                    })
+            primitives.append(DimensionChainPrimitive(
+                layer="dims",
+                chain_id="DIM_X_CLEAR",
+                axis="horizontal",
+                level="clear_rooms",
+                main_line=((0.0, env_d + dim_offsets_y[1]), (env_w, env_d + dim_offsets_y[1])),
+                ticks=[(t, env_d + dim_offsets_y[1]) for t in ticks],
+                witness_lines=[((t, env_d + 0.05), (t, env_d + dim_offsets_y[1] + 0.10)) for t in ticks],
+                segments=seg_list
+            ))
+        elif lvl == "openings":
+            segs = _get(c_data, "segments", [])
+            ticks = [0.0]
+            seg_list = []
+            for s in segs:
+                s_end = _safe_float(_get(s, "end_m", 0.0), 0.0)
+                ticks.append(s_end)
+                len_m = _safe_float(_get(s, "length_m", 0.0), 0.0)
+                if len_m >= 0.85:
+                    seg_list.append({
+                        "label": f"{len_m:.2f}",
+                        "length_m": len_m,
+                        "center_x": (_safe_float(_get(s, "start_m", 0.0), 0.0) + s_end) / 2.0,
+                        "center_y": env_d + dim_offsets_y[0] + 0.08,
+                        "font_size_pt": 6.0,
+                        "is_vertical": False
+                    })
+            primitives.append(DimensionChainPrimitive(
+                layer="dims",
+                chain_id="DIM_X_OPENINGS",
+                axis="horizontal",
+                level="openings",
+                main_line=((0.0, env_d + dim_offsets_y[0]), (env_w, env_d + dim_offsets_y[0])),
+                ticks=[(t, env_d + dim_offsets_y[0]) for t in ticks],
+                witness_lines=[((t, env_d + 0.05), (t, env_d + dim_offsets_y[0] + 0.08)) for t in ticks],
+                segments=seg_list
+            ))
+
+    dim_offsets_x = [-0.35, -0.70, -1.05]
+    chain_y_overall = DimensionChainPrimitive(
+        layer="dims",
+        chain_id="DIM_Y_OVERALL",
+        axis="vertical",
+        level="overall",
+        main_line=((dim_offsets_x[2], 0.0), (dim_offsets_x[2], env_d)),
+        ticks=[(dim_offsets_x[2], 0.0), (dim_offsets_x[2], env_d)],
+        witness_lines=[
+            ((-0.05, 0.0), (dim_offsets_x[2] - 0.15, 0.0)),
+            ((-0.05, env_d), (dim_offsets_x[2] - 0.15, env_d)),
+        ],
+        segments=[{
+            "label": f"{env_d:.2f}m OVERALL",
+            "length_m": env_d,
+            "center_x": dim_offsets_x[2] - 0.10,
+            "center_y": env_d / 2.0,
+            "font_size_pt": 8.0,
+            "is_vertical": True
+        }]
+    )
+    primitives.append(chain_y_overall)
+
+    y_chains_data = wg_dict.get("dim_chains_y", []) if wg_dict else []
+    for c_data in y_chains_data:
+        lvl = str(_get(c_data, "level", ""))
+        if lvl == "clear_rooms":
+            segs = _get(c_data, "segments", [])
+            ticks = [0.0]
+            seg_list = []
+            for s in segs:
+                s_end_m = _safe_float(_get(s, "end_m", 0.0), 0.0)
+                ticks.append(env_d - s_end_m)
+                len_m = _safe_float(_get(s, "length_m", 0.0), 0.0)
+                if len_m >= 0.75:
+                    seg_list.append({
+                        "label": f"{len_m:.2f}",
+                        "length_m": len_m,
+                        "center_x": dim_offsets_x[1] - 0.08,
+                        "center_y": env_d - (_safe_float(_get(s, "start_m", 0.0), 0.0) + s_end_m) / 2.0,
+                        "font_size_pt": 6.5,
+                        "is_vertical": True
+                    })
+            primitives.append(DimensionChainPrimitive(
+                layer="dims",
+                chain_id="DIM_Y_CLEAR",
+                axis="vertical",
+                level="clear_rooms",
+                main_line=((dim_offsets_x[1], 0.0), (dim_offsets_x[1], env_d)),
+                ticks=[(dim_offsets_x[1], t) for t in ticks],
+                witness_lines=[((-0.05, t), (dim_offsets_x[1] - 0.10, t)) for t in ticks],
+                segments=seg_list
+            ))
+        elif lvl == "openings":
+            segs = _get(c_data, "segments", [])
+            ticks = [0.0]
+            seg_list = []
+            for s in segs:
+                s_end_m = _safe_float(_get(s, "end_m", 0.0), 0.0)
+                ticks.append(env_d - s_end_m)
+                len_m = _safe_float(_get(s, "length_m", 0.0), 0.0)
+                if len_m >= 0.85:
+                    seg_list.append({
+                        "label": f"{len_m:.2f}",
+                        "length_m": len_m,
+                        "center_x": dim_offsets_x[0] - 0.08,
+                        "center_y": env_d - (_safe_float(_get(s, "start_m", 0.0), 0.0) + s_end_m) / 2.0,
+                        "font_size_pt": 6.0,
+                        "is_vertical": True
+                    })
+            primitives.append(DimensionChainPrimitive(
+                layer="dims",
+                chain_id="DIM_Y_OPENINGS",
+                axis="vertical",
+                level="openings",
+                main_line=((dim_offsets_x[0], 0.0), (dim_offsets_x[0], env_d)),
+                ticks=[(dim_offsets_x[0], t) for t in ticks],
+                witness_lines=[((-0.05, t), (dim_offsets_x[0] - 0.08, t)) for t in ticks],
+                segments=seg_list
+            ))
+
+    # 9. Annotations Layer
+    compass_dict = {
+        "x": env_w + 0.2,
+        "y": env_d + 0.8,
+        "radius": 14.0
+    }
+    scale_bar_dict = {
+        "x": 0.0,
+        "y": -0.45,
+        "length_m": 4.0,
+        "divisions": [0, 1, 2, 3, 4]
+    }
+    title_block_dict = {
+        "floor_name": f_name.upper(),
+        "elevation_str": f"ELEVATION: +{elevation_m:.2f}m LVL",
+        "freshness_token": freshness_token,
+    }
+
+    struct_tags = []
+    if "T1" in bldg_typ or "SINGLE" in bldg_typ:
+        struct_tags.append({
+            "tag": "[LBW-230]",
+            "x": 0.4,
+            "y": env_d - 0.35,
+            "desc": "Load-Bearing Wall 230mm"
+        })
+    elif "T3" in bldg_typ or "T4" in bldg_typ or "COMPLEX" in bldg_typ or "WAREHOUSE" in bldg_typ:
+        struct_tags.append({"bubble": "1", "x": 0.0, "y": env_d + 1.55})
+        struct_tags.append({"bubble": "2", "x": env_w / 2.0, "y": env_d + 1.55})
+        struct_tags.append({"bubble": "3", "x": env_w, "y": env_d + 1.55})
+        struct_tags.append({"bubble": "A", "x": -1.55, "y": env_d})
+        struct_tags.append({"bubble": "B", "x": -1.55, "y": env_d / 2.0})
+        struct_tags.append({"bubble": "C", "x": -1.55, "y": 0.0})
+
+    entrance_dict = None
+    if f_idx == 0:
+        main_door = next((d for d in norm_doors if _get(d, "door_id") == "D1" or "main" in str(_get(d, "name", "")).lower() or "main" in str(_get(d, "door_id", "")).lower()), None)
+        door_x_m = env_w * 0.45
+        if main_door:
+            mx1 = _safe_float(_get(main_door, "x1", 0.0), 0.0)
+            mx2 = _safe_float(_get(main_door, "x2", 0.0), 0.0)
+            if mx1 > 0.0 or mx2 > 0.0:
+                door_x_m = (mx1 + mx2) / 2.0
+        cap_w_m = 72.0 / 36.0
+        cap_x_m = min(door_x_m, env_w + 20.0 / 36.0 - 22.0 / 36.0 - cap_w_m / 2.0)
+        entrance_dict = {
+            "p1": (door_x_m, env_d + 8.5 / 36.0),
+            "p2": (door_x_m, env_d + 1.0 / 36.0),
+            "label": "MAIN ENTRY",
+            "label_pos": (cap_x_m, env_d + 66.0 / 36.0)
+        }
+
+    annot_prim = AnnotationPrimitive(
+        layer="annotations",
+        compass=compass_dict,
+        scale_bar=scale_bar_dict,
+        title_block=title_block_dict,
+        entrance_pointer=entrance_dict,
+        structural_tags=struct_tags
+    )
+    primitives.append(annot_prim)
+
+    door_sched = _get(floor_data, "door_schedule") or _get(wg_dict, "door_schedule", [])
+    win_sched = _get(floor_data, "window_schedule") or _get(wg_dict, "window_schedule", [])
+    room_sched = _get(floor_data, "room_schedule") or _get(wg_dict, "room_schedule", [])
+
+    if not room_sched and norm_rooms:
+        room_sched = []
+        for idx, r in enumerate(norm_rooms, start=1):
+            rw = r["width_m"]
+            rd = r["depth_m"]
+            room_sched.append({
+                "room_no": str(idx),
+                "room_number": idx,
+                "room_name": r["room_name"],
+                "room_id": r["room_id"],
+                "clear_dimensions": f"{rw:.2f}m x {rd:.2f}m",
+                "clear_dims": f"{rw:.2f}m x {rd:.2f}m",
+                "clear_area_sqm": r["area_sqm"],
+                "finish_zone": "Vitrified Tile 600x600",
+                "zone": r["zone"],
+            })
+
+    if not door_sched and norm_doors:
+        door_sched = []
+        for idx, d in enumerate(norm_doors, start=1):
+            dw = d["width_m"]
+            door_sched.append({
+                "tag": f"D{idx}",
+                "width_m": dw,
+                "height_m": 2.10,
+                "dimension": f"{dw:.2f}m x 2.10m",
+                "door_type": "Standard Flush Door",
+                "level": f"Level {f_idx}",
+                "from_room": d.get("from_room") or "-",
+                "to_room": d.get("to_room") or "-",
+            })
+
+    if not win_sched and norm_windows:
+        win_sched = []
+        for idx, w in enumerate(norm_windows, start=1):
+            ww = w["width_m"]
+            win_sched.append({
+                "tag": f"W{idx}",
+                "width_m": ww,
+                "height_m": 1.20,
+                "dimension": f"{ww:.2f}m x 1.20m",
+                "sill_height_m": 0.90,
+                "lintel_height_m": 2.10,
+                "level": f"Level {f_idx}",
+                "type": "UPVC Double Glazed Casement",
+            })
+
+    return FloorDrawingIR(
+        envelope_w=env_w,
+        envelope_d=env_d,
+        header=header,
+        primitives=primitives,
+        door_schedule=door_sched if isinstance(door_sched, list) else [],
+        window_schedule=win_sched if isinstance(win_sched, list) else [],
+        room_schedule=room_sched if isinstance(room_sched, list) else []
+    )
+
+
+# =============================================================================
+# 3. BACKEND RENDERER 1: SVG GENERATOR (WEB BLUEPRINT VIEWER)
+# =============================================================================
+
+def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
+    """
+    Renders publication-grade architectural SVG blueprint exclusively from FloorDrawingIR.
+    Flips Y once at the top level projection.
+    """
+    is_cad = (theme.lower() == "cad")
+    scale = 36.0  # px per meter
+    margin_x = 75.0
+    margin_y = 75.0
+    title_block_h = 52.0
+    schedules_panel_h = 240.0
+
+    content_w = ir.envelope_w * scale
+    content_h = ir.envelope_d * scale
+    svg_w = int(content_w + 2.0 * margin_x)
+    svg_h = int(content_h + 2.0 * margin_y + title_block_h + schedules_panel_h)
+
+    bg_color = "#0B132B" if is_cad else "#F8FAFC"
+    grid_line = "#1E293B" if is_cad else "#E2E8F0"
+    ext_wall_stroke = "#38BDF8" if is_cad else "#1E293B"
+    int_wall_stroke = "#94A3B8" if is_cad else "#475569"
+    door_stroke = "#38BDF8" if is_cad else "#0284C7"
+    window_stroke = "#0284C7" if is_cad else "#0369A1"
+    core_stroke = "#F59E0B" if is_cad else "#D97706"
+    text_primary = "#F8FAFC" if is_cad else "#0F172A"
+    text_secondary = "#94A3B8" if is_cad else "#64748B"
+    text_dim = "#64748B" if is_cad else "#94A3B8"
+
+    def px(x_m: float) -> float:
+        return margin_x + (x_m * scale)
+
+    def py(y_m: float) -> float:
+        return margin_y + ((ir.envelope_d - y_m) * scale)
+
+    svg: List[str] = []
+    svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_w} {svg_h}" width="{svg_w}" height="{svg_h}" style="background-color: {bg_color}; font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif;">')
+
+    svg.append(f"""
+      <defs>
+        <pattern id="mf-grid-{theme}" width="{scale}" height="{scale}" patternUnits="userSpaceOnUse">
+          <path d="M {scale} 0 L 0 0 0 {scale}" fill="none" stroke="{grid_line}" stroke-width="0.75" />
+          <path d="M {scale/2} 0 L {scale/2} {scale} M 0 {scale/2} L {scale} {scale/2}" fill="none" stroke="{grid_line}" stroke-width="0.25" stroke-dasharray="2 2" />
+        </pattern>
+        <marker id="entry-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 9 5 L 0 9 z" fill="#10B981" />
+        </marker>
+        <style>
+          .ghost-core-overlay {{
+            transition: opacity 0.2s ease;
+          }}
+          .ghost-core-overlay.hidden, [data-ghost-overlay="false"] .ghost-core-overlay {{
+            display: none !important;
+          }}
+          text {{
+            user-select: none;
+          }}
+        </style>
+      </defs>
+    """)
+
+    svg.append(f'  <rect width="{svg_w}" height="{svg_h}" fill="{bg_color}" />')
+    svg.append(f'  <rect x="{margin_x}" y="{margin_y}" width="{content_w}" height="{content_h}" fill="url(#mf-grid-{theme})" />')
+    svg.append(f'  <rect x="{margin_x}" y="{margin_y}" width="{content_w}" height="{content_h}" fill="none" stroke="{ext_wall_stroke}" stroke-width="4.5" stroke-linecap="square" />')
+
+    # 1. Fills Layer
+    for f in ir.primitives_by_layer("fills"):
+        if isinstance(f, FillPrimitive):
+            rx_svg = px(f.x)
+            ry_svg = py(f.y + f.h)
+            rw_svg = f.w * scale
+            rh_svg = f.h * scale
+            svg.append(f'  <rect x="{rx_svg:.1f}" y="{ry_svg:.1f}" width="{rw_svg:.1f}" height="{rh_svg:.1f}" fill="{f.fill_color}" fill-opacity="0.15" />')
+
+    # 2. Ghost Layer
+    for g in ir.primitives_by_layer("ghost"):
+        if isinstance(g, GhostPrimitive):
+            svg.append('  <!-- GHOST CORE OVERLAY -->')
+            svg.append('  <g id="ghost-core-overlay" class="ghost-core-overlay" data-visible="true">')
+            ghost_stroke = "rgba(6,182,212,0.5)" if is_cad else "rgba(2,132,199,0.4)"
+            for cx, cy, cw, ch in g.core_rects:
+                svg.append(f'    <rect x="{px(cx):.1f}" y="{py(cy + ch):.1f}" width="{cw*scale:.1f}" height="{ch*scale:.1f}" fill="rgba(6,182,212,0.04)" stroke="{ghost_stroke}" stroke-width="1.4" stroke-dasharray="5 3" />')
+            for p1, p2 in g.ghost_treads:
+                svg.append(f'    <line x1="{px(p1[0]):.1f}" y1="{py(p1[1]):.1f}" x2="{px(p2[0]):.1f}" y2="{py(p2[1]):.1f}" stroke="{ghost_stroke}" stroke-width="0.8" stroke-dasharray="3 3" opacity="0.5" />')
+            if g.anchor_badge:
+                ab = g.anchor_badge
+                lp1, lp2 = ab["leader_p1"], ab["leader_p2"]
+                bx, by, bw, bh = ab["badge_x"], ab["badge_y"], ab["badge_w"], ab["badge_h"]
+                svg.append(f'    <line id="f0-core-leader" class="f0-core-leader" x1="{px(lp1[0]):.1f}" y1="{py(lp1[1]):.1f}" x2="{px(lp2[0]):.1f}" y2="{py(lp2[1]):.1f}" stroke="{ghost_stroke}" stroke-width="1.0" />')
+                svg.append(f'    <rect id="f0-core-anchor-badge" class="core-anchor-badge" x="{px(bx):.1f}" y="{py(by + bh):.1f}" width="{bw*scale:.1f}" height="{bh*scale:.1f}" rx="3" fill="#0E7490" opacity="0.85" />')
+                svg.append(f'    <text x="{px(bx + bw/2.0):.1f}" y="{py(by + bh) + 9.8:.1f}" font-size="7.0" font-weight="700" fill="#CFFAFE" text-anchor="middle" letter-spacing="0.5">F0 CORE ANCHOR</text>')
+            for dsx, dsy, dsw, dsh in g.duct_shafts:
+                svg.append(f'    <rect x="{px(dsx):.1f}" y="{py(dsy + dsh):.1f}" width="{dsw*scale:.1f}" height="{dsh*scale:.1f}" fill="rgba(245,158,11,0.08)" stroke="#F59E0B" stroke-width="1.2" stroke-dasharray="4 3" />')
+                svg.append(f'    <line x1="{px(dsx):.1f}" y1="{py(dsy + dsh):.1f}" x2="{px(dsx + dsw):.1f}" y2="{py(dsy):.1f}" stroke="#F59E0B" stroke-width="0.8" stroke-dasharray="2 2" opacity="0.5" />')
+                svg.append(f'    <line x1="{px(dsx + dsw):.1f}" y1="{py(dsy + dsh):.1f}" x2="{px(dsx):.1f}" y2="{py(dsy):.1f}" stroke="#F59E0B" stroke-width="0.8" stroke-dasharray="2 2" opacity="0.5" />')
+            svg.append('  </g>')
+
+    # 3. Walls Layer
+    for w in ir.primitives_by_layer("walls"):
+        if isinstance(w, WallPrimitive):
+            x1_s = px(w.x1)
+            y1_s = py(w.y1)
+            x2_s = px(w.x2)
+            y2_s = py(w.y2)
+            if w.wall_type == "W1":
+                w_strk = ext_wall_stroke
+                w_w = max(3.5, w.thickness_m * scale)
+                dash = ""
+            elif w.wall_type == "W3":
+                w_strk = int_wall_stroke
+                w_w = max(1.8, w.thickness_m * scale)
+                dash = 'stroke-dasharray="3 2"'
+            else:
+                w_strk = int_wall_stroke
+                w_w = max(2.4, w.thickness_m * scale)
+                dash = ""
+            svg.append(f'  <line x1="{x1_s:.1f}" y1="{y1_s:.1f}" x2="{x2_s:.1f}" y2="{y2_s:.1f}" stroke="{w_strk}" stroke-width="{w_w:.1f}" {dash} stroke-linecap="square" />')
+
+    # 4. Cores Layer (Staircase)
+    for st in ir.primitives_by_layer("cores"):
+        if isinstance(st, StairPrimitive):
+            bx, by, bw, bh = st.boundary
+            svg.append(f'  <rect x="{px(bx):.1f}" y="{py(by + bh):.1f}" width="{bw*scale:.1f}" height="{bh*scale:.1f}" fill="none" stroke="{core_stroke}" stroke-width="2.6" stroke-dasharray="4 2" />')
+            ll1, ll2 = st.landing_line
+            svg.append(f'  <line x1="{px(ll1[0]):.1f}" y1="{py(ll1[1]):.1f}" x2="{px(ll2[0]):.1f}" y2="{py(ll2[1]):.1f}" stroke="{core_stroke}" stroke-width="1.8" />')
+            dl1, dl2 = st.dividing_line
+            svg.append(f'  <line x1="{px(dl1[0]):.1f}" y1="{py(dl1[1]):.1f}" x2="{px(dl2[0]):.1f}" y2="{py(dl2[1]):.1f}" stroke="{core_stroke}" stroke-width="1.4" />')
+            for tp1, tp2 in st.treads:
+                svg.append(f'  <line x1="{px(tp1[0]):.1f}" y1="{py(tp1[1]):.1f}" x2="{px(tp2[0]):.1f}" y2="{py(tp2[1]):.1f}" stroke="{core_stroke}" stroke-width="1.0" opacity="0.75" />')
+            up1, up2 = st.up_line
+            svg.append(f'  <line x1="{px(up1[0]):.1f}" y1="{py(up1[1]):.1f}" x2="{px(up2[0]):.1f}" y2="{py(up2[1]):.1f}" stroke="{core_stroke}" stroke-width="1.5" />')
+            pts_str = " ".join(f"{px(p[0]):.1f},{py(p[1]):.1f}" for p in st.up_tip)
+            svg.append(f'  <polyline points="{pts_str}" fill="none" stroke="{core_stroke}" stroke-width="1.5" />')
+            svg.append(f'  <text x="{px(st.up_text_pos[0]):.1f}" y="{py(st.up_text_pos[1]):.1f}" font-size="7.0" font-weight="700" fill="{core_stroke}" text-anchor="middle">UP</text>')
+            if st.dn_line and st.dn_tip and st.dn_text_pos:
+                dn1, dn2 = st.dn_line
+                svg.append(f'  <line x1="{px(dn1[0]):.1f}" y1="{py(dn1[1]):.1f}" x2="{px(dn2[0]):.1f}" y2="{py(dn2[1]):.1f}" stroke="{core_stroke}" stroke-width="1.5" />')
+                pts_dn = " ".join(f"{px(p[0]):.1f},{py(p[1]):.1f}" for p in st.dn_tip)
+                svg.append(f'  <polyline points="{pts_dn}" fill="none" stroke="{core_stroke}" stroke-width="1.5" />')
+                svg.append(f'  <text x="{px(st.dn_text_pos[0]):.1f}" y="{py(st.dn_text_pos[1]):.1f}" font-size="7.0" font-weight="700" fill="{core_stroke}" text-anchor="middle">DN</text>')
+            hrx, hry = st.headroom_text_pos
+            svg.append(f'  <text x="{px(hrx):.1f}" y="{py(hry):.1f}" font-size="6.5" font-weight="700" fill="{core_stroke}" text-anchor="middle" letter-spacing="0.2">{st.headroom_text}</text>')
+
+    # 5. Openings Layer (Doors & Windows)
+    for op in ir.primitives_by_layer("openings"):
+        if isinstance(op, OpeningPrimitive):
+            if op.opening_type == "door":
+                for jp1, jp2 in op.door_jambs:
+                    svg.append(f'  <line x1="{px(jp1[0]):.1f}" y1="{py(jp1[1]):.1f}" x2="{px(jp2[0]):.1f}" y2="{py(jp2[1]):.1f}" stroke="{door_stroke}" stroke-width="1.8" />')
+                hx_s, hy_s = px(op.hinge_x), py(op.hinge_y)
+                lx_s, ly_s = px(op.leaf_x), py(op.leaf_y)
+                svg.append(f'  <line x1="{hx_s:.1f}" y1="{hy_s:.1f}" x2="{lx_s:.1f}" y2="{ly_s:.1f}" stroke="{door_stroke}" stroke-width="2.0" />')
+                sx_s, sy_s = px(op.arc_start_pt[0]), py(op.arc_start_pt[1])
+                ex_s, ey_s = px(op.arc_end_pt[0]), py(op.arc_end_pt[1])
+                r_s = op.arc_radius_m * scale
+                svg.append(f'  <path d="M {sx_s:.1f} {sy_s:.1f} A {r_s:.1f} {r_s:.1f} 0 0 {op.svg_sweep_flag} {ex_s:.1f} {ey_s:.1f}" fill="none" stroke="{door_stroke}" stroke-width="1.4" stroke-dasharray="3 3" />')
+                ptag_x = px(op.tag_x)
+                ptag_y = py(op.tag_y)
+                svg.append(f'  <rect x="{ptag_x - 7.5:.1f}" y="{ptag_y - 5.5:.1f}" width="15.0" height="11.0" rx="3" fill="{bg_color}" stroke="{door_stroke}" stroke-width="0.8" />')
+                svg.append(f'  <text x="{ptag_x:.1f}" y="{ptag_y + 2.5:.1f}" font-size="6.0" font-weight="700" fill="{door_stroke}" text-anchor="middle">{op.tag}</text>')
+                if op.unit_badge:
+                    ub = op.unit_badge
+                    ub_w = 38.0
+                    ub_h = 13.0
+                    ub_x = hx_s + 4.0
+                    if hy_s < margin_y + 35.0:
+                        ub_y = hy_s + 12.0
+                    else:
+                        ub_y = hy_s - 22.0
+                    unit_badge_bg = "#FEF3C7" if not is_cad else "rgba(245, 158, 11, 0.15)"
+                    unit_badge_stroke = "#D97706" if not is_cad else "#F59E0B"
+                    unit_badge_text = "#92400E" if not is_cad else "#F59E0B"
+                    svg.append(f'  <rect x="{ub_x:.1f}" y="{ub_y:.1f}" width="{ub_w:.1f}" height="{ub_h:.1f}" rx="2" fill="{unit_badge_bg}" stroke="{unit_badge_stroke}" stroke-width="0.8" class="badge" />')
+                    svg.append(f'  <text x="{ub_x + ub_w/2.0:.1f}" y="{ub_y + 9.0:.1f}" font-size="7.0" font-weight="700" fill="{unit_badge_text}" text-anchor="middle">{ub["tag"]}</text>')
+            elif op.opening_type == "window":
+                if op.outer_line and op.glass_line and op.inner_line:
+                    op1, op2 = op.outer_line
+                    gp1, gp2 = op.glass_line
+                    ip1, ip2 = op.inner_line
+                    svg.append(f'  <line x1="{px(op1[0]):.1f}" y1="{py(op1[1]):.1f}" x2="{px(op2[0]):.1f}" y2="{py(op2[1]):.1f}" stroke="{window_stroke}" stroke-width="1.5" />')
+                    svg.append(f'  <line x1="{px(gp1[0]):.1f}" y1="{py(gp1[1]):.1f}" x2="{px(gp2[0]):.1f}" y2="{py(gp2[1]):.1f}" stroke="{text_primary}" stroke-width="0.9" />')
+                    svg.append(f'  <line x1="{px(ip1[0]):.1f}" y1="{py(ip1[1]):.1f}" x2="{px(ip2[0]):.1f}" y2="{py(ip2[1]):.1f}" stroke="{window_stroke}" stroke-width="1.5" />')
+                pwtag_x = px(op.tag_x)
+                pwtag_y = py(op.tag_y)
+                svg.append(f'  <rect x="{pwtag_x - 7.5:.1f}" y="{pwtag_y - 5.5:.1f}" width="15.0" height="11.0" rx="3" fill="{bg_color}" stroke="{window_stroke}" stroke-width="0.8" />')
+                svg.append(f'  <text x="{pwtag_x:.1f}" y="{pwtag_y + 2.5:.1f}" font-size="6.0" font-weight="700" fill="{window_stroke}" text-anchor="middle">{op.tag}</text>')
+
+    # 6. Text & Typography Layer
+    for t in ir.primitives_by_layer("text"):
+        if isinstance(t, TextPrimitive):
+            tx_s = px(t.x)
+            ty_s = py(t.y)
+            if t.room_tag_circle:
+                b_fill = "#1E293B" if is_cad else "#E2E8F0"
+                b_strk = "#38BDF8" if is_cad else "#0284C7"
+                b_txt = "#F8FAFC" if is_cad else "#0F172A"
+                tag_num = t.room_tag_circle["room_idx"]
+                rad = t.room_tag_circle.get("radius_px", 7.5)
+                svg.append(f'  <circle id="room-tag-{tag_num}" class="room-tag-badge" cx="{tx_s:.1f}" cy="{ty_s:.1f}" r="{rad:.1f}" fill="{b_fill}" stroke="{b_strk}" stroke-width="1.2" />')
+                svg.append(f'  <text x="{tx_s:.1f}" y="{ty_s + 2.5:.1f}" font-size="7.5" font-weight="700" fill="{b_txt}" text-anchor="middle">{tag_num}</text>')
+            else:
+                lines = t.lines if t.lines else [t.text]
+                fs = t.font_size_pt
+                total_h = t.total_h_m * scale
+                top_y = ty_s - total_h / 2.0
+                line_step = fs * 1.25
+
+                if t.halo:
+                    hw = t.halo_w_m * scale
+                    hh = t.halo_h_m * scale
+                    halo_fill = "rgba(11,19,43,0.85)" if is_cad else "rgba(255,255,255,0.92)"
+                    svg.append(f'  <rect x="{tx_s - hw/2.0:.1f}" y="{ty_s - hh/2.0:.1f}" width="{hw:.1f}" height="{hh:.1f}" rx="3" fill="{halo_fill}" stroke="rgba(0,0,0,0.08)" stroke-width="0.5" />')
+
+                for line_idx, line in enumerate(lines):
+                    y_baseline = top_y + (line_idx + 0.85) * line_step
+                    svg.append(f'  <text x="{tx_s:.1f}" y="{y_baseline:.1f}" font-size="{fs:.1f}" font-weight="700" fill="{text_primary}" text-anchor="middle" letter-spacing="0.5">{html.escape(line)}</text>')
+
+                if t.subtext:
+                    y_dims = top_y + len(lines) * line_step + 3.0 + 0.85 * t.subtext_pt
+                    svg.append(f'  <text x="{tx_s:.1f}" y="{y_dims:.1f}" font-size="{t.subtext_pt:.1f}" font-weight="500" fill="{text_secondary}" text-anchor="middle">{html.escape(t.subtext)}</text>')
+
+    # 7. Dimension Chains Layer
+    def draw_slash_tick_svg(tx: float, ty: float):
+        svg.append(f'  <line x1="{tx - 3.0:.1f}" y1="{ty + 3.0:.1f}" x2="{tx + 3.0:.1f}" y2="{ty - 3.0:.1f}" stroke="{ext_wall_stroke}" stroke-width="1.6" />')
+
+    for dc in ir.primitives_by_layer("dims"):
+        if isinstance(dc, DimensionChainPrimitive):
+            p1, p2 = dc.main_line
+            svg.append(f'  <line x1="{px(p1[0]):.1f}" y1="{py(p1[1]):.1f}" x2="{px(p2[0]):.1f}" y2="{py(p2[1]):.1f}" stroke="{text_dim}" stroke-width="0.9" />')
+            for tk in dc.ticks:
+                draw_slash_tick_svg(px(tk[0]), py(tk[1]))
+            for wp1, wp2 in dc.witness_lines:
+                svg.append(f'  <line x1="{px(wp1[0]):.1f}" y1="{py(wp1[1]):.1f}" x2="{px(wp2[0]):.1f}" y2="{py(wp2[1]):.1f}" stroke="{text_dim}" stroke-width="0.5" stroke-dasharray="2 2" />')
+            for seg in dc.segments:
+                lbl_x = px(seg["center_x"])
+                lbl_y = py(seg["center_y"])
+                lbl_txt = seg["label"]
+                fs = seg.get("font_size_pt", 7.0)
+                if seg.get("is_vertical"):
+                    svg.append(f'  <text x="{lbl_x:.1f}" y="{lbl_y:.1f}" font-size="{fs:.1f}" font-weight="700" fill="{text_primary}" text-anchor="middle" transform="rotate(-90 {lbl_x:.1f} {lbl_y:.1f})">{lbl_txt}</text>')
+                else:
+                    svg.append(f'  <text x="{lbl_x:.1f}" y="{lbl_y:.1f}" font-size="{fs:.1f}" font-weight="700" fill="{text_primary}" text-anchor="middle">{lbl_txt}</text>')
+
+    # 8. Annotations Layer
+    for annot in ir.primitives_by_layer("annotations"):
+        if isinstance(annot, AnnotationPrimitive):
+            if annot.compass:
+                cx = px(annot.compass["x"])
+                cy = py(annot.compass["y"])
+                svg.append(f'  <g transform="translate({cx:.1f}, {cy:.1f})">')
+                svg.append(f'    <circle cx="0" cy="0" r="14" fill="{bg_color}" stroke="{text_secondary}" stroke-width="1.2" />')
+                svg.append(f'    <polygon points="0,-12 3,0 0,-2 -3,0" fill="{ext_wall_stroke}" />')
+                svg.append(f'    <polygon points="0,12 3,0 0,2 -3,0" fill="{text_dim}" />')
+                svg.append(f'    <text x="0" y="-15" font-size="8.5" font-weight="800" fill="{text_primary}" text-anchor="middle">N</text>')
+                svg.append('  </g>')
+
+            scale_y = svg_h - 20.0
+            svg.append(f'  <g transform="translate({margin_x}, {scale_y})">')
+            svg.append(f'    <text x="0" y="-12" font-size="7.0" font-weight="700" fill="{text_secondary}">GRAPHIC SCALE (METRIC)</text>')
+            svg.append(f'    <rect x="0" y="0" width="{scale}" height="3" fill="{text_secondary}" />')
+            svg.append(f'    <rect x="{scale}" y="0" width="{scale}" height="3" fill="{grid_line}" />')
+            svg.append(f'    <text x="0" y="-4" font-size="7.0" fill="{text_secondary}">0</text>')
+            svg.append(f'    <text x="{scale}" y="-4" font-size="7.0" fill="{text_secondary}">1m</text>')
+            svg.append(f'    <text x="{scale*2}" y="-4" font-size="7.0" fill="{text_secondary}">2m (1:50)</text>')
+            svg.append('  </g>')
+
+            for stag in annot.structural_tags:
+                if "tag" in stag:
+                    stx, sty = px(stag["x"]), py(stag["y"])
+                    svg.append(f'  <text x="{stx:.1f}" y="{sty:.1f}" font-size="6.5" font-weight="700" fill="{ext_wall_stroke}" text-anchor="start" letter-spacing="0.5">{stag["tag"]}</text>')
+                elif "bubble" in stag:
+                    bx, by = px(stag["x"]), py(stag["y"])
+                    svg.append(f'  <circle cx="{bx:.1f}" cy="{by:.1f}" r="6.5" fill="{bg_color}" stroke="{ext_wall_stroke}" stroke-width="1.0" class="col-grid-bubble" />')
+                    svg.append(f'  <text x="{bx:.1f}" y="{by + 2.5:.1f}" font-size="6.5" font-weight="700" fill="{text_primary}" text-anchor="middle">{stag["bubble"]}</text>')
+
+            if annot.entrance_pointer:
+                ep = annot.entrance_pointer
+                ep1, ep2 = ep["p1"], ep["p2"]
+                svg.append(f'  <line x1="{px(ep1[0]):.1f}" y1="{py(ep1[1]):.1f}" x2="{px(ep2[0]):.1f}" y2="{py(ep2[1]):.1f}" stroke="#10B981" stroke-width="2.6" marker-end="url(#entry-arrow)" />')
+                lbl_pos = ep["label_pos"]
+                svg.append(f'  <text x="{px(lbl_pos[0]):.1f}" y="{py(lbl_pos[1]):.1f}" font-size="8.5" font-weight="800" stroke="{bg_color}" stroke-width="3.2" stroke-linejoin="round" fill="#047857" paint-order="stroke fill" text-anchor="middle" letter-spacing="0.8">{ep["label"]}</text>')
+
+    banner_y = margin_y + content_h + 24.0
+    typology_tag = f"TYPOLOGY: {ir.header.typology} | {ir.header.freshness_token}"
+    svg.append(f'  <g transform="translate({margin_x}, {banner_y})">')
+    svg.append(f'    <text x="0" y="11.0" font-size="11.0" font-weight="700" fill="{text_primary}">{html.escape(ir.header.floor_name.upper())} (+{ir.header.elevation_m:.2f}m LVL)</text>')
+    svg.append(f'    <text x="0" y="26.0" font-size="8.5" font-weight="500" fill="{text_secondary}">{html.escape(typology_tag)}</text>')
+    if ir.header.floor_index == 0:
+        svg.append(f'    <text x="0" y="39.0" font-size="8.5" font-weight="600" fill="#10B981">MAIN ENTRANCE: NORTH | MAIN ENTRY | NBC 2016 COMPLIANT</text>')
+    svg.append('  </g>')
+
+    schedules_y = banner_y + 48.0
+    svg.append(f'  <g transform="translate({margin_x}, {schedules_y})">')
+    svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}" letter-spacing="0.4">WALL TYPE SPECIFICATION (NBC 2016 COMPLIANT)</text>')
+    svg.append(f'    <line x1="0" y1="18.0" x2="16.0" y2="18.0" stroke="{ext_wall_stroke}" stroke-width="4.0" />')
+    svg.append(f'    <text x="22.0" y="20.0" font-size="6.5" font-weight="600" fill="{text_secondary}">W1: 230mm Exterior Structural Wall (Masonry/RCC) - NBC 2016 Pt 3 Cl 3.4.1</text>')
+    svg.append(f'    <line x1="0" y1="29.0" x2="16.0" y2="29.0" stroke="{int_wall_stroke}" stroke-width="2.5" />')
+    svg.append(f'    <text x="22.0" y="31.0" font-size="6.5" font-weight="600" fill="{text_secondary}">W2: 115mm Interior Partition Wall (Half-Brick Masonry)</text>')
+    svg.append(f'    <line x1="0" y1="40.0" x2="16.0" y2="40.0" stroke="{int_wall_stroke}" stroke-width="1.8" stroke-dasharray="3 2" />')
+    svg.append(f'    <text x="22.0" y="42.0" font-size="6.5" font-weight="600" fill="{text_secondary}">W3: 75mm Toilet / Shaft Lightweight Enclosure</text>')
+    svg.append('  </g>')
+
+    door_tbl_y = schedules_y + 54.0
+    svg.append(f'  <g transform="translate({margin_x}, {door_tbl_y})">')
+    svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">DOOR SCHEDULE</text>')
+    d_cols = [24.0, 52.0, 56.0, 36.0]
+    d_heads = ["TAG", "W x H (m)", "TYPE", "LEVEL"]
+    cx = 0.0
+    for h_txt, cw in zip(d_heads, d_cols):
+        svg.append(f'    <text x="{cx:.1f}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">{h_txt}</text>')
+        cx += cw
+
+    for r_idx, d_row in enumerate(ir.door_schedule[:5]):
+        ry_pos = 29.0 + (r_idx * 10.5)
+        d_tag = str(d_row.get("tag", f"D{r_idx+1}"))
+        if "dimension" in d_row:
+            d_wh = str(d_row["dimension"])
+        elif "width_mm" in d_row and "height_mm" in d_row:
+            d_wh = f"{d_row['width_mm']/1000.0:.2f}x{d_row['height_mm']/1000.0:.2f}"
+        else:
+            d_wh = f"{_safe_float(d_row.get('width_m', 0.9), 0.9):.2f}x{_safe_float(d_row.get('height_m', 2.1), 2.1):.2f}"
+        d_tp = str(d_row.get("door_type", d_row.get("type", "Standard")))[:11]
+        d_lvl = f"L{d_row.get('level', ir.header.floor_index)}"
+        rcx = 0.0
+        for val_txt, cw in zip([d_tag, d_wh, d_tp, d_lvl], d_cols):
+            svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(val_txt)}</text>')
+            rcx += cw
+    svg.append('  </g>')
+
+    win_tbl_x = margin_x + max(180.0, (content_w - 20.0) / 2.0) + 10.0
+    svg.append(f'  <g transform="translate({win_tbl_x}, {door_tbl_y})">')
+    svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">WINDOW SCHEDULE</text>')
+    w_cols = [24.0, 52.0, 46.0, 46.0]
+    w_heads = ["TAG", "W x H (m)", "SILL", "LINTEL"]
+    cx = 0.0
+    for h_txt, cw in zip(w_heads, w_cols):
+        svg.append(f'    <text x="{cx:.1f}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">{h_txt}</text>')
+        cx += cw
+
+    for r_idx, w_row in enumerate(ir.window_schedule[:5]):
+        ry_pos = 29.0 + (r_idx * 10.5)
+        w_tag = str(w_row.get("tag", f"W{r_idx+1}"))
+        if "dimension" in w_row:
+            w_wh = str(w_row["dimension"])
+        elif "width_mm" in w_row and "height_mm" in w_row:
+            w_wh = f"{w_row['width_mm']/1000.0:.2f}x{w_row['height_mm']/1000.0:.2f}"
+        else:
+            w_wh = f"{_safe_float(w_row.get('width_m', 1.2), 1.2):.2f}x{_safe_float(w_row.get('height_m', 1.2), 1.2):.2f}"
+        sill_v = w_row.get("sill_height_m", w_row.get("sill_m"))
+        if sill_v is not None:
+            w_sill = f"+{_safe_float(sill_v, 0.9):.2f}m"
+        elif "sill_mm" in w_row:
+            w_sill = f"+{w_row['sill_mm']/1000.0:.2f}m"
+        else:
+            w_sill = "+0.90m"
+        lint_v = w_row.get("lintel_height_m", w_row.get("lintel_m"))
+        if lint_v is not None:
+            w_lint = f"+{_safe_float(lint_v, 2.1):.2f}m"
+        elif "lintel_mm" in w_row:
+            w_lint = f"+{w_row['lintel_mm']/1000.0:.2f}m"
+        else:
+            w_lint = "+2.10m"
+        rcx = 0.0
+        for val_txt, cw in zip([w_tag, w_wh, w_sill, w_lint], w_cols):
+            svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(val_txt)}</text>')
+            rcx += cw
+    svg.append('  </g>')
+
+    room_tbl_y = door_tbl_y + 82.0
+    svg.append(f'  <g transform="translate({margin_x}, {room_tbl_y})">')
+    svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">ROOM SCHEDULE</text>')
+    r_cols = [24.0, 80.0, 40.0, 56.0]
+    r_heads = ["NO", "ROOM NAME", "AREA", "CLEAR W x D"]
+    cx = 0.0
+    for h_txt, cw in zip(r_heads, r_cols):
+        svg.append(f'    <text x="{cx:.1f}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">{h_txt}</text>')
+        cx += cw
+
+    for r_idx, r_row in enumerate(ir.room_schedule[:6]):
+        ry_pos = 29.0 + (r_idx * 10.5)
+        r_num = str(r_row.get("room_number", r_row.get("room_no", r_row.get("no", r_idx + 1))))
+        r_name = str(r_row.get("room_name", "Room"))[:18]
+        area_val = r_row.get("clear_area_sqm", r_row.get("clear_area_m2", r_row.get("area_sqm", r_row.get("area", 0.0))))
+        r_area = f"{_safe_float(area_val, 0.0):.1f}m²"
+        r_dims = r_row.get("clear_dimensions", r_row.get("clear_dims"))
+        if not r_dims:
+            r_dims = f"{_safe_float(r_row.get('width_m', 0.0), 0.0):.2f}x{_safe_float(r_row.get('depth_m', 0.0), 0.0):.2f}"
+        rcx = 0.0
+        for val_txt, cw in zip([r_num, r_name, r_area, r_dims], r_cols):
+            svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(val_txt)}</text>')
+            rcx += cw
+    svg.append('  </g>')
+
+    wm_x = svg_w - 14.0
+    wm_y = svg_h - 8.0
+    svg.append(f'  <text x="{wm_x:.1f}" y="{wm_y:.1f}" font-size="8.0" font-weight="600" fill="{text_dim}" text-anchor="end" letter-spacing="0.5">BUILDWISE GENERATIVE CAD ENGINE</text>')
+
+    svg.append('</svg>')
+    return "\n".join(svg)
+
+
+# =============================================================================
+# 4. BACKEND RENDERER 2: REPORTLAB VECTOR DRAWING (PDF DOSSIER & REPORT)
+# =============================================================================
+
+def render_reportlab_from_ir(
+    ir: FloorDrawingIR,
+    width: float = 493.23,
+    height: float = 405.0
+) -> Drawing:
+    """
+    Renders publication-grade ReportLab vector drawing exclusively from FloorDrawingIR.
+    Directly maps Y-up IR coordinates to ReportLab Y-up points with a single uniform scale
+    and origin per sheet. No Y-flip, no geometry re-interpretation, zero offset bugs.
+    """
+    if Drawing is None:
+        raise RuntimeError("ReportLab is not installed or available.")
+
+    min_x_m = -1.40
+    max_x_m = ir.envelope_w + 0.50
+    min_y_m = -0.65
+    max_y_m = ir.envelope_d + 1.35
+
+    span_w_m = max_x_m - min_x_m
+    span_d_m = max_y_m - min_y_m
+
+    pad_pt = 14.0
+    avail_w = width - (2.0 * pad_pt)
+    avail_h = height - (2.0 * pad_pt)
+
+    scale_pt = min(avail_w / max(span_w_m, 1.0), avail_h / max(span_d_m, 1.0))
+    scale_pt = max(18.0, min(36.0, scale_pt))
+
+    total_drawn_w = span_w_m * scale_pt
+    total_drawn_h = span_d_m * scale_pt
+    origin_x = (width - total_drawn_w) / 2.0 - (min_x_m * scale_pt)
+    origin_y = (height - total_drawn_h) / 2.0 - (min_y_m * scale_pt)
+
+    def x_pt(x_m: float) -> float:
+        return origin_x + (x_m * scale_pt)
+
+    def y_pt(y_m: float) -> float:
+        return origin_y + (y_m * scale_pt)
+
+    drawing = Drawing(width, height)
+
+    drawing.add(Rect(0, 0, width, height, fillColor=colors.HexColor("#FFFFFF"), strokeColor=colors.HexColor("#E5E5EA"), strokeWidth=0.5, rx=6, ry=6))
+    drawing.add(Rect(x_pt(0.0), y_pt(0.0), ir.envelope_w * scale_pt, ir.envelope_d * scale_pt, fillColor=None, strokeColor=colors.HexColor("#CBD5E1"), strokeWidth=0.75, strokeDashArray=[3, 3]))
+
+    # 1. Fills Layer
+    for f in ir.primitives_by_layer("fills"):
+        if isinstance(f, FillPrimitive):
+            fx = x_pt(f.x)
+            fy = y_pt(f.y)
+            fw = f.w * scale_pt
+            fh = f.h * scale_pt
+            col = colors.HexColor(f.fill_color) if f.fill_color.startswith("#") else colors.HexColor("#F8FAFC")
+            drawing.add(Rect(fx, fy, fw, fh, fillColor=col, strokeColor=None, strokeWidth=0))
+
+    # 2. Ghost Layer
+    for g in ir.primitives_by_layer("ghost"):
+        if isinstance(g, GhostPrimitive):
+            for gx, gy, gw, gh in g.core_rects:
+                drawing.add(Rect(x_pt(gx), y_pt(gy), gw * scale_pt, gh * scale_pt, fillColor=colors.HexColor("#FAF5FF"), strokeColor=colors.HexColor("#9333EA"), strokeWidth=1.2, strokeDashArray=[4, 3]))
+            for tp1, tp2 in g.ghost_treads:
+                drawing.add(Line(x_pt(tp1[0]), y_pt(tp1[1]), x_pt(tp2[0]), y_pt(tp2[1]), strokeColor=colors.HexColor("#9333EA"), strokeWidth=0.8, strokeDashArray=[2, 2]))
+            if g.anchor_badge:
+                ab = g.anchor_badge
+                bx, by, bw, bh = ab["badge_x"], ab["badge_y"], ab["badge_w"], ab["badge_h"]
+                lp1, lp2 = ab["leader_p1"], ab["leader_p2"]
+                drawing.add(Line(x_pt(lp1[0]), y_pt(lp1[1]), x_pt(lp2[0]), y_pt(lp2[1]), strokeColor=colors.HexColor("#9333EA"), strokeWidth=0.8))
+                drawing.add(Rect(x_pt(bx), y_pt(by), bw * scale_pt, bh * scale_pt, rx=2, ry=2, fillColor=colors.HexColor("#7E22CE"), strokeColor=None))
+                drawing.add(String(x_pt(bx + bw / 2.0), y_pt(by + bh / 2.0) - 2.5, "F0 CORE ANCHOR", textAnchor="middle", fontSize=6.0, fontName="Helvetica-Bold", fillColor=colors.white))
+            for dsx, dsy, dsw, dsh in g.duct_shafts:
+                drawing.add(Rect(x_pt(dsx), y_pt(dsy), dsw * scale_pt, dsh * scale_pt, fillColor=colors.HexColor("#FEF3C7"), strokeColor=colors.HexColor("#D97706"), strokeWidth=0.8, strokeDashArray=[2, 2]))
+                drawing.add(Line(x_pt(dsx), y_pt(dsy), x_pt(dsx + dsw), y_pt(dsy + dsh), strokeColor=colors.HexColor("#D97706"), strokeWidth=0.6, strokeDashArray=[2, 2]))
+                drawing.add(Line(x_pt(dsx + dsw), y_pt(dsy), x_pt(dsx), y_pt(dsy + dsh), strokeColor=colors.HexColor("#D97706"), strokeWidth=0.6, strokeDashArray=[2, 2]))
+
+    # 3. Walls Layer
+    for w in ir.primitives_by_layer("walls"):
+        if isinstance(w, WallPrimitive):
+            wx1 = x_pt(w.x1)
+            wy1 = y_pt(w.y1)
+            wx2 = x_pt(w.x2)
+            wy2 = y_pt(w.y2)
+            if w.wall_type == "W1":
+                drawing.add(Line(wx1, wy1, wx2, wy2, strokeColor=colors.HexColor("#0F172A"), strokeWidth=2.4))
+            elif w.wall_type == "W3":
+                drawing.add(Line(wx1, wy1, wx2, wy2, strokeColor=colors.HexColor("#64748B"), strokeWidth=1.0, strokeDashArray=[2, 2]))
+            else:
+                drawing.add(Line(wx1, wy1, wx2, wy2, strokeColor=colors.HexColor("#475569"), strokeWidth=1.4))
+
+    # 4. Cores Layer (Staircase)
+    for st in ir.primitives_by_layer("cores"):
+        if isinstance(st, StairPrimitive):
+            bx, by, bw, bh = st.boundary
+            drawing.add(Rect(x_pt(bx), y_pt(by), bw * scale_pt, bh * scale_pt, fillColor=None, strokeColor=colors.HexColor("#D97706"), strokeWidth=1.8, strokeDashArray=[3, 2]))
+            ll1, ll2 = st.landing_line
+            drawing.add(Line(x_pt(ll1[0]), y_pt(ll1[1]), x_pt(ll2[0]), y_pt(ll2[1]), strokeColor=colors.HexColor("#D97706"), strokeWidth=1.4))
+            dl1, dl2 = st.dividing_line
+            drawing.add(Line(x_pt(dl1[0]), y_pt(dl1[1]), x_pt(dl2[0]), y_pt(dl2[1]), strokeColor=colors.HexColor("#D97706"), strokeWidth=1.2))
+            for tp1, tp2 in st.treads:
+                drawing.add(Line(x_pt(tp1[0]), y_pt(tp1[1]), x_pt(tp2[0]), y_pt(tp2[1]), strokeColor=colors.HexColor("#CBD5E1"), strokeWidth=0.75))
+            up1, up2 = st.up_line
+            drawing.add(Line(x_pt(up1[0]), y_pt(up1[1]), x_pt(up2[0]), y_pt(up2[1]), strokeColor=colors.HexColor("#6366F1"), strokeWidth=1.2))
+            pts_up = []
+            for p in st.up_tip:
+                pts_up.extend([x_pt(p[0]), y_pt(p[1])])
+            drawing.add(Polygon(pts_up, fillColor=colors.HexColor("#6366F1"), strokeColor=None))
+            drawing.add(String(x_pt(st.up_text_pos[0]), y_pt(st.up_text_pos[1]), "UP", fontSize=6.0, fontName="Helvetica-Bold", fillColor=colors.HexColor("#4F46E5"), textAnchor="middle"))
+            if st.dn_line and st.dn_tip and st.dn_text_pos:
+                dn1, dn2 = st.dn_line
+                drawing.add(Line(x_pt(dn1[0]), y_pt(dn1[1]), x_pt(dn2[0]), y_pt(dn2[1]), strokeColor=colors.HexColor("#6366F1"), strokeWidth=1.2))
+                pts_dn = []
+                for p in st.dn_tip:
+                    pts_dn.extend([x_pt(p[0]), y_pt(p[1])])
+                drawing.add(Polygon(pts_dn, fillColor=colors.HexColor("#6366F1"), strokeColor=None))
+                drawing.add(String(x_pt(st.dn_text_pos[0]), y_pt(st.dn_text_pos[1]), "DN", fontSize=6.0, fontName="Helvetica-Bold", fillColor=colors.HexColor("#4F46E5"), textAnchor="middle"))
+            hrx, hry = st.headroom_text_pos
+            drawing.add(String(x_pt(hrx), y_pt(hry) - 2.5, st.headroom_text, fontSize=5.5, fontName="Helvetica-Bold", fillColor=colors.HexColor("#D97706"), textAnchor="middle"))
+
+    # 5. Openings Layer (Doors & Windows)
+    for op in ir.primitives_by_layer("openings"):
+        if isinstance(op, OpeningPrimitive):
+            if op.opening_type == "door":
+                for jp1, jp2 in op.door_jambs:
+                    drawing.add(Line(x_pt(jp1[0]), y_pt(jp1[1]), x_pt(jp2[0]), y_pt(jp2[1]), strokeColor=colors.HexColor("#0284C7"), strokeWidth=1.5))
+                drawing.add(Line(x_pt(op.hinge_x), y_pt(op.hinge_y), x_pt(op.leaf_x), y_pt(op.leaf_y), strokeColor=colors.HexColor("#0284C7"), strokeWidth=1.6))
+                arc = ArcPath(strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8, strokeDashArray=[2, 2], fillColor=None)
+                arc.addArc(x_pt(op.arc_center_x), y_pt(op.arc_center_y), op.arc_radius_m * scale_pt, op.arc_start_deg, op.arc_end_deg)
+                drawing.add(arc)
+                drawing.add(Rect(x_pt(op.tag_x) - 7.5, y_pt(op.tag_y) - 5.5, 15.0, 11.0, rx=2, ry=2, fillColor=colors.HexColor("#FFFFFF"), strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8))
+                drawing.add(String(x_pt(op.tag_x), y_pt(op.tag_y) - 2.0, op.tag, textAnchor="middle", fontSize=6.0, fontName="Helvetica-Bold", fillColor=colors.HexColor("#0284C7")))
+                if op.unit_badge:
+                    ub = op.unit_badge
+                    ub_w_pt = 38.0
+                    ub_h_pt = 13.0
+                    ub_x_pt = x_pt(op.hinge_x) + 4.0
+                    ub_y_pt = y_pt(op.hinge_y) + 4.0
+                    drawing.add(Rect(ub_x_pt, ub_y_pt, ub_w_pt, ub_h_pt, rx=2, ry=2, fillColor=colors.HexColor("#FEF3C7"), strokeColor=colors.HexColor("#D97706"), strokeWidth=0.8))
+                    drawing.add(String(ub_x_pt + ub_w_pt / 2.0, ub_y_pt + 3.0, ub["tag"], textAnchor="middle", fontSize=7.0, fontName="Helvetica-Bold", fillColor=colors.HexColor("#D97706")))
+            elif op.opening_type == "window":
+                if op.outer_line and op.glass_line and op.inner_line:
+                    op1, op2 = op.outer_line
+                    gp1, gp2 = op.glass_line
+                    ip1, ip2 = op.inner_line
+                    drawing.add(Line(x_pt(op1[0]), y_pt(op1[1]), x_pt(op2[0]), y_pt(op2[1]), strokeColor=colors.HexColor("#0284C7"), strokeWidth=1.2))
+                    drawing.add(Line(x_pt(gp1[0]), y_pt(gp1[1]), x_pt(gp2[0]), y_pt(gp2[1]), strokeColor=colors.HexColor("#0F172A"), strokeWidth=0.8))
+                    drawing.add(Line(x_pt(ip1[0]), y_pt(ip1[1]), x_pt(ip2[0]), y_pt(ip2[1]), strokeColor=colors.HexColor("#0284C7"), strokeWidth=1.2))
+                    for jp1, jp2 in op.window_jambs:
+                        drawing.add(Line(x_pt(jp1[0]), y_pt(jp1[1]), x_pt(jp2[0]), y_pt(jp2[1]), strokeColor=colors.HexColor("#0F172A"), strokeWidth=0.8))
+                drawing.add(Rect(x_pt(op.tag_x) - 7.5, y_pt(op.tag_y) - 5.5, 15.0, 11.0, rx=2, ry=2, fillColor=colors.HexColor("#FFFFFF"), strokeColor=colors.HexColor("#0369A1"), strokeWidth=0.8))
+                drawing.add(String(x_pt(op.tag_x), y_pt(op.tag_y) - 2.0, op.tag, textAnchor="middle", fontSize=6.0, fontName="Helvetica-Bold", fillColor=colors.HexColor("#0369A1")))
+
+    # 6. Text & Typography Layer
+    # 6. Text & Typography Layer
+    for t in ir.primitives_by_layer("text"):
+        if isinstance(t, TextPrimitive):
+            tx = x_pt(t.x)
+            ty = y_pt(t.y)
+            if t.room_tag_circle:
+                rad_pt = t.room_tag_circle.get("radius_pt", 7.5)
+                tag_num = t.room_tag_circle.get("room_idx", 1)
+                drawing.add(Circle(tx, ty, rad_pt, fillColor=colors.HexColor("#F1F5F9"), strokeColor=colors.HexColor("#0284C7"), strokeWidth=1.0))
+                drawing.add(String(tx, ty - 2.5, str(tag_num), textAnchor="middle", fontSize=7.0, fontName="Helvetica-Bold", fillColor=colors.HexColor("#0F172A")))
+            else:
+                lines = t.lines if t.lines else [t.text]
+                fs = t.font_size_pt
+                total_h_pt = len(lines) * fs * 1.25 + (t.subtext_pt * 1.25 + 3.0 if t.subtext else 0.0)
+                top_y_pt = ty + total_h_pt / 2.0
+
+                if t.halo:
+                    hw = t.halo_w_m * scale_pt
+                    hh = t.halo_h_m * scale_pt
+                    drawing.add(Rect(tx - hw / 2.0, ty - hh / 2.0, hw, hh, rx=3, ry=3, fillColor=colors.Color(1, 1, 1, alpha=0.92), strokeColor=colors.Color(0, 0, 0, alpha=0.08), strokeWidth=0.5))
+
+                curr_y = top_y_pt - fs * 0.85
+                for line in lines:
+                    drawing.add(String(tx, curr_y, line, textAnchor="middle", fontSize=fs, fontName="Helvetica-Bold", fillColor=colors.HexColor(t.color)))
+                    curr_y -= fs * 1.25
+                if t.subtext:
+                    curr_y -= 2.0
+                    drawing.add(String(tx, curr_y, t.subtext, textAnchor="middle", fontSize=t.subtext_pt, fontName="Helvetica", fillColor=colors.HexColor(t.subtext_color)))
+
+    # 7. Dimension Chains Layer
+    def draw_slash_tick_rl(tx: float, ty: float):
+        drawing.add(Line(tx - 3.0, ty - 3.0, tx + 3.0, ty + 3.0, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.4))
+
+    for dc in ir.primitives_by_layer("dims"):
+        if isinstance(dc, DimensionChainPrimitive):
+            p1, p2 = dc.main_line
+            drawing.add(Line(x_pt(p1[0]), y_pt(p1[1]), x_pt(p2[0]), y_pt(p2[1]), strokeColor=colors.HexColor("#334155"), strokeWidth=0.9))
+            for tk in dc.ticks:
+                draw_slash_tick_rl(x_pt(tk[0]), y_pt(tk[1]))
+            for wp1, wp2 in dc.witness_lines:
+                drawing.add(Line(x_pt(wp1[0]), y_pt(wp1[1]), x_pt(wp2[0]), y_pt(wp2[1]), strokeColor=colors.HexColor("#94A3B8"), strokeWidth=0.5, strokeDashArray=[2, 2]))
+            for seg in dc.segments:
+                lbl_x = x_pt(seg["center_x"])
+                lbl_y = y_pt(seg["center_y"])
+                lbl_txt = seg["label"]
+                fs = seg.get("font_size_pt", 7.0)
+                drawing.add(String(lbl_x, lbl_y, lbl_txt, textAnchor="middle", fontSize=fs, fontName="Helvetica-Bold", fillColor=colors.HexColor("#0F172A")))
+
+    # 8. Annotations Layer
+    for annot in ir.primitives_by_layer("annotations"):
+        if isinstance(annot, AnnotationPrimitive):
+            compass_x = width - 36.0
+            compass_y = height - 36.0
+            drawing.add(Circle(compass_x, compass_y, 14, fillColor=colors.HexColor("#F8FAFC"), strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.0))
+            drawing.add(Polygon([compass_x, compass_y + 11, compass_x + 4, compass_y, compass_x, compass_y + 2, compass_x - 4, compass_y], fillColor=colors.HexColor("#0F172A"), strokeColor=None))
+            drawing.add(Polygon([compass_x, compass_y - 11, compass_x + 4, compass_y, compass_x, compass_y - 2, compass_x - 4, compass_y], fillColor=colors.HexColor("#94A3B8"), strokeColor=None))
+            drawing.add(String(compass_x, compass_y + 14, "N", fontName="Helvetica-Bold", fontSize=8.0, textAnchor="middle", fillColor=colors.HexColor("#0F172A")))
+
+            sb_x = 36.0
+            sb_y = 16.0
+            drawing.add(String(sb_x, sb_y + 10, "GRAPHIC SCALE (METRIC)", fontName="Helvetica-Bold", fontSize=6.5, fillColor=colors.HexColor("#64748B")))
+            meter_w_pt = 1.0 * scale_pt
+            for i in range(4):
+                bx = sb_x + (i * meter_w_pt)
+                bcol = colors.HexColor("#0F172A") if i % 2 == 0 else colors.HexColor("#E2E8F0")
+                drawing.add(Rect(bx, sb_y, meter_w_pt, 4, fillColor=bcol, strokeColor=colors.HexColor("#0F172A"), strokeWidth=0.5))
+                drawing.add(String(bx, sb_y - 7, f"{i}m" if i > 0 else "0", fontName="Helvetica", fontSize=6.0, textAnchor="middle", fillColor=colors.HexColor("#64748B")))
+            drawing.add(String(sb_x + 4 * meter_w_pt, sb_y - 7, "4m", fontName="Helvetica", fontSize=6.0, textAnchor="middle", fillColor=colors.HexColor("#64748B")))
+
+            for stag in annot.structural_tags:
+                if "tag" in stag:
+                    drawing.add(String(x_pt(stag["x"]), y_pt(stag["y"]), stag["tag"], fontName="Helvetica-Bold", fontSize=6.5, fillColor=colors.HexColor("#0284C7")))
+                elif "bubble" in stag:
+                    bx, by = x_pt(stag["x"]), y_pt(stag["y"])
+                    drawing.add(Circle(bx, by, 6.5, fillColor=colors.white, strokeColor=colors.HexColor("#0284C7"), strokeWidth=1.0))
+                    drawing.add(String(bx, by - 2.5, stag["bubble"], fontName="Helvetica-Bold", fontSize=6.5, textAnchor="middle", fillColor=colors.HexColor("#0F172A")))
+
+            # Title Block Banner & Freshness Verification Token
+            badge_w = 260.0
+            badge_h = 32.0
+            badge_x = width - badge_w - 12.0
+            badge_y = 12.0
+            drawing.add(Rect(badge_x, badge_y, badge_w, badge_h, rx=4, ry=4, fillColor=colors.Color(1, 1, 1, alpha=0.95), strokeColor=colors.HexColor("#CBD5E1"), strokeWidth=0.75))
+            drawing.add(String(badge_x + 8.0, badge_y + 19.0, f"{ir.header.floor_name.upper()} (+{ir.header.elevation_m:.2f}m LVL)", fontName="Helvetica-Bold", fontSize=8.0, fillColor=colors.HexColor("#0F172A")))
+            drawing.add(String(badge_x + 8.0, badge_y + 8.0, ir.header.freshness_token, fontName="Helvetica", fontSize=5.5, fillColor=colors.HexColor("#0284C7")))
+
+            # Drawing Header Top Freshness Verification Line
+            drawing.add(String(origin_x + 4.0, height - 12.0, ir.header.freshness_token, fontName="Helvetica-Bold", fontSize=6.5, fillColor=colors.HexColor("#475569")))
+
+            # Wall Type Specification Legend
+            leg_w = 200.0
+            leg_h = 32.0
+            leg_x = 14.0
+            leg_y = height - leg_h - 14.0
+            drawing.add(Rect(leg_x, leg_y, leg_w, leg_h, rx=3, ry=3, fillColor=colors.Color(1, 1, 1, alpha=0.92), strokeColor=colors.HexColor("#E2E8F0"), strokeWidth=0.5))
+            drawing.add(String(leg_x + 6.0, leg_y + 22.0, "WALL TYPES (NBC 2016 COMPLIANT):", fontName="Helvetica-Bold", fontSize=5.5, fillColor=colors.HexColor("#334155")))
+            drawing.add(Line(leg_x + 6.0, leg_y + 14.0, leg_x + 22.0, leg_y + 14.0, strokeColor=colors.HexColor("#0F172A"), strokeWidth=2.4))
+            drawing.add(String(leg_x + 26.0, leg_y + 12.5, "W1: 230mm Exterior Masonry", fontName="Helvetica", fontSize=5.0, fillColor=colors.HexColor("#475569")))
+            drawing.add(Line(leg_x + 6.0, leg_y + 6.0, leg_x + 22.0, leg_y + 6.0, strokeColor=colors.HexColor("#475569"), strokeWidth=1.4))
+            drawing.add(String(leg_x + 26.0, leg_y + 4.5, "W2: 115mm Partition / W3: 75mm", fontName="Helvetica", fontSize=5.0, fillColor=colors.HexColor("#475569")))
+
+    return drawing

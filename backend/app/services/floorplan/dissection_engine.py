@@ -1142,20 +1142,22 @@ class DissectionEngine:
 
     def solve(self, force_template: bool = False) -> Tuple[Optional[RectanglesModel], str, List[str]]:
         """
-        Executes envelope-first rectangular dissection with QA gate verification.
-        Attempts reference typology template first -> falls back to guillotine slicing -> falls back to template.
-        Guarantees topological invariants: leaf rule, peripheral service, and catalog bounds.
+        Executes layout synthesis via the sole ontology-driven geometry engine.
+        Templates A/B/C are permanently retired.
         """
-        self.start_time = time.perf_counter()
-        self.iterations = 0
-        self.timed_out = False
-        warnings: List[str] = []
+        from app.schemas.floorplan import FloorPlanRequest
+        from app.services.floorplan.engine import SoleGeometryEngine
 
-        # 0. Primary Attempt: Reference Typology Templates (Blueprint Spatial Logic v12)
-        if force_template or len(self.required_rooms) <= 9:
-            template_model = self._solve_typology_templates(self.vastu_strictness, force_template=force_template)
-            if template_model is not None and all(r.width >= 0.85 and r.height >= 0.85 and r.area_sqm >= 0.85 for r in template_model.rooms):
-                return template_model, "optimal", warnings
+        req = FloorPlanRequest(
+            plot_width_m=self.plot_w,
+            plot_depth_m=self.plot_d,
+            required_rooms=self.required_rooms,
+            vastu_strictness=self.vastu_strictness,
+        )
+        engine = SoleGeometryEngine(req)
+        resp = engine.solve_floorplan_response()
+        return resp.rectangles, resp.status, resp.warnings
+
 
         # 1. Recursive guillotine slicing attempt
         strictness = self.vastu_strictness
