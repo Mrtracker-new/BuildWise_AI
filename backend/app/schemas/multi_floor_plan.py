@@ -167,6 +167,14 @@ class MultiStoreyBuildingModel(BaseModel):
         default=None,
         description="Consolidated mathematical validity certificate for building"
     )
+    plot_polygon: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Canonical site polygon model dictionary"
+    )
+    site_plan: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Canonical site plan model dictionary"
+    )
 
 
 # ---------------------------------------------------------------------------

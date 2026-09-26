@@ -527,6 +527,87 @@ export interface MathematicalValidityCertificate {
   details?: Record<string, any>;
 }
 
+// ----------------------------------------------------
+// Canonical Site Layer & Irregular Plot Polygon Models
+// ----------------------------------------------------
+
+export interface PlotVertex {
+  id: string;
+  x_m: number;
+  y_m: number;
+}
+
+export interface PlotPolygon {
+  vertices: [number, number][]; // ordered (x_m, y_m) in local tangent plane (+X East, +Y North)
+  origin_lat?: number | null;
+  origin_lon?: number | null;
+  projection_note?: string;
+  shape_type?: 'rectangle' | 'trapezoid' | 'l_shape' | 'pentagon' | 'polygon';
+  area_sqm?: number;
+  perimeter_m?: number;
+  bounding_box?: [number, number, number, number];
+  is_regular_rectangle?: boolean;
+}
+
+export interface SurveyEdge {
+  edge_id: string;
+  start_vertex: string;
+  end_vertex: string;
+  length_m: number;
+  bearing_deg: number;
+  bearing_str: string;
+}
+
+export interface OutdoorFragment {
+  id: string;
+  label: string;
+  area_sqm: number;
+  centroid_x: number;
+  centroid_y: number;
+  polygon_coords: [number, number][];
+}
+
+export interface InscribedFootprint {
+  x: number;
+  y: number;
+  width_m: number;
+  depth_m: number;
+  area_sqm: number;
+  rotation_angle_deg: number;
+  center_x: number;
+  center_y: number;
+  corner_vertices: [number, number][];
+}
+
+export interface SiteCertificate {
+  footprint_contained_in_buildable: boolean;
+  setback_distance_satisfied: boolean;
+  min_setback_achieved_m: number;
+  required_setback_m: number;
+  ground_coverage_actual_pct: number;
+  ground_coverage_limit_pct: number;
+  far_actual: number;
+  far_limit: number;
+  is_valid: boolean;
+  diagnostics: string[];
+}
+
+export interface SitePlanModel {
+  plot_polygon: PlotPolygon;
+  buildable_polygon_coords: [number, number][];
+  buildable_area_sqm: number;
+  nominal_setback_m: number;
+  reduced_setback_applied: boolean;
+  footprint: InscribedFootprint;
+  outdoor_zones: OutdoorFragment[];
+  setback_band_area_sqm: number;
+  edges: SurveyEdge[];
+  vertex_table: PlotVertex[];
+  site_vastu_zones?: Record<string, [number, number, number, number]>;
+  certificate: SiteCertificate;
+  svg_site_plan?: string;
+}
+
 export interface MultiStoreyBuildingModel {
   building_typology: 'T1_SINGLE_FAMILY' | 'T2_FAMILY_APARTMENT' | 'T3_LARGE_COMPLEX' | 'T4_WAREHOUSE' | string;
   total_storeys: number;
@@ -545,6 +626,8 @@ export interface MultiStoreyBuildingModel {
   seed: number;
   solver_timing_ms: number;
   mathematical_certificate?: MathematicalValidityCertificate;
+  plot_polygon?: PlotPolygon;
+  site_plan?: SitePlanModel;
 }
 
 export interface SpatialAdjacencyConstraint {
@@ -588,6 +671,7 @@ export interface FloorPlanRequest {
   program_source?: string;
   bypass_cache?: boolean;
   extracted_constraints?: ExtractedClientConstraints;
+  plot_polygon?: PlotPolygon;
 }
 
 export interface RoomPlacement {
@@ -627,6 +711,8 @@ export interface FloorPlanParamsSnapshot {
   built_up_area_sqft?: number;
   client_notes?: string;
   ai_provider?: string;
+  shape_type?: string;
+  plot_polygon?: PlotPolygon;
 }
 
 export interface FloorPlanResponse {
@@ -653,6 +739,8 @@ export interface FloorPlanResponse {
   generation_id?: string;
   params_snapshot?: FloorPlanParamsSnapshot;
   mathematical_certificate?: MathematicalValidityCertificate;
+  plot_polygon?: PlotPolygon;
+  site_plan?: SitePlanModel;
 }
 
 export interface ReportRequestPayload {

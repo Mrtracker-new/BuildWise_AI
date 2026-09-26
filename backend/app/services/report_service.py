@@ -674,6 +674,157 @@ def make_construction_schedules_table(
     return flowables
 
 
+def make_site_plan_sheet_flowables(
+    site_plan_data: Any,
+    width: float = CONTENT_WIDTH_PT,
+    gen_id: str = "GEN-SITE-01",
+    typology: str = "residential_single"
+) -> List[Any]:
+    """
+    Renders dedicated A4 Sheet 10.SP (Site Plan & Cadastral Survey) for irregular plots:
+    - Cadastral brief callout with local tangent plane projection details
+    - 4-tile statutory site stat strip (Plot Area, Buildable, Footprint, Coverage)
+    - Full-width vector Drawing IR rendering (boundary, setback, hatched band, outdoor zones, rotated footprint)
+    - Boundary Survey & Setting-Out Table (P1..Pn, Easting/Northing, Edge Lengths, Bearings)
+    - Outdoor Difference Fragments Breakdown Table
+    """
+    flowables: List[Any] = []
+    from app.schemas.site_plan import SitePlanModel
+    if isinstance(site_plan_data, SitePlanModel):
+        sp_model = site_plan_data
+    elif isinstance(site_plan_data, dict):
+        sp_model = SitePlanModel.model_validate(site_plan_data)
+    else:
+        return flowables
+
+    flowables.append(PageBreak())
+    flowables.append(create_section_header("10.SP", "SITE PLAN & CADASTRAL SURVEY (Datum +0.00m)"))
+
+    p_th = ParagraphStyle('SiteTH', fontName=FONT_SEMIBOLD, fontSize=8.0, leading=10.0, textColor=COLOR_TEXT_SECONDARY)
+    p_td = ParagraphStyle('SiteTD', fontName=FONT_REGULAR, fontSize=7.5, leading=9.5, textColor=COLOR_TEXT_PRIMARY)
+    p_td_num = ParagraphStyle('SiteTDNum', fontName=FONT_REGULAR, fontSize=7.5, leading=9.5, textColor=COLOR_TEXT_PRIMARY, alignment=2)
+    p_title = ParagraphStyle('SiteH3', fontName=FONT_SEMIBOLD, fontSize=9.0, leading=12.0, textColor=COLOR_ACCENT)
+
+    # 1. Brief Callout
+    poly = sp_model.plot_polygon
+    shape_type_display = poly.shape_type.replace('_', '-').title()
+    rot_str = f", rotation {sp_model.footprint.rotation_angle_deg:.1f}°" if abs(sp_model.footprint.rotation_angle_deg) > 0.05 else ""
+    brief_text = (
+        f"<b>Cadastral Setting-Out &amp; Statutory Zoning:</b> Local metric tangent plane (+X East, +Y North). "
+        f"Evaluated as a <b>{shape_type_display}</b> boundary ({len(poly.vertices)} vertices, {poly.area_sqm:.1f} m²) with verified counter-clockwise "
+        f"winding, statutory NBC inward setback buffer ({sp_model.nominal_setback_m:.2f}m), "
+        f"and an inscribed constructible footprint of {sp_model.footprint.width_m:.2f}m × {sp_model.footprint.depth_m:.2f}m "
+        f"({sp_model.footprint.area_sqm:.1f} m²{rot_str}). All subsequent upper storeys derive their spatial anchoring strictly from this rectangular footprint."
+    )
+    flowables.append(make_callout(brief_text, width=width))
+    flowables.append(Spacer(1, 5))
+
+    # 2. 4-Tile Stat Strip
+    tile_w = width / 4.0
+    st1 = make_stat_tile("Plot Area", f"{poly.area_sqm:.1f} m²", width=tile_w - 6.0)
+    st2 = make_stat_tile("Buildable Envelope", f"{sp_model.buildable_area_sqm:.1f} m²", width=tile_w - 6.0)
+    st3 = make_stat_tile("Inscribed Footprint", f"{sp_model.footprint.area_sqm:.1f} m²", width=tile_w - 6.0)
+    st4 = make_stat_tile("Ground Coverage", f"{sp_model.certificate.ground_coverage_actual_pct:.1f}%", width=tile_w - 6.0)
+
+    stat_table = Table([[st1, st2, st3, st4]], colWidths=[tile_w, tile_w, tile_w, tile_w])
+    stat_table.setStyle(TableStyle([
+        ('LEFTPADDING', (0, 0), (-1, -1), 2.0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 2.0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    flowables.append(stat_table)
+    flowables.append(Spacer(1, 5))
+
+    # 3. Vector Drawing via Drawing IR
+    from app.services.floorplan.drawing_ir import build_site_drawing_ir, render_reportlab_from_ir
+    site_ir = build_site_drawing_ir(sp_model, gen_id=gen_id, typology=typology)
+    drawing = render_reportlab_from_ir(site_ir, width=width, height=360.0)
+    flowables.append(drawing)
+    flowables.append(Spacer(1, 6))
+
+    # 4. Cadastral Survey Schedule Table
+    flowables.append(Paragraph("<b>Boundary Survey Table &amp; Setting-Out Bearings</b>", p_title))
+    flowables.append(Spacer(1, 3))
+
+    table_data: List[List[Any]] = [[
+        Paragraph("<b>Vertex</b>", p_th),
+        Paragraph("<b>Local Easting (X)</b>", p_th),
+        Paragraph("<b>Local Northing (Y)</b>", p_th),
+        Paragraph("<b>Boundary Edge</b>", p_th),
+        Paragraph("<b>Edge Length</b>", p_th),
+        Paragraph("<b>Quadrant Bearing</b>", p_th),
+    ]]
+
+    for i, v in enumerate(sp_model.vertex_table):
+        edge = sp_model.edges[i] if i < len(sp_model.edges) else None
+        e_label = f"{edge.from_vertex} → {edge.to_vertex}" if edge else "—"
+        e_len = f"{edge.length_m:.2f} m" if edge else "—"
+        e_brg = edge.bearing_dms if edge else "—"
+
+        table_data.append([
+            Paragraph(f"<b>{v.id}</b>", p_td),
+            Paragraph(f"{v.x_m:.2f} m", p_td_num),
+            Paragraph(f"{v.y_m:.2f} m", p_td_num),
+            Paragraph(e_label, p_td),
+            Paragraph(e_len, p_td_num),
+            Paragraph(e_brg, p_td),
+        ])
+
+    c_w = [45.0, 75.0, 75.0, 80.0, 75.0, width - 350.0]
+    t_survey = Table(table_data, colWidths=c_w)
+    t_survey.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
+        ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+        ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.0),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    flowables.append(t_survey)
+
+    # 5. Outdoor Zone Breakdown (if fragments exist)
+    if sp_model.outdoor_zones:
+        flowables.append(Spacer(1, 5))
+        flowables.append(Paragraph("<b>Designated Outdoor Zones (Buildable Polygon \\ Footprint Difference)</b>", p_title))
+        flowables.append(Spacer(1, 2))
+        oz_data: List[List[Any]] = [[
+            Paragraph("<b>Zone ID</b>", p_th),
+            Paragraph("<b>Designation</b>", p_th),
+            Paragraph("<b>Fragment Area</b>", p_th),
+            Paragraph("<b>Centroid (X, Y)</b>", p_th),
+        ]]
+        for oz in sp_model.outdoor_zones:
+            fid = getattr(oz, "fragment_id", getattr(oz, "id", "OUT"))
+            fname = getattr(oz, "name", getattr(oz, "label", "Outdoor Zone"))
+            cent = getattr(oz, "centroid", (0.0, 0.0))
+            cx = cent[0] if isinstance(cent, (list, tuple)) and len(cent) >= 2 else getattr(oz, "centroid_x", 0.0)
+            cy = cent[1] if isinstance(cent, (list, tuple)) and len(cent) >= 2 else getattr(oz, "centroid_y", 0.0)
+            oz_data.append([
+                Paragraph(f"<b>{fid}</b>", p_td),
+                Paragraph(fname, p_td),
+                Paragraph(f"{oz.area_sqm:.2f} m²", p_td_num),
+                Paragraph(f"({cx:.2f}m, {cy:.2f}m)", p_td),
+            ])
+        oz_cols = [60.0, 160.0, 85.0, width - 305.0]
+        t_oz = Table(oz_data, colWidths=oz_cols)
+        t_oz.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
+            ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+            ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+            ('TOPPADDING', (0, 0), (-1, -1), 2.5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        flowables.append(t_oz)
+
+    return flowables
+
+
 # =============================================================================
 # 6. MAIN PDF REPORT GENERATOR (REDESIGNED v9)
 # =============================================================================
@@ -1667,6 +1818,22 @@ def generate_pdf_report(
         story.append(make_callout(compact_disclaimer, width=CONTENT_WIDTH_PT))
 
         # =========================================================================
+        # SHEET 10.SP: SITE PLAN & CADASTRAL SURVEY (When site is non-rectangular)
+        # =========================================================================
+        sp_candidate = _get(multi_storey, "site_plan") or _get(floorplan, "site_plan") or data.get("site_plan")
+        if sp_candidate:
+            poly_data = _get(sp_candidate, "plot_polygon", {})
+            st = str(_get(poly_data, "shape_type", "rectangle"))
+            if st != "rectangle":
+                site_sheet_flowables = make_site_plan_sheet_flowables(
+                    sp_candidate,
+                    width=CONTENT_WIDTH_PT,
+                    gen_id=str(_get(multi_storey, "seed") or req_id),
+                    typology=typology_raw
+                )
+                story.extend(site_sheet_flowables)
+
+        # =========================================================================
         # SHEETS 10.1, 10.2, ...: DEDICATED A4 PAGE PER STOREY LEVEL
         # =========================================================================
         render_ms_schedules = include_construction_schedules
@@ -1956,6 +2123,20 @@ def generate_pdf_report(
             story.append(Spacer(1, 4))
             sched_flowables = make_construction_schedules_table(floorplan, width=CONTENT_WIDTH_PT, floor_index=0)
             story.extend(sched_flowables)
+
+        # Dedicated Site Survey Sheet for irregular plots in single-floor mode
+        sp_single = _get(floorplan, "site_plan") or data.get("site_plan")
+        if sp_single:
+            poly_data = _get(sp_single, "plot_polygon", {})
+            st = str(_get(poly_data, "shape_type", "rectangle"))
+            if st != "rectangle":
+                site_sheet_flowables = make_site_plan_sheet_flowables(
+                    sp_single,
+                    width=CONTENT_WIDTH_PT,
+                    gen_id=str(_get(floorplan, "seed") or req_id),
+                    typology=typology_raw
+                )
+                story.extend(site_sheet_flowables)
 
         # Disclaimer after single floorplan
         story.append(Spacer(1, 12))

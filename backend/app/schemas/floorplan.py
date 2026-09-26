@@ -2,10 +2,15 @@ from typing import List, Dict, Optional, Literal, Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 from app.schemas.room_program import RoomProgram
 from app.schemas.multi_floor_plan import MultiStoreyBuildingModel, ExtractedClientConstraints
+from app.schemas.site_plan import PlotPolygonModel, SitePlanModel
 
 class FloorPlanRequest(BaseModel):
-    plot_width_m: float = Field(..., ge=6.0, le=60.0, description="Plot frontage width in meters")
-    plot_depth_m: float = Field(..., ge=6.0, le=60.0, description="Plot depth in meters")
+    plot_width_m: Optional[float] = Field(default=None, ge=6.0, le=60.0, description="Plot frontage width in meters")
+    plot_depth_m: Optional[float] = Field(default=None, ge=6.0, le=60.0, description="Plot depth in meters")
+    plot_polygon: Optional[PlotPolygonModel] = Field(
+        default=None,
+        description="Optional canonical plot polygon [(x_m, y_m)] in local tangent plane"
+    )
     required_rooms: Optional[List[str]] = Field(
         default=None,
         description="Optional list of required room IDs to be placed"
@@ -52,8 +57,23 @@ class FloorPlanRequest(BaseModel):
                 data["plot_width_m"] = data["plotWidthM"]
             if "plotDepthM" in data and "plot_depth_m" not in data:
                 data["plot_depth_m"] = data["plotDepthM"]
+            if "plotPolygon" in data and "plot_polygon" not in data:
+                data["plot_polygon"] = data["plotPolygon"]
             if "bypassCache" in data and "bypass_cache" not in data:
                 data["bypass_cache"] = data["bypassCache"]
+            # If plot_polygon is provided without plot dimensions, derive bounding box dimensions
+            poly_data = data.get("plot_polygon")
+            if poly_data:
+                verts = poly_data.get("vertices") if isinstance(poly_data, dict) else getattr(poly_data, "vertices", None)
+                if verts and len(verts) >= 3:
+                    xs = [pt[0] for pt in verts]
+                    ys = [pt[1] for pt in verts]
+                    bbox_w = round(max(xs) - min(xs), 2)
+                    bbox_d = round(max(ys) - min(ys), 2)
+                    if data.get("plot_width_m") is None:
+                        data["plot_width_m"] = bbox_w
+                    if data.get("plot_depth_m") is None:
+                        data["plot_depth_m"] = bbox_d
             # Extract plot dimensions from multi_storey if not explicitly at top level
             if data.get("multi_storey") and isinstance(data["multi_storey"], dict):
                 ms = data["multi_storey"]
@@ -61,10 +81,17 @@ class FloorPlanRequest(BaseModel):
                     data["plot_width_m"] = ms["plot_width_m"]
                 if "plot_depth_m" not in data and "plot_depth_m" in ms:
                     data["plot_depth_m"] = ms["plot_depth_m"]
+                if "plot_polygon" not in data and "plot_polygon" in ms:
+                    data["plot_polygon"] = ms["plot_polygon"]
                 if "floors" not in data and "total_storeys" in ms:
                     data["floors"] = ms["total_storeys"]
                 if "building_typology" not in data and "building_typology" in ms:
                     data["building_typology"] = ms["building_typology"]
+            # Fallback default if neither polygon nor dimensions given
+            if data.get("plot_width_m") is None:
+                data["plot_width_m"] = 12.0
+            if data.get("plot_depth_m") is None:
+                data["plot_depth_m"] = 14.0
         return data
 
     @field_validator("required_rooms")
@@ -216,6 +243,10 @@ class FloorPlanResponse(BaseModel):
         default=None,
         description="Timestamp of generation in epoch milliseconds"
     )
+    site_plan: Optional[SitePlanModel] = Field(
+        default=None,
+        description="Canonical site plan with buildable polygon, setbacks, and outdoor fragments"
+    )
 
 
 class FloorPlanParamsSnapshot(BaseModel):
@@ -229,4 +260,6 @@ class FloorPlanParamsSnapshot(BaseModel):
     built_up_area_sqft: Optional[float] = None
     client_notes: Optional[str] = None
     ai_provider: Optional[str] = None
+    shape_type: Optional[str] = "rectangle"
+    plot_polygon: Optional[PlotPolygonModel] = None
 

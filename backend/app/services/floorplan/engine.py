@@ -43,6 +43,8 @@ from app.schemas.multi_floor_plan import (
     StructuralGridSpec,
     ExtractedClientConstraints,
 )
+from app.schemas.site_plan import SitePlanModel, PlotPolygonModel
+from app.services.floorplan.site_geometry import compute_canonical_site_plan
 from app.services.floorplan.ontology import (
     ONTOLOGY,
     MathematicalValidityCertificate,
@@ -97,6 +99,7 @@ class SoleGeometryEngine:
         self.client_constraints = self.req.extracted_constraints
         self.ai_provider = ai_provider
         self.seed = 42
+        self.site_plan: Optional[SitePlanModel] = None
 
         # Typology Normalization
         self.raw_typology = self.req.building_typology or "residential_single"
@@ -129,75 +132,112 @@ class SoleGeometryEngine:
         warnings: List[str] = []
         deg_level = 0
 
-        # NBC 2016 Part 3 Setbacks
-        front_setback = max(1.8, min(3.5, self.plot_d * 0.15))
-        rear_setback = max(1.2, min(2.5, self.plot_d * 0.10))
-        side_setback = max(1.0, min(2.0, self.plot_w * 0.10))
+        if self.req.plot_polygon is not None and not self.req.plot_polygon.is_regular_rectangle:
+            is_ok, site_plan, site_warns = compute_canonical_site_plan(
+                plot_width_m=self.plot_w,
+                plot_depth_m=self.plot_d,
+                coverage=self.coverage,
+                plot_polygon=self.req.plot_polygon,
+            )
+            warnings.extend(site_warns)
+            if not is_ok or site_plan is None:
+                shortfall_msg = site_warns[0] if site_warns else "Irregular plot polygon validation or buildable offset failed."
+                warnings.append(f"EC-03: Insufficient buildable area on irregular plot: {shortfall_msg}")
+                dummy_env = {"x": 0.0, "y": 0.0, "width": 0.0, "depth": 0.0, "area_sqm": 0.0}
+                return False, 5, dummy_env, warnings
 
-        avail_w = max(4.0, self.plot_w - 2 * side_setback)
-        avail_d = max(4.0, self.plot_d - front_setback - rear_setback)
-        avail_area = avail_w * avail_d
-
-        target_footprint = self.plot_w * self.plot_d * self.coverage
-        footprint_area = min(avail_area, target_footprint)
-
-        aspect = avail_w / avail_d if avail_d > 0 else 1.0
-        aspect = max(0.5, min(2.0, aspect))
-
-        env_d = math.sqrt(footprint_area / aspect)
-        env_w = footprint_area / env_d if env_d > 0 else avail_w
-
-        env_w = min(avail_w, env_w)
-        env_d = min(avail_d, env_d)
-        env_w = round(max(4.0, env_w), 2)
-        env_d = round(max(4.0, env_d), 2)
-        env_area = round(env_w * env_d, 2)
-
-        envelope = {
-            "x": round(side_setback, 2),
-            "y": round(front_setback, 2),
-            "width": env_w,
-            "depth": env_d,
-            "area_sqm": env_area,
-        }
-
-        # Program-specific envelope calibration for single-storey T1 residences
-        if self.typology == "T1_SINGLE_FAMILY" and self.total_storeys == 1 and self.req.required_rooms and len(self.req.required_rooms) >= 3:
-            n_rooms = len(self.req.required_rooms)
-            has_two_baths = sum(1 for r in self.req.required_rooms if any(k in r for k in ("bath", "toilet", "wc"))) >= 2
-            has_bed2 = sum(1 for r in self.req.required_rooms if "bed" in r and "master" not in r) >= 1
-
-            if n_rooms <= 5 and not has_bed2 and not has_two_baths:
-                env_w = min(round(self.plot_w - 0.80, 2), 9.60) if self.plot_w >= 10.4 else round(self.plot_w - 1.20, 2)
-                env_d = min(round(self.plot_d - 1.50, 2), 8.15)
-            elif not has_two_baths and (has_bed2 or n_rooms == 6):
-                if self.plot_w < 10.8:
-                    env_w = round(self.plot_w - 0.80, 2)
-                    env_d = min(round(self.plot_d - 2.50, 2), 10.20)
-                else:
-                    env_w = min(11.80, max(10.50, round(self.plot_w - 0.40, 2)))
-                    env_d = min(round(self.plot_d - 1.50, 2), 8.35)
-            elif has_two_baths or n_rooms >= 7:
-                if self.plot_w < 10.8:
-                    env_w = round(self.plot_w - 0.40, 2)
-                    env_d = min(round(self.plot_d - 2.00, 2), 10.35)
-                else:
-                    env_w = min(11.80, max(10.70, round(self.plot_w - 0.20, 2)))
-                    env_d = min(round(self.plot_d - 0.40, 2), 10.10)
-            else:
-                env_w = min(round(self.plot_w - 1.0, 2), 12.0)
-                env_d = min(round(self.plot_d - 1.5, 2), 9.5)
-
-            env_x = max(0.20, round((self.plot_w - env_w) / 2.0, 2))
-            env_y = max(0.20, min(2.5, round((self.plot_d - env_d) / 3.0, 2)))
-            env_area = round(env_w * env_d, 2)
+            self.site_plan = site_plan
+            env_w = site_plan.footprint.width_m
+            env_d = site_plan.footprint.depth_m
+            env_area = site_plan.footprint.area_sqm
             envelope = {
-                "x": env_x,
-                "y": env_y,
+                "x": site_plan.footprint.x,
+                "y": site_plan.footprint.y,
                 "width": env_w,
                 "depth": env_d,
                 "area_sqm": env_area,
             }
+        else:
+            # NBC 2016 Part 3 Setbacks
+            front_setback = max(1.8, min(3.5, self.plot_d * 0.15))
+            rear_setback = max(1.2, min(2.5, self.plot_d * 0.10))
+            side_setback = max(1.0, min(2.0, self.plot_w * 0.10))
+
+            avail_w = max(4.0, self.plot_w - 2 * side_setback)
+            avail_d = max(4.0, self.plot_d - front_setback - rear_setback)
+            avail_area = avail_w * avail_d
+
+            target_footprint = self.plot_w * self.plot_d * self.coverage
+            footprint_area = min(avail_area, target_footprint)
+
+            aspect = avail_w / avail_d if avail_d > 0 else 1.0
+            aspect = max(0.5, min(2.0, aspect))
+
+            env_d = math.sqrt(footprint_area / aspect)
+            env_w = footprint_area / env_d if env_d > 0 else avail_w
+
+            env_w = min(avail_w, env_w)
+            env_d = min(avail_d, env_d)
+            env_w = round(max(4.0, env_w), 2)
+            env_d = round(max(4.0, env_d), 2)
+            env_area = round(env_w * env_d, 2)
+
+            envelope = {
+                "x": round(side_setback, 2),
+                "y": round(front_setback, 2),
+                "width": env_w,
+                "depth": env_d,
+                "area_sqm": env_area,
+            }
+
+            # Program-specific envelope calibration for single-storey T1 residences
+            if self.typology == "T1_SINGLE_FAMILY" and self.total_storeys == 1 and self.req.required_rooms and len(self.req.required_rooms) >= 3:
+                n_rooms = len(self.req.required_rooms)
+                has_two_baths = sum(1 for r in self.req.required_rooms if any(k in r for k in ("bath", "toilet", "wc"))) >= 2
+                has_bed2 = sum(1 for r in self.req.required_rooms if "bed" in r and "master" not in r) >= 1
+
+                if n_rooms <= 5 and not has_bed2 and not has_two_baths:
+                    env_w = min(round(self.plot_w - 0.80, 2), 9.60) if self.plot_w >= 10.4 else round(self.plot_w - 1.20, 2)
+                    env_d = min(round(self.plot_d - 1.50, 2), 8.15)
+                elif not has_two_baths and (has_bed2 or n_rooms == 6):
+                    if self.plot_w < 10.8:
+                        env_w = round(self.plot_w - 0.80, 2)
+                        env_d = min(round(self.plot_d - 2.50, 2), 10.20)
+                    else:
+                        env_w = min(11.80, max(10.50, round(self.plot_w - 0.40, 2)))
+                        env_d = min(round(self.plot_d - 1.50, 2), 8.35)
+                elif has_two_baths or n_rooms >= 7:
+                    if self.plot_w < 10.8:
+                        env_w = round(self.plot_w - 0.40, 2)
+                        env_d = min(round(self.plot_d - 2.00, 2), 10.35)
+                    else:
+                        env_w = min(11.80, max(10.70, round(self.plot_w - 0.20, 2)))
+                        env_d = min(round(self.plot_d - 0.40, 2), 10.10)
+                else:
+                    env_w = min(round(self.plot_w - 1.0, 2), 12.0)
+                    env_d = min(round(self.plot_d - 1.5, 2), 9.5)
+
+                env_x = max(0.20, round((self.plot_w - env_w) / 2.0, 2))
+                env_y = max(0.20, min(2.5, round((self.plot_d - env_d) / 3.0, 2)))
+                env_area = round(env_w * env_d, 2)
+                envelope = {
+                    "x": env_x,
+                    "y": env_y,
+                    "width": env_w,
+                    "depth": env_d,
+                    "area_sqm": env_area,
+                }
+
+            # Canonical site plan synthesis with exact legacy envelope preservation
+            is_ok, site_plan, site_warns = compute_canonical_site_plan(
+                plot_width_m=self.plot_w,
+                plot_depth_m=self.plot_d,
+                coverage=self.coverage,
+                plot_polygon=self.req.plot_polygon,
+                inscribed_override=envelope,
+            )
+            if is_ok and site_plan:
+                self.site_plan = site_plan
 
         min_habitable_m2 = 28.0
         if env_area < min_habitable_m2 and self.plot_w * self.plot_d < 45.0:
@@ -3547,6 +3587,25 @@ class SoleGeometryEngine:
         # Step 5: Emits Mathematical Validity Certificate
         cert = self._generate_mathematical_certificate(floors, vertical_cores, envelope, statutory_audit, deg_level)
 
+        # Statutory FAR check vs canonical plot polygon area
+        plot_area = self.site_plan.plot_polygon.area_sqm if self.site_plan else (self.plot_w * self.plot_d)
+        far_actual = round(total_built_up / max(plot_area, 0.1), 2)
+        far_limit = 2.5
+        if far_actual > far_limit:
+            self.warnings.append(
+                f"Statutory FAR Advisory: Achieved FAR ({far_actual}) exceeds nominal code limit ({far_limit})."
+            )
+        if self.site_plan:
+            self.site_plan.certificate.far_actual = far_actual
+            self.site_plan.certificate.far_limit = far_limit
+            from app.services.floorplan.drawing_ir import build_site_drawing_ir, render_svg_from_ir
+            clean_seed = str(self.seed)
+            site_ir = build_site_drawing_ir(self.site_plan, gen_id=clean_seed, typology=self.raw_typology)
+            self.site_plan.svg_site_plan = render_svg_from_ir(site_ir, theme="cad")
+
+        site_plan_dump = self.site_plan.model_dump() if self.site_plan else None
+        plot_poly_dump = self.site_plan.plot_polygon.model_dump() if self.site_plan else None
+
         elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
 
         return MultiStoreyBuildingModel(
@@ -3583,6 +3642,8 @@ class SoleGeometryEngine:
             seed=self.seed,
             solver_timing_ms=elapsed_ms,
             mathematical_certificate=cert.model_dump(),
+            plot_polygon=plot_poly_dump,
+            site_plan=site_plan_dump,
         )
 
     # =========================================================================
@@ -3789,8 +3850,11 @@ class SoleGeometryEngine:
                 "built_up_area_sqft": self.req.built_up_area_sqft,
                 "client_notes": self.req.client_notes,
                 "ai_provider": self.ai_provider,
+                "shape_type": self.site_plan.plot_polygon.shape_type if self.site_plan else "rectangle",
+                "plot_polygon": self.site_plan.plot_polygon.model_dump() if self.site_plan else None,
             },
             generation_id=f"GEN-{self.typology[:2]}-{self.total_storeys}F-{int(self.seed) if isinstance(self.seed, (int, float)) else 'F01'}",
             seed=str(self.seed),
             generated_at=time.time() * 1000.0,
+            site_plan=self.site_plan,
         )

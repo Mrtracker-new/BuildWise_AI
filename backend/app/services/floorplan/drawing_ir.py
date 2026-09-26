@@ -58,23 +58,49 @@ from typing import List, Dict, Tuple, Optional, Any, Literal
 
 # ReportLab imports (lazy or guarded if needed)
 try:
-    from reportlab.graphics.shapes import Drawing, Rect, Line, String, ArcPath, Circle, Polygon, Group
+    from reportlab.graphics.shapes import Drawing, Rect, Line, String, ArcPath, Circle, Polygon, Group, PolyLine
     from reportlab.lib import colors
 except ImportError:
-    Drawing = Rect = Line = String = ArcPath = Circle = Polygon = Group = colors = None
+    Drawing = Rect = Line = String = ArcPath = Circle = Polygon = Group = PolyLine = colors = None
 
 
 # =============================================================================
 # 1. DATA STRUCTURES FOR NORMALIZED PRIMITIVES
 # =============================================================================
 
-LayerTag = Literal["walls", "fills", "openings", "dims", "text", "cores", "ghost", "annotations"]
+LayerTag = Literal["walls", "fills", "openings", "dims", "text", "cores", "ghost", "annotations", "site"]
 
 
 @dataclass
 class DrawingPrimitive:
     """Base class for all normalized drawing primitives."""
     layer: LayerTag
+
+
+@dataclass
+class PolygonPrimitive(DrawingPrimitive):
+    """Normalized polygon primitive in meters for site boundaries, setback bands, and outdoor fragments."""
+    points: List[Tuple[float, float]] = field(default_factory=list)  # [(x_m, y_m)] in IR Cartesian Y-up meters
+    fill_color: Optional[str] = None
+    fill_opacity: float = 1.0
+    stroke_color: Optional[str] = None
+    stroke_width_m: float = 0.0
+    dash_array: Optional[List[float]] = None
+    hatch_pattern: Optional[str] = None  # e.g. "mf-hatch-setback"
+    label: Optional[str] = None
+    is_boundary: bool = False
+    is_setback: bool = False
+    is_footprint: bool = False
+
+
+@dataclass
+class PathPrimitive(DrawingPrimitive):
+    """Normalized multi-segment path or boundary polyline in meters."""
+    points: List[Tuple[float, float]] = field(default_factory=list)
+    stroke_color: str = "#0F172A"
+    stroke_width_m: float = 0.0
+    dash_array: Optional[List[float]] = None
+    fill_color: Optional[str] = None
 
 
 @dataclass
@@ -1781,6 +1807,9 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
           <path d="M {scale} 0 L 0 0 0 {scale}" fill="none" stroke="{grid_line}" stroke-width="0.75" />
           <path d="M {scale/2} 0 L {scale/2} {scale} M 0 {scale/2} L {scale} {scale/2}" fill="none" stroke="{grid_line}" stroke-width="0.25" stroke-dasharray="2 2" />
         </pattern>
+        <pattern id="mf-hatch-setback" width="10" height="10" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
+          <line x1="0" y1="0" x2="0" y2="10" stroke="{text_dim}" stroke-width="1.2" opacity="0.4" />
+        </pattern>
         <marker id="entry-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
           <path d="M 0 1 L 9 5 L 0 9 z" fill="#10B981" />
         </marker>
@@ -1801,6 +1830,22 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
     svg.append(f'  <rect width="{svg_w}" height="{svg_h}" fill="{bg_color}" />')
     svg.append(f'  <rect x="{margin_x}" y="{margin_y}" width="{content_w}" height="{content_h}" fill="url(#mf-grid-{theme})" />')
     svg.append(f'  <rect x="{margin_x}" y="{margin_y}" width="{content_w}" height="{content_h}" fill="none" stroke="{ext_wall_stroke}" stroke-width="4.5" stroke-linecap="square" />')
+
+    # 0. Site & Irregular Polygon Layer (If present)
+    for p in [prim for prim in ir.primitives if isinstance(prim, (PolygonPrimitive, PathPrimitive))]:
+        if isinstance(p, PolygonPrimitive) and p.points:
+            pts_str = " ".join(f"{px(x):.1f},{py(y):.1f}" for x, y in p.points)
+            fill_val = f'url(#{p.hatch_pattern})' if p.hatch_pattern else (p.fill_color or "none")
+            fill_op = f' fill-opacity="{p.fill_opacity}"' if p.fill_opacity < 1.0 and not p.hatch_pattern else ""
+            stroke_val = p.stroke_color or "none"
+            stroke_w = max(0.5, p.stroke_width_m * scale) if p.stroke_width_m > 0 else 1.0
+            dash_str = f' stroke-dasharray="{" ".join(str(d) for d in p.dash_array)}"' if p.dash_array else ""
+            svg.append(f'  <polygon points="{pts_str}" fill="{fill_val}"{fill_op} stroke="{stroke_val}" stroke-width="{stroke_w:.1f}"{dash_str} />')
+        elif isinstance(p, PathPrimitive) and p.points:
+            pts_str = " ".join(f"{px(x):.1f},{py(y):.1f}" for x, y in p.points)
+            stroke_w = max(0.5, p.stroke_width_m * scale) if p.stroke_width_m > 0 else 1.0
+            dash_str = f' stroke-dasharray="{" ".join(str(d) for d in p.dash_array)}"' if p.dash_array else ""
+            svg.append(f'  <polyline points="{pts_str}" fill="{p.fill_color or "none"}" stroke="{p.stroke_color}" stroke-width="{stroke_w:.1f}"{dash_str} />')
 
     # 1. Fills Layer
     for f in ir.primitives_by_layer("fills"):
@@ -2186,6 +2231,28 @@ def render_reportlab_from_ir(
     drawing.add(Rect(0, 0, width, height, fillColor=colors.HexColor("#FFFFFF"), strokeColor=colors.HexColor("#E5E5EA"), strokeWidth=0.5, rx=6, ry=6))
     drawing.add(Rect(x_pt(0.0), y_pt(0.0), ir.envelope_w * scale_pt, ir.envelope_d * scale_pt, fillColor=None, strokeColor=colors.HexColor("#CBD5E1"), strokeWidth=0.75, strokeDashArray=[3, 3]))
 
+    # 0. Site & Irregular Polygon Layer (If present)
+    for p in [prim for prim in ir.primitives if isinstance(prim, (PolygonPrimitive, PathPrimitive))]:
+        if isinstance(p, PolygonPrimitive) and p.points:
+            pts: List[float] = []
+            for x, y in p.points:
+                pts.extend([x_pt(x), y_pt(y)])
+            col = None
+            if p.hatch_pattern:
+                col = colors.HexColor("#F1F5F9")
+            elif p.fill_color:
+                col = colors.HexColor(p.fill_color) if p.fill_color.startswith("#") else colors.HexColor("#E0F2FE")
+            strk = colors.HexColor(p.stroke_color) if p.stroke_color and p.stroke_color.startswith("#") else None
+            strk_w = max(0.5, p.stroke_width_m * scale_pt) if p.stroke_width_m > 0 else (1.0 if strk else 0)
+            drawing.add(Polygon(points=pts, fillColor=col, strokeColor=strk, strokeWidth=strk_w, strokeDashArray=p.dash_array))
+        elif isinstance(p, PathPrimitive) and p.points:
+            pts = []
+            for x, y in p.points:
+                pts.extend([x_pt(x), y_pt(y)])
+            strk = colors.HexColor(p.stroke_color) if p.stroke_color and p.stroke_color.startswith("#") else colors.HexColor("#0F172A")
+            strk_w = max(0.5, p.stroke_width_m * scale_pt) if p.stroke_width_m > 0 else 1.0
+            drawing.add(PolyLine(points=pts, strokeColor=strk, strokeWidth=strk_w, strokeDashArray=p.dash_array))
+
     # 1. Fills Layer
     for f in ir.primitives_by_layer("fills"):
         if isinstance(f, FillPrimitive):
@@ -2394,3 +2461,260 @@ def render_reportlab_from_ir(
             drawing.add(String(leg_x + 26.0, leg_y + 4.5, "W2: 115mm Partition / W3: 75mm", fontName="Helvetica", fontSize=5.0, fillColor=colors.HexColor("#475569")))
 
     return drawing
+
+
+# =============================================================================
+# 5. SITE PLAN DRAWING IR BUILDER (SHEET 10.SP / SITE SURVEY)
+# =============================================================================
+
+def build_site_drawing_ir(
+    site_plan: Any,
+    gen_id: str = "GEN-SITE-01",
+    typology: str = "T1_SINGLE_FAMILY"
+) -> FloorDrawingIR:
+    """
+    Constructs a dedicated FloorDrawingIR for the Site Plan Sheet (Sheet 10.SP / 10.0),
+    including:
+    - Outer polygon boundary with solid stroke
+    - Dashed buildable setback outline
+    - Hatched setback band (buffer difference)
+    - Rotated footprint boundary with orientation angle note
+    - Outdoor zone fragments with areas
+    - Per-edge survey dimensions (length and bearing)
+    - Vertex coordinate markers P1..Pn
+    - North arrow and metric graphic scale
+    """
+    def _get(obj: Any, key: str, default: Any = None) -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    plot_poly = _get(site_plan, "plot_polygon", {})
+    vertices = _get(plot_poly, "vertices", []) or []
+    buildable_coords = _get(site_plan, "buildable_polygon_coords", []) or []
+    footprint = _get(site_plan, "footprint", {}) or {}
+    outdoor_zones = _get(site_plan, "outdoor_zones", []) or []
+    edges = _get(site_plan, "edges", []) or []
+    vertex_table = _get(site_plan, "vertex_table", []) or []
+
+    bounds = _get(plot_poly, "bounding_box", (0.0, 0.0, 10.0, 10.0))
+    minx, miny, maxx, maxy = bounds
+    bbox_w = max(float(maxx - minx), 10.0)
+    bbox_d = max(float(maxy - miny), 10.0)
+
+    primitives: List[DrawingPrimitive] = []
+
+    # 1. Fills: Setback band, buildable polygon, outdoor fragments, and footprint
+    if vertices:
+        primitives.append(PolygonPrimitive(
+            points=[(float(pt[0]), float(pt[1])) for pt in vertices],
+            fill_color="#F1F5F9",
+            hatch_pattern="mf-hatch-setback",
+            stroke_color="#475569",
+            stroke_width_m=0.25,
+            is_setback=True,
+            layer="fills"
+        ))
+
+    if buildable_coords:
+        primitives.append(PolygonPrimitive(
+            points=[(float(pt[0]), float(pt[1])) for pt in buildable_coords],
+            fill_color="#FFFFFF",
+            fill_opacity=0.90,
+            stroke_color="#0284C7",
+            stroke_width_m=0.20,
+            dash_array=[4, 3],
+            is_boundary=True,
+            layer="fills"
+        ))
+
+    for frag in outdoor_zones:
+        fcoords = _get(frag, "polygon_coords", [])
+        if fcoords:
+            primitives.append(PolygonPrimitive(
+                points=[(float(pt[0]), float(pt[1])) for pt in fcoords],
+                fill_color="#E0F2FE",
+                fill_opacity=0.45,
+                stroke_color="#38BDF8",
+                stroke_width_m=0.15,
+                layer="fills"
+            ))
+
+    corner_verts = _get(footprint, "corner_vertices", [])
+    if not corner_verts and footprint:
+        fx = float(_get(footprint, "x", 0.0))
+        fy = float(_get(footprint, "y", 0.0))
+        fw = float(_get(footprint, "width_m", 10.0))
+        fd = float(_get(footprint, "depth_m", 10.0))
+        corner_verts = [(fx, fy), (fx + fw, fy), (fx + fw, fy + fd), (fx, fy + fd)]
+
+    if corner_verts:
+        primitives.append(PolygonPrimitive(
+            points=[(float(pt[0]), float(pt[1])) for pt in corner_verts],
+            fill_color="#FEF3C7",
+            fill_opacity=0.60,
+            stroke_color="#D97706",
+            stroke_width_m=0.35,
+            is_footprint=True,
+            layer="fills"
+        ))
+
+    # 2. Walls: Boundary survey edges & footprint walls
+    n_v = len(vertices)
+    for e in edges:
+        idx = int(_get(e, "edge_index", 1)) - 1
+        p1 = vertices[idx % n_v]
+        p2 = vertices[(idx + 1) % n_v]
+        primitives.append(WallPrimitive(
+            wall_id=f"BND_{idx + 1}",
+            wall_type="W1",
+            x1=float(p1[0]),
+            y1=float(p1[1]),
+            x2=float(p2[0]),
+            y2=float(p2[1]),
+            thickness_m=0.25,
+            is_exterior=True,
+            layer="walls"
+        ))
+
+    n_c = len(corner_verts)
+    for k in range(n_c):
+        c1 = corner_verts[k]
+        c2 = corner_verts[(k + 1) % n_c]
+        primitives.append(WallPrimitive(
+            wall_id=f"FP_W_{k + 1}",
+            wall_type="W1",
+            x1=float(c1[0]),
+            y1=float(c1[1]),
+            x2=float(c2[0]),
+            y2=float(c2[1]),
+            thickness_m=0.30,
+            is_exterior=True,
+            layer="walls"
+        ))
+
+    # 3. Dims & Text: Edge labels (length + bearing) & vertex markers
+    for e in edges:
+        idx = int(_get(e, "edge_index", 1)) - 1
+        p1 = vertices[idx % n_v]
+        p2 = vertices[(idx + 1) % n_v]
+        mx = (float(p1[0]) + float(p2[0])) / 2.0
+        my = (float(p1[1]) + float(p2[1])) / 2.0
+        dx = float(p2[0]) - float(p1[0])
+        dy = float(p2[1]) - float(p1[1])
+        L = math.hypot(dx, dy)
+        nx = (-dy / L) * 0.70 if L > 0 else 0.0
+        ny = (dx / L) * 0.70 if L > 0 else 0.0
+        length_val = float(_get(e, "length_m", L))
+        bearing_val = str(_get(e, "bearing_dms", ""))
+        primitives.append(TextPrimitive(
+            x=round(mx + nx, 2),
+            y=round(my + ny, 2),
+            text=f"{length_val:.2f}m",
+            subtext=bearing_val,
+            font_size_pt=6.5,
+            font_weight="bold",
+            halo=True,
+            layer="text"
+        ))
+
+    for vt in vertex_table:
+        vid = str(_get(vt, "id", "P"))
+        vx = float(_get(vt, "x_m", 0.0))
+        vy = float(_get(vt, "y_m", 0.0))
+        primitives.append(TextPrimitive(
+            x=round(vx, 2),
+            y=round(vy, 2),
+            text=vid,
+            subtext=f"({vx:.1f}, {vy:.1f})",
+            font_size_pt=6.5,
+            font_weight="bold",
+            halo=True,
+            layer="text"
+        ))
+
+    # Footprint central label
+    fcx = float(_get(footprint, "center_x", bbox_w / 2.0))
+    fcy = float(_get(footprint, "center_y", bbox_d / 2.0))
+    fw = float(_get(footprint, "width_m", 10.0))
+    fd = float(_get(footprint, "depth_m", 10.0))
+    fa = float(_get(footprint, "area_sqm", fw * fd))
+    rot = float(_get(footprint, "rotation_angle_deg", 0.0))
+
+    primitives.append(TextPrimitive(
+        x=round(fcx, 2),
+        y=round(fcy + 0.35, 2),
+        text="BUILDING FOOTPRINT",
+        subtext=f"{fw:.1f}m × {fd:.1f}m ({fa:.1f} m²)",
+        font_size_pt=8.0,
+        font_weight="bold",
+        halo=True,
+        layer="text"
+    ))
+    if abs(rot) > 0.05:
+        primitives.append(TextPrimitive(
+            x=round(fcx, 2),
+            y=round(fcy - 0.50, 2),
+            text=f"Rotation: {rot:.1f}° from North",
+            font_size_pt=6.5,
+            font_weight="normal",
+            halo=True,
+            layer="text"
+        ))
+
+    for frag in outdoor_zones:
+        fname = str(_get(frag, "name", "Outdoor Yard"))
+        farea = float(_get(frag, "area_sqm", 0.0))
+        cent = _get(frag, "centroid", (0.0, 0.0))
+        primitives.append(TextPrimitive(
+            x=round(float(cent[0]), 2),
+            y=round(float(cent[1]), 2),
+            text=fname,
+            subtext=f"{farea:.1f} m²",
+            font_size_pt=6.5,
+            font_weight="semibold",
+            halo=True,
+            layer="text"
+        ))
+
+    # 4. Annotations: Compass, scale bar, and title block
+    shape_label = str(_get(plot_poly, "shape_type", "SITE")).replace("_", "-").upper()
+    primitives.append(AnnotationPrimitive(
+        compass={"x": round(bbox_w - 1.2, 2), "y": round(bbox_d - 1.2, 2)},
+        scale_bar={"x": 1.0, "y": 0.8},
+        title_block={
+            "sheet_title": f"SITE SURVEY & SETBACK LAYOUT ({shape_label})" if shape_label != "RECTANGLE" else "SITE SURVEY & SETBACK LAYOUT",
+            "freshness": f"{gen_id} | {bbox_w:.1f}x{bbox_d:.1f}m | SITE | {shape_label}",
+            "typology": typology
+        },
+        layer="annotations"
+    ))
+
+    area_val = float(_get(plot_poly, "area_sqm", bbox_w * bbox_d))
+    freshness = f"{gen_id} | {bbox_w:.1f}x{bbox_d:.1f}m | SITE | {shape_label} | {area_val:.1f}m²"
+    floor_title = f"SITE PLAN & BOUNDARY SURVEY ({shape_label})" if shape_label != "RECTANGLE" else "SITE PLAN & BOUNDARY SURVEY"
+
+    header = SheetHeaderInfo(
+        gen_id=str(gen_id),
+        plot_w_m=round(bbox_w, 2),
+        plot_d_m=round(bbox_d, 2),
+        storeys=1,
+        storeys_label="SITE",
+        floor_index=-1,
+        floor_name=floor_title,
+        elevation_m=0.0,
+        envelope_w_m=round(bbox_w, 2),
+        envelope_d_m=round(bbox_d, 2),
+        freshness_token=freshness,
+        typology=typology
+    )
+
+    return FloorDrawingIR(
+        envelope_w=round(bbox_w, 2),
+        envelope_d=round(bbox_d, 2),
+        header=header,
+        primitives=primitives,
+        door_schedule=[],
+        window_schedule=[],
+        room_schedule=[]
+    )

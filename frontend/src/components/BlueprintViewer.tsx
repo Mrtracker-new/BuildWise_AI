@@ -1,6 +1,6 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import ReactDOM from 'react-dom';
-import type { RoomPlacement, MultiStoreyBuildingModel, SingleFloorPlanModel } from '../services/types';
+import type { RoomPlacement, MultiStoreyBuildingModel, SingleFloorPlanModel, SitePlanModel } from '../services/types';
 import { downloadFloorplanDossier } from '../services/api';
 import { Icon } from './Icon';
 
@@ -11,6 +11,7 @@ interface BlueprintViewerProps {
   plotWidthM?: number;
   plotDepthM?: number;
   multiStorey?: MultiStoreyBuildingModel | null;
+  sitePlan?: SitePlanModel | null;
   generationTimestamp?: number;
   generationId?: string;
   storeys?: number;
@@ -75,6 +76,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   plotWidthM,
   plotDepthM,
   multiStorey = null,
+  sitePlan = null,
   generationTimestamp,
   generationId,
   storeys,
@@ -85,6 +87,10 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState<boolean>(false);
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+
+  // Site plan and multi-floor view state
+  const [viewTab, setViewTab] = useState<'site' | 'floor'>('floor');
+  const effectiveSitePlan = sitePlan || multiStorey?.site_plan;
 
   // Multi-floor state
   const [activeFloorIndex, setActiveFloorIndex] = useState<number>(0);
@@ -116,8 +122,9 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
     ? multiStorey.floors[safeFloorIndex] || multiStorey.floors[0]
     : null;
 
-  // Whenever generationId, generationTimestamp, or primary svgString changes: reset active floor, pan, and zoom
+  // Whenever generationId, generationTimestamp, or primary svgString changes: reset active floor, viewTab, pan, and zoom
   useEffect(() => {
+    setViewTab('floor');
     setActiveFloorIndex(0);
     setZoom(1.0);
     setPan({ x: 0, y: 0 });
@@ -126,13 +133,16 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   }, [generationId, generationTimestamp, svgString]);
 
   const activeSvg = useMemo(() => {
+    if (viewTab === 'site' && effectiveSitePlan?.svg_site_plan) {
+      return effectiveSitePlan.svg_site_plan;
+    }
     if (isMultiStorey && currentFloor) {
       return mode === 'paper' && currentFloor.svg_blueprint_paper
         ? currentFloor.svg_blueprint_paper
         : currentFloor.svg_blueprint_cad;
     }
     return mode === 'paper' && svgPaperString ? svgPaperString : svgString;
-  }, [isMultiStorey, currentFloor, mode, svgPaperString, svgString]);
+  }, [viewTab, effectiveSitePlan, isMultiStorey, currentFloor, mode, svgPaperString, svgString]);
 
   // Derive robust generation key and visible freshness token (Requirement 6)
   const effectiveGenId = generationId ?? (generationTimestamp ? `T${generationTimestamp}` : (svgString ? `${svgString.length}_${svgString.slice(0, 16).replace(/\W/g, '')}` : 'init'));
@@ -301,11 +311,33 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
 
   const handleModalMouseUp = () => setIsModalPanning(false);
 
-  // Render floor switcher tab bar
+  // Render floor switcher tab bar (including Site Plan tab when available)
   const renderFloorSwitcher = (isModal: boolean = false) => {
-    if (!isMultiStorey || !multiStorey?.floors || multiStorey.floors.length <= 1) {
+    const hasSitePlan = Boolean(effectiveSitePlan?.svg_site_plan);
+    const hasMultipleFloors = Boolean(isMultiStorey && multiStorey?.floors && multiStorey.floors.length > 1);
+
+    if (!hasSitePlan && !hasMultipleFloors) {
       return null;
     }
+
+    const floorsList = multiStorey?.floors || [
+      {
+        floor_index: 0,
+        floor_name: 'Ground Floor (G)',
+        built_up_area_sqm: 0,
+        carpet_area_sqm: 0,
+        rooms: [],
+        doors: [],
+        windows: [],
+        circulation_status: 'connected' as const,
+        vastu_score_pct: 0,
+        vastu_compliance_pct: 0,
+        plumbing_stack_alignment_pct: 100,
+        svg_blueprint_cad: svgString,
+        svg_blueprint_paper: svgPaperString || svgString,
+        envelope: { x: 0, y: 0, width: plotWidthM || 10, depth: plotDepthM || 12, area_sqm: 120 }
+      }
+    ];
 
     return (
       <div
@@ -315,17 +347,48 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
       >
         <div className="flex items-center gap-1 mr-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-3)] shrink-0 select-none">
           <Icon name="layers" size={13} className="text-[var(--accent)]" />
-          <span>Levels:</span>
+          <span>Views:</span>
         </div>
-        {multiStorey.floors.map((fl, idx) => {
-          const isActive = safeFloorIndex === idx;
+
+        {/* Dedicated Sheet 10.SP (Site Plan & Cadastral Survey) */}
+        {hasSitePlan && (
+          <button
+            type="button"
+            data-testid="tab-site-plan"
+            onClick={() => setViewTab('site')}
+            className={`px-3 py-1.5 rounded-[9px] text-[12px] transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${
+              viewTab === 'site'
+                ? 'bg-emerald-600 text-white shadow-sm font-semibold ring-1 ring-white/20'
+                : 'bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--fill-hover)] font-medium'
+            }`}
+          >
+            <Icon name="compass" size={13} />
+            <span>Site Plan</span>
+            <span
+              className={`text-[9px] px-1.5 py-0.2 rounded font-bold uppercase tracking-wider ${
+                viewTab === 'site' ? 'bg-white/20 text-white' : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+              }`}
+            >
+              10.SP
+            </span>
+          </button>
+        )}
+
+        {/* Storey Floor Plates */}
+        {floorsList.map((fl, idx) => {
+          if (!hasMultipleFloors && !hasSitePlan) return null;
+          const isActive = viewTab === 'floor' && safeFloorIndex === idx;
           const elevation = (fl.floor_index * 3.0).toFixed(1);
           const isGround = fl.floor_index === 0;
           return (
             <button
               key={fl.floor_index}
               type="button"
-              onClick={() => setActiveFloorIndex(idx)}
+              data-testid={`tab-floor-${fl.floor_index}`}
+              onClick={() => {
+                setViewTab('floor');
+                setActiveFloorIndex(idx);
+              }}
               className={`px-3 py-1.5 rounded-[9px] text-[12px] transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${
                 isActive
                   ? 'bg-[var(--accent)] text-white shadow-sm font-semibold ring-1 ring-white/20'
