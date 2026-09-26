@@ -57,6 +57,8 @@ class MultiFloorRoomRectangle(BaseModel):
     is_vertical_core: bool = False
     requires_exterior_wall: bool = True
     aspect_ratio: float = 1.0
+    applied_rules: List[str] = Field(default_factory=list, description="Ontology rule IDs shaping this room")
+    relaxations: List[Dict[str, str]] = Field(default_factory=list, description="Rule relaxations with rationale tags")
 
 
 class MultiFloorDoorGeometry(BaseModel):
@@ -129,6 +131,10 @@ class SingleFloorPlanModel(BaseModel):
     window_schedule: List[Dict[str, Any]] = Field(default_factory=list)
     room_schedule: List[Dict[str, Any]] = Field(default_factory=list)
     stair_geometry: Optional[Dict[str, Any]] = None
+    mathematical_certificate: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Mathematical validity certificate for this floor plate"
+    )
 
 
 class MultiStoreyBuildingModel(BaseModel):
@@ -157,6 +163,10 @@ class MultiStoreyBuildingModel(BaseModel):
     unmet_requirements: List[str] = Field(default_factory=list)
     seed: int = 42
     solver_timing_ms: float = 0.0
+    mathematical_certificate: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Consolidated mathematical validity certificate for building"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -61,16 +61,26 @@ class GroqExplanationAdapter(BaseExplanationAdapter):
             coverage=coverage
         )
 
-        # 2. System prompt with Pydantic JSON schema representation
+        # 2. System prompt with explicit required fields and Pydantic JSON schema representation
         schema_repr = json.dumps(AnalysisResponse.model_json_schema(), indent=2)
         system_prompt = (
             f"{CIVIL_ENGINEER_SYSTEM_PROMPT}\n\n"
+            f"REQUIRED JSON KEYS (All are mandatory):\n"
+            f"- 'feasibility_score': integer (0-100)\n"
+            f"- 'structural_recommendations': array of strings (min 1 recommendation)\n"
+            f"- 'cost_breakdown': object (CPWD benchmark costs)\n"
+            f"- 'vastu_compliance': object (orientation and entrance analysis)\n"
+            f"- 'parameter_reflection': string (2-sentence reflection of user inputs)\n"
+            f"- 'engineering_summary': string (synthesis of structural feasibility)\n\n"
             f"You must strictly output a valid JSON object matching this JSON Schema:\n"
             f"{schema_repr}"
         )
 
         candidate_models = [
-            os.getenv("GROQ_MODEL") or self.model or "llama-3.3-70b-versatile",
+            os.getenv("GROQ_MODEL") or self.model or "openai/gpt-oss-120b",
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "qwen/qwen3.8-27b",
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant",
         ]

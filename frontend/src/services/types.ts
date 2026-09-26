@@ -309,7 +309,7 @@ export interface SiteVisionResponse {
 }
 
 // ----------------------------------------------------
-// Generative Floor Plan Engine Interfaces (CSP & Vastu)
+// Generative Floor Plan Engine Interfaces (Sole Geometry Engine - Ontology-Driven)
 // ----------------------------------------------------
 
 export interface EnvelopeRect {
@@ -438,6 +438,8 @@ export interface MultiFloorRoomRectangle {
   is_vertical_core?: boolean;
   requires_exterior_wall?: boolean;
   aspect_ratio: number;
+  applied_rules?: string[];
+  relaxations?: Array<{ rule_id: string; rationale: string }>;
 }
 
 export interface MultiFloorDoorGeometry {
@@ -498,6 +500,31 @@ export interface SingleFloorPlanModel {
   carpet_area_sqm: number;
   svg_blueprint_cad: string;
   svg_blueprint_paper: string;
+  wall_graph?: Record<string, any>;
+  door_schedule?: Array<Record<string, any>>;
+  window_schedule?: Array<Record<string, any>>;
+  room_schedule?: Array<Record<string, any>>;
+  mathematical_certificate?: MathematicalValidityCertificate;
+}
+
+export interface MathematicalValidityCertificate {
+  is_valid: boolean;
+  non_overlap: boolean;
+  containment: boolean;
+  chain_sums_match: boolean;
+  min_dimensions_satisfied: boolean;
+  aspect_ratios_satisfied: boolean;
+  connectivity_bfs: boolean;
+  egress_distances_satisfied: boolean;
+  zero_forbidden_violations: boolean;
+  must_adjacency_satisfied: boolean;
+  prefer_adjacency_score?: number;
+  vertical_stack_valid?: boolean;
+  sanitation_wc_count_satisfied?: boolean;
+  parking_count_satisfied?: boolean;
+  certificate_id?: string;
+  certified_rules?: string[];
+  details?: Record<string, any>;
 }
 
 export interface MultiStoreyBuildingModel {
@@ -517,6 +544,7 @@ export interface MultiStoreyBuildingModel {
   unmet_requirements: string[];
   seed: number;
   solver_timing_ms: number;
+  mathematical_certificate?: MathematicalValidityCertificate;
 }
 
 export interface SpatialAdjacencyConstraint {
@@ -574,6 +602,8 @@ export interface RoomPlacement {
   depth_m: number;
   zone: string;
   vastu_compliant: boolean;
+  applied_rules?: string[];
+  relaxations?: Array<{ rule_id: string; rationale: string }>;
 }
 
 export interface FloorPlanMetrics {
@@ -622,6 +652,7 @@ export interface FloorPlanResponse {
   generated_at?: number;
   generation_id?: string;
   params_snapshot?: FloorPlanParamsSnapshot;
+  mathematical_certificate?: MathematicalValidityCertificate;
 }
 
 export interface ReportRequestPayload {

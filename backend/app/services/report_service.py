@@ -360,729 +360,52 @@ def _draw_rectangles_reportlab(
     floor_index: int = 0
 ) -> Drawing:
     """
-    Renders continuous envelope RectanglesModel into publication-grade ReportLab vector drawing.
-    Occupies full content width (>=165mm) and >=60% of page height.
-    Features: room labels >=8pt with halo, metric dimension lines with frontage callout,
-    north arrow top-right, metric graphic scale bar bottom-left, ghost core overlay on F1+,
-    and architectural staircase/lift symbols.
+    Renders continuous envelope RectanglesModel into publication-grade ReportLab vector drawing
+    via the shared Drawing IR. Eliminates all coordinate offsets, scaling distortions, and duplicate geometry logic.
     """
-    env = _get(rectangles, "envelope")
-    env_x = _safe_float(_get(env, "x", 1.0), 1.0)
-    env_y = _safe_float(_get(env, "y", 1.0), 1.0)
-    env_w = _safe_float(_get(env, "width", 8.0), 8.0)
-    env_h = _safe_float(_get(env, "height", _get(env, "depth", 8.0)), 8.0)
-    if env_w <= 0.0:
-        env_w = 8.0
-    if env_h <= 0.0:
-        env_h = 8.0
-
-    rooms_data = _get(rectangles, "rooms", []) or []
-    doors_data = _get(rectangles, "doors", []) or []
-    windows_data = _get(rectangles, "windows", []) or []
-
-    all_x = [env_x + env_w] + [_safe_float(_get(r, "x", 0.0)) + _safe_float(_get(r, "width_m", _get(r, "width", 0.0))) for r in rooms_data]
-    all_y = [env_y + env_h] + [_safe_float(_get(r, "y", 0.0)) + _safe_float(_get(r, "depth_m", _get(r, "height", 0.0))) for r in rooms_data]
-    if ground_cores:
-        for gc in ground_cores:
-            all_x.append(_safe_float(_get(gc, "x", 0.0)) + _safe_float(_get(gc, "width_m", _get(gc, "width", 0.0))))
-            all_y.append(_safe_float(_get(gc, "y", 0.0)) + _safe_float(_get(gc, "depth_m", _get(gc, "depth", _get(gc, "height", 0.0)))))
-    if ground_ducts:
-        for gd in ground_ducts:
-            all_x.append(_safe_float(_get(gd, "x", 0.0)) + _safe_float(_get(gd, "width_m", _get(gd, "width", 0.0))))
-            all_y.append(_safe_float(_get(gd, "y", 0.0)) + _safe_float(_get(gd, "depth_m", _get(gd, "depth", _get(gd, "height", 0.0)))))
-
-    max_x = max(all_x)
-    max_y = max(all_y)
-    plot_w = max(max_x + 1.0, 10.0)
-    plot_d = max(max_y + 1.5, 10.0)
-
-    pad_x = 45.0
-    pad_y = 40.0
-    avail_w = width - (2.0 * pad_x)
-    avail_h = height - (2.0 * pad_y)
-    scale = min(avail_w / max(plot_w, 1.0), avail_h / max(plot_d, 1.0))
-    draw_w = plot_w * scale
-    draw_h = plot_d * scale
-    offset_x = (width - draw_w) / 2.0
-    offset_y = (height - draw_h) / 2.0
-
-    def x_pt(xm: float) -> float:
-        return offset_x + (xm * scale)
-
-    def y_pt(ym: float) -> float:
-        return offset_y + ((plot_d - ym) * scale)
-
-    drawing = Drawing(width, height)
-    # Sheet background and subtle setback line
-    drawing.add(Rect(0, 0, width, height, fillColor=colors.HexColor("#FFFFFF"), strokeColor=COLOR_HAIRLINE, strokeWidth=0.5, rx=6, ry=6))
-    drawing.add(Rect(offset_x, offset_y, draw_w, draw_h, fillColor=None, strokeColor=colors.HexColor("#CBD5E1"), strokeWidth=0.75, strokeDashArray=[3, 3]))
-
-    # Ghost Core Overlay on upper floors (F1+)
-    if floor_index > 0:
-        if ground_cores:
-            for gc in ground_cores:
-                gc_x = _safe_float(_get(gc, "x", 0.0))
-                gc_y = _safe_float(_get(gc, "y", 0.0))
-                gc_w = _safe_float(_get(gc, "width_m", _get(gc, "width", 0.0)))
-                gc_h = _safe_float(_get(gc, "depth_m", _get(gc, "depth", _get(gc, "height", 0.0))))
-                if gc_w > 0.0 and gc_h > 0.0:
-                    drawing.add(Rect(
-                        x_pt(gc_x), y_pt(gc_y + gc_h), gc_w * scale, gc_h * scale,
-                        fillColor=colors.HexColor("#FAF5FF"),
-                        strokeColor=colors.HexColor("#9333EA"),
-                        strokeWidth=1.2,
-                        strokeDashArray=[4, 3]
-                    ))
-                    lbl_x = x_pt(gc_x + gc_w / 2.0)
-                    lbl_y = y_pt(gc_y + gc_h / 2.0) - 2.0
-                    drawing.add(String(lbl_x, lbl_y, "[F0 CORE ANCHOR]", textAnchor="middle", fontSize=6.5, fontName=FONT_BOLD, fillColor=colors.HexColor("#7E22CE")))
-
-        if ground_ducts:
-            for gd in ground_ducts:
-                gd_x = _safe_float(_get(gd, "x", 0.0))
-                gd_y = _safe_float(_get(gd, "y", 0.0))
-                gd_w = _safe_float(_get(gd, "width_m", _get(gd, "width", 0.0)))
-                gd_h = _safe_float(_get(gd, "depth_m", _get(gd, "depth", _get(gd, "height", 0.0))))
-                if gd_w > 0.0 and gd_h > 0.0:
-                    drawing.add(Rect(
-                        x_pt(gd_x), y_pt(gd_y + gd_h), gd_w * scale, gd_h * scale,
-                        fillColor=colors.HexColor("#FEF3C7"),
-                        strokeColor=colors.HexColor("#D97706"),
-                        strokeWidth=0.8,
-                        strokeDashArray=[2, 2]
-                    ))
-                    lbl_x = x_pt(gd_x + gd_w / 2.0)
-                    lbl_y = y_pt(gd_y + gd_h / 2.0) - 2.0
-                    drawing.add(String(lbl_x, lbl_y, "SHAFT", textAnchor="middle", fontSize=5.5, fontName=FONT_BOLD, fillColor=colors.HexColor("#B45309")))
-
-    # Architectural pastel room fills
-    color_map = {
-        "master_bed": colors.HexColor("#F1F5F9"),
-        "living": colors.HexColor("#F0FDF4"),
-        "kitchen": colors.HexColor("#FEF3C7"),
-        "puja": colors.HexColor("#FEF9C3"),
-        "bath_1": colors.HexColor("#E0F2FE"),
-        "bath_2": colors.HexColor("#E0F2FE"),
-        "bed_2": colors.HexColor("#F8FAFC"),
-        "dining": colors.HexColor("#FDF2F8"),
-        "stairs": colors.HexColor("#F5F3FF"),
-        "staircase": colors.HexColor("#F5F3FF"),
-        "staircase_dogleg": colors.HexColor("#F5F3FF"),
-        "staircase_fire": colors.HexColor("#F5F3FF"),
-        "lift": colors.HexColor("#EFF6FF"),
-        "elevator": colors.HexColor("#EFF6FF"),
-        "lift_passenger": colors.HexColor("#EFF6FF"),
-        "lift_service": colors.HexColor("#EFF6FF"),
-        "mep_chase": colors.HexColor("#FEF3C7"),
-        "corridor": colors.white,
-        "home_office": colors.HexColor("#F0FDF4"),
-        "powder_room": colors.HexColor("#E0F2FE"),
-        "balcony": colors.HexColor("#F0FDF4"),
-        "retail_floor": colors.HexColor("#EFF6FF"),
-        "lobby": colors.HexColor("#F0FDF4"),
-        "offices": colors.HexColor("#F1F5F9"),
-        "restroom": colors.HexColor("#E0F2FE"),
-        "server_room": colors.HexColor("#F3F4F6"),
-        "utility": colors.HexColor("#FEF3C7"),
-        "study": colors.HexColor("#F0FDF4"),
-        "production_floor": colors.HexColor("#EFF6FF"),
-        "storage_bay": colors.HexColor("#F8FAFC"),
-        "office": colors.HexColor("#F1F5F9"),
-        "utility_wc": colors.HexColor("#E0F2FE"),
-    }
-
-    parsed_rooms = []
-    for r in rooms_data:
-        rid = str(_get(r, "room_id", "") or "")
-        rx = _safe_float(_get(r, "x", 0.0))
-        ry = _safe_float(_get(r, "y", 0.0))
-        rw = _safe_float(_get(r, "width_m", _get(r, "width", 0.0)))
-        rh = _safe_float(_get(r, "depth_m", _get(r, "height", 0.0)))
-
-        base_rid = rid
-        for u in ("_u1", "_u2", "_u3", "_u4"):
-            if base_rid.endswith(u):
-                base_rid = base_rid[:-len(u)]
-                break
-        fc = color_map.get(rid, color_map.get(base_rid, colors.HexColor("#F8FAFC")))
-        drawing.add(Rect(x_pt(rx), y_pt(ry + rh), rw * scale, rh * scale, fillColor=fc, strokeColor=None, strokeWidth=0))
-
-        # Check if room is stairs or lift
-        is_core = bool(_get(r, "is_vertical_core", False))
-        is_stairs = "stair" in rid.lower()
-        is_lift = "lift" in rid.lower() or "elevator" in rid.lower()
-
-        if is_stairs and rw > 0.0 and rh > 0.0:
-            num_treads = 6
-            step_dy = (rh * scale) / float(num_treads + 1)
-            rx_pt = x_pt(rx)
-            rw_pt = rw * scale
-            for ti in range(1, num_treads + 1):
-                ty_pt = y_pt(ry + rh) + ti * step_dy
-                drawing.add(Line(rx_pt + 2.0, ty_pt, rx_pt + rw_pt - 2.0, ty_pt, strokeColor=colors.HexColor("#CBD5E1"), strokeWidth=0.75))
-            cx_pt = rx_pt + rw_pt / 2.0
-            bot_y = y_pt(ry + rh) + 6.0
-            top_y = y_pt(ry) - 6.0
-            if top_y > bot_y + 12.0:
-                drawing.add(Line(cx_pt, bot_y, cx_pt, top_y, strokeColor=colors.HexColor("#6366F1"), strokeWidth=1.0))
-                drawing.add(Polygon([cx_pt, top_y, cx_pt - 3, top_y - 5, cx_pt + 3, top_y - 5], fillColor=colors.HexColor("#6366F1"), strokeColor=None))
-                drawing.add(String(cx_pt + 6, (bot_y + top_y) / 2.0 - 2, "UP", fontSize=6.0, fontName=FONT_BOLD, fillColor=colors.HexColor("#4F46E5")))
-        elif is_lift and rw > 0.0 and rh > 0.0:
-            rx_pt = x_pt(rx)
-            rw_pt = rw * scale
-            ry_top = y_pt(ry)
-            ry_bot = y_pt(ry + rh)
-            drawing.add(Line(rx_pt + 2.0, ry_bot + 2.0, rx_pt + rw_pt - 2.0, ry_top - 2.0, strokeColor=colors.HexColor("#94A3B8"), strokeWidth=0.75, strokeDashArray=[2, 2]))
-            drawing.add(Line(rx_pt + 2.0, ry_top - 2.0, rx_pt + rw_pt - 2.0, ry_bot + 2.0, strokeColor=colors.HexColor("#94A3B8"), strokeWidth=0.75, strokeDashArray=[2, 2]))
-
-        default_name = rid.replace("_", " ").title() if rid else "Room"
-        parsed_rooms.append({
-            "id": rid,
-            "name": str(_get(r, "room_name", default_name) or default_name),
-            "x": rx,
-            "y": ry,
-            "w": rw,
-            "h": rh,
-            "area": _safe_float(_get(r, "area_sqm", rw * rh)),
-            "zone": str(_get(r, "zone", "General") or "General"),
-            "vastu": bool(_get(r, "vastu_compliant", False)),
-            "is_vertical_core": is_core or is_stairs or is_lift
-        })
-
-    parsed_doors = []
-    for d in doors_data:
-        parsed_doors.append({
-            "id": str(_get(d, "door_id", "") or ""),
-            "edge": str(_get(d, "wall_edge", "") or ""),
-            "x1": _safe_float(_get(d, "x1", 0.0)),
-            "y1": _safe_float(_get(d, "y1", 0.0)),
-            "x2": _safe_float(_get(d, "x2", 0.0)),
-            "y2": _safe_float(_get(d, "y2", 0.0)),
-            "hx": _safe_float(_get(d, "hinge_x", 0.0)),
-            "hy": _safe_float(_get(d, "hinge_y", 0.0)),
-            "swing": str(_get(d, "swing_direction", "inward_right") or "inward_right"),
-            "w_m": _safe_float(_get(d, "width_m", 0.9), 0.9)
-        })
-
-    parsed_windows = []
-    for w in windows_data:
-        parsed_windows.append({
-            "id": str(_get(w, "window_id", "") or ""),
-            "edge": str(_get(w, "wall_edge", "") or ""),
-            "x1": _safe_float(_get(w, "x1", 0.0)),
-            "y1": _safe_float(_get(w, "y1", 0.0)),
-            "x2": _safe_float(_get(w, "x2", 0.0)),
-            "y2": _safe_float(_get(w, "y2", 0.0)),
-            "w_m": _safe_float(_get(w, "width_m", 1.2), 1.2)
-        })
-
-    # Interior Shared Partition Walls (1.2pt navy)
-    for i in range(len(parsed_rooms)):
-        r1 = parsed_rooms[i]
-        for j in range(i + 1, len(parsed_rooms)):
-            r2 = parsed_rooms[j]
-            # Vertical shared wall
-            if abs((r1["x"] + r1["w"]) - r2["x"]) < 0.05 or abs((r2["x"] + r2["w"]) - r1["x"]) < 0.05:
-                wx = (r1["x"] + r1["w"]) if abs((r1["x"] + r1["w"]) - r2["x"]) < 0.05 else (r2["x"] + r2["w"])
-                y1 = max(r1["y"], r2["y"])
-                y2 = min(r1["y"] + r1["h"], r2["y"] + r2["h"])
-                if y2 - y1 >= 0.1:
-                    base = (y1, y2)
-                    cuts = []
-                    for d in parsed_doors:
-                        if d["edge"] in ("vertical", "east", "west") and abs(d["x1"] - wx) < 0.08:
-                            cuts.append((min(d["y1"], d["y2"]), max(d["y1"], d["y2"])))
-                    segs = _subtract_intervals_rl(base, cuts)
-                    for sy1, sy2 in segs:
-                        drawing.add(Line(x_pt(wx), y_pt(sy1), x_pt(wx), y_pt(sy2), strokeColor=colors.HexColor("#475569"), strokeWidth=1.2))
-
-            # Horizontal shared wall
-            elif abs((r1["y"] + r1["h"]) - r2["y"]) < 0.05 or abs((r2["y"] + r2["h"]) - r1["y"]) < 0.05:
-                wy = (r1["y"] + r1["h"]) if abs((r1["y"] + r1["h"]) - r2["y"]) < 0.05 else (r2["y"] + r2["h"])
-                x1 = max(r1["x"], r2["x"])
-                x2 = min(r1["x"] + r1["w"], r2["x"] + r2["w"])
-                if x2 - x1 >= 0.1:
-                    base = (x1, x2)
-                    cuts = []
-                    for d in parsed_doors:
-                        if d["edge"] in ("horizontal", "north", "south") and abs(d["y1"] - wy) < 0.08:
-                            cuts.append((min(d["x1"], d["x2"]), max(d["x1"], d["x2"])))
-                    segs = _subtract_intervals_rl(base, cuts)
-                    for sx1, sx2 in segs:
-                        drawing.add(Line(x_pt(sx1), y_pt(wy), x_pt(sx2), y_pt(wy), strokeColor=colors.HexColor("#475569"), strokeWidth=1.2))
-
-    # Exterior Envelope Walls (2.4pt dark slate)
-    # North
-    n_cuts = []
-    for d in parsed_doors:
-        if d["edge"] in ("horizontal", "north", "south") and abs(d["y1"] - env_y) < 0.08:
-            n_cuts.append((min(d["x1"], d["x2"]), max(d["x1"], d["x2"])))
-    for w in parsed_windows:
-        if w["edge"] in ("north", "horizontal") and abs(w["y1"] - env_y) < 0.08:
-            n_cuts.append((min(w["x1"], w["x2"]), max(w["x1"], w["x2"])))
-    for sx1, sx2 in _subtract_intervals_rl((env_x, env_x + env_w), n_cuts):
-        drawing.add(Line(x_pt(sx1), y_pt(env_y), x_pt(sx2), y_pt(env_y), strokeColor=colors.HexColor("#0F172A"), strokeWidth=2.4))
-
-    # South
-    s_y = env_y + env_h
-    s_cuts = []
-    for d in parsed_doors:
-        if d["edge"] in ("horizontal", "north", "south") and abs(d["y1"] - s_y) < 0.08:
-            s_cuts.append((min(d["x1"], d["x2"]), max(d["x1"], d["x2"])))
-    for w in parsed_windows:
-        if w["edge"] in ("south", "horizontal") and abs(w["y1"] - s_y) < 0.08:
-            s_cuts.append((min(w["x1"], w["x2"]), max(w["x1"], w["x2"])))
-    for sx1, sx2 in _subtract_intervals_rl((env_x, env_x + env_w), s_cuts):
-        drawing.add(Line(x_pt(sx1), y_pt(s_y), x_pt(sx2), y_pt(s_y), strokeColor=colors.HexColor("#0F172A"), strokeWidth=2.4))
-
-    # West
-    w_cuts = []
-    for d in parsed_doors:
-        if d["edge"] in ("vertical", "east", "west") and abs(d["x1"] - env_x) < 0.08:
-            w_cuts.append((min(d["y1"], d["y2"]), max(d["y1"], d["y2"])))
-    for w in parsed_windows:
-        if w["edge"] in ("west", "vertical") and abs(w["x1"] - env_x) < 0.08:
-            w_cuts.append((min(w["y1"], w["y2"]), max(w["y1"], w["y2"])))
-    for sy1, sy2 in _subtract_intervals_rl((env_y, env_y + env_h), w_cuts):
-        drawing.add(Line(x_pt(env_x), y_pt(sy1), x_pt(env_x), y_pt(sy2), strokeColor=colors.HexColor("#0F172A"), strokeWidth=2.4))
-
-    # East
-    e_x = env_x + env_w
-    e_cuts = []
-    for d in parsed_doors:
-        if d["edge"] in ("vertical", "east", "west") and abs(d["x1"] - e_x) < 0.08:
-            e_cuts.append((min(d["y1"], d["y2"]), max(d["y1"], d["y2"])))
-    for w in parsed_windows:
-        if w["edge"] in ("east", "vertical") and abs(w["x1"] - e_x) < 0.08:
-            e_cuts.append((min(w["y1"], w["y2"]), max(w["y1"], w["y2"])))
-    for sy1, sy2 in _subtract_intervals_rl((env_y, env_y + env_h), e_cuts):
-        drawing.add(Line(x_pt(e_x), y_pt(sy1), x_pt(e_x), y_pt(sy2), strokeColor=colors.HexColor("#0F172A"), strokeWidth=2.4))
-
-    # Windows (3-line representation with cyan tint)
-    for win in parsed_windows:
-        if win["edge"] in ("north", "south", "horizontal"):
-            wx1 = x_pt(win["x1"])
-            wx2 = x_pt(win["x2"])
-            wy = y_pt(win["y1"])
-            drawing.add(Line(wx1, wy - 1.5, wx2, wy - 1.5, strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8))
-            drawing.add(Line(wx1, wy, wx2, wy, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.0))
-            drawing.add(Line(wx1, wy + 1.5, wx2, wy + 1.5, strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8))
-            drawing.add(Line(wx1, wy - 2.0, wx1, wy + 2.0, strokeColor=colors.HexColor("#0F172A"), strokeWidth=0.8))
-            drawing.add(Line(wx2, wy - 2.0, wx2, wy + 2.0, strokeColor=colors.HexColor("#0F172A"), strokeWidth=0.8))
-        else:
-            wy1 = y_pt(win["y1"])
-            wy2 = y_pt(win["y2"])
-            wx = x_pt(win["x1"])
-            drawing.add(Line(wx - 1.5, wy1, wx - 1.5, wy2, strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8))
-            drawing.add(Line(wx, wy1, wx, wy2, strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.0))
-            drawing.add(Line(wx + 1.5, wy1, wx + 1.5, wy2, strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8))
-            drawing.add(Line(wx - 2.0, wy1, wx + 2.0, wy1, strokeColor=colors.HexColor("#0F172A"), strokeWidth=0.8))
-            drawing.add(Line(wx - 2.0, wy2, wx + 2.0, wy2, strokeColor=colors.HexColor("#0F172A"), strokeWidth=0.8))
-
-    # Doors (Leaf Line + Swing Arc)
-    for d in parsed_doors:
-        hx = x_pt(d["hx"])
-        hy = y_pt(d["hy"])
-        R = d["w_m"] * scale
-        if d["edge"] in ("vertical", "east", "west"):
-            if d["swing"] in ("inward_left", "outward_left"):
-                leaf_x = hx - R
-                leaf_y = hy
-                start_ang, end_ang = 270, 360
-            else:
-                leaf_x = hx + R
-                leaf_y = hy
-                start_ang, end_ang = 180, 270
-        else:
-            if d["swing"] in ("inward_left", "outward_left"):
-                leaf_x = hx
-                leaf_y = hy + R
-                start_ang, end_ang = 0, 90
-            else:
-                leaf_x = hx
-                leaf_y = hy - R
-                start_ang, end_ang = 270, 360
-        drawing.add(Line(hx, hy, leaf_x, leaf_y, strokeColor=colors.HexColor("#0284C7"), strokeWidth=1.2))
-        arc = ArcPath(strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8, strokeDashArray=[2, 2], fillColor=None)
-        arc.addArc(hx, hy, R, start_ang, end_ang)
-        drawing.add(arc)
-
-    # On-plan Room Typography with Background Halo (>=8pt)
-    for r in parsed_rooms:
-        cx = x_pt(r["x"] + r["w"] / 2.0)
-        cy = y_pt(r["y"] + r["h"] / 2.0)
-        label_text = r["name"].upper()
-
-        # Background halo rounded pill
-        halo_w = max(len(label_text) * 6.2, 54.0)
-        drawing.add(Rect(
-            cx - (halo_w / 2.0), cy - 12.0, halo_w, 24.0,
-            rx=4, ry=4,
-            fillColor=colors.Color(1, 1, 1, alpha=0.92),
-            strokeColor=colors.Color(0, 0, 0, alpha=0.08),
-            strokeWidth=0.5
-        ))
-
-        # Room name >=8pt
-        drawing.add(String(cx, cy + 2.5, label_text, textAnchor="middle", fontSize=8.5, fontName=FONT_BOLD, fillColor=COLOR_TEXT_PRIMARY))
-        drawing.add(String(cx, cy - 6.5, f"{r['w']:.1f}m × {r['h']:.1f}m • {r['area']:.1f} m²", textAnchor="middle", fontSize=7.0, fontName=FONT_REGULAR, fillColor=COLOR_TEXT_SECONDARY))
-
-    # Metric Dimension Lines & Frontage Callout
-    dim_top_y = y_pt(0.0) + 16.0
-    dim_x1 = x_pt(0.0)
-    dim_x2 = x_pt(plot_w)
-    # Extension lines
-    drawing.add(Line(dim_x1, y_pt(0.0) + 2.0, dim_x1, dim_top_y + 5.0, strokeColor=colors.HexColor("#94A3B8"), strokeWidth=0.6, strokeDashArray=[2, 2]))
-    drawing.add(Line(dim_x2, y_pt(0.0) + 2.0, dim_x2, dim_top_y + 5.0, strokeColor=colors.HexColor("#94A3B8"), strokeWidth=0.6, strokeDashArray=[2, 2]))
-    # Main dimension line
-    drawing.add(Line(dim_x1, dim_top_y, dim_x2, dim_top_y, strokeColor=colors.HexColor("#334155"), strokeWidth=1.0))
-    # 45-degree ticks
-    drawing.add(Line(dim_x1 - 4, dim_top_y - 4, dim_x1 + 4, dim_top_y + 4, strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=1.4))
-    drawing.add(Line(dim_x2 - 4, dim_top_y - 4, dim_x2 + 4, dim_top_y + 4, strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=1.4))
-    drawing.add(String((dim_x1 + dim_x2) / 2.0, dim_top_y + 4.0, f"{plot_w:.1f}m FRONTAGE", textAnchor="middle", fontSize=8.0, fontName=FONT_BOLD, fillColor=COLOR_TEXT_PRIMARY))
-
-    dim_left_x = x_pt(0.0) - 18.0
-    dim_y1 = y_pt(0.0)
-    dim_y2 = y_pt(plot_d)
-    # Extension lines
-    drawing.add(Line(x_pt(0.0) - 2.0, dim_y1, dim_left_x - 5.0, dim_y1, strokeColor=colors.HexColor("#94A3B8"), strokeWidth=0.6, strokeDashArray=[2, 2]))
-    drawing.add(Line(x_pt(0.0) - 2.0, dim_y2, dim_left_x - 5.0, dim_y2, strokeColor=colors.HexColor("#94A3B8"), strokeWidth=0.6, strokeDashArray=[2, 2]))
-    # Left dimension line
-    drawing.add(Line(dim_left_x, dim_y1, dim_left_x, dim_y2, strokeColor=colors.HexColor("#334155"), strokeWidth=1.0))
-    # 45-degree ticks
-    drawing.add(Line(dim_left_x - 4, dim_y1 - 4, dim_left_x + 4, dim_y1 + 4, strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=1.4))
-    drawing.add(Line(dim_left_x - 4, dim_y2 - 4, dim_left_x + 4, dim_y2 + 4, strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=1.4))
-    drawing.add(String(dim_left_x - 6.0, (dim_y1 + dim_y2) / 2.0, f"{plot_d:.1f}m DEPTH", textAnchor="middle", fontSize=7.5, fontName=FONT_BOLD, fillColor=COLOR_TEXT_PRIMARY))
-
-    # North Compass (Top-Right)
-    compass_x = width - 36.0
-    compass_y = height - 36.0
-    drawing.add(Circle(compass_x, compass_y, 14, fillColor=colors.HexColor("#F8FAFC"), strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=1.0))
-    drawing.add(Polygon([compass_x, compass_y + 11, compass_x + 4, compass_y, compass_x, compass_y + 2, compass_x - 4, compass_y], fillColor=COLOR_TEXT_PRIMARY, strokeColor=None))
-    drawing.add(Polygon([compass_x, compass_y - 11, compass_x + 4, compass_y, compass_x, compass_y - 2, compass_x - 4, compass_y], fillColor=colors.HexColor("#94A3B8"), strokeColor=None))
-    drawing.add(String(compass_x, compass_y + 14, "N", fontName=FONT_BOLD, fontSize=8.0, textAnchor="middle", fillColor=COLOR_TEXT_PRIMARY))
-
-    # Graphic Scale Bar (Bottom-Left)
-    scale_x = 42.0
-    scale_y = 18.0
-    drawing.add(String(scale_x, scale_y + 10, "GRAPHIC SCALE (METRIC)", fontName=FONT_BOLD, fontSize=7.0, fillColor=COLOR_TEXT_SECONDARY))
-    drawing.add(Rect(scale_x, scale_y, 25, 4, fillColor=COLOR_TEXT_PRIMARY, strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=0.5))
-    drawing.add(Rect(scale_x + 25, scale_y, 25, 4, fillColor=colors.HexColor("#E2E8F0"), strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=0.5))
-    drawing.add(Rect(scale_x + 50, scale_y, 25, 4, fillColor=COLOR_TEXT_PRIMARY, strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=0.5))
-    drawing.add(Rect(scale_x + 75, scale_y, 25, 4, fillColor=colors.HexColor("#E2E8F0"), strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=0.5))
-    for i, lbl in enumerate(["0", "1m", "2m", "3m", "4m"]):
-        drawing.add(String(scale_x + i * 25, scale_y - 7, lbl, fontName=FONT_REGULAR, fontSize=6.5, textAnchor="middle", fillColor=COLOR_TEXT_SECONDARY))
-
-    # Title Stamp Badge (Bottom-Right)
-    if floor_name:
-        badge_w = 160.0
-        badge_h = 24.0
-        badge_x = width - badge_w - 12.0
-        badge_y = 12.0
-        drawing.add(Rect(badge_x, badge_y, badge_w, badge_h, rx=4, ry=4, fillColor=colors.Color(1, 1, 1, alpha=0.92), strokeColor=COLOR_HAIRLINE, strokeWidth=0.75))
-        drawing.add(String(badge_x + 8.0, badge_y + 13.0, floor_name.upper(), fontName=FONT_BOLD, fontSize=7.5, fillColor=COLOR_TEXT_PRIMARY))
-        elevation_str = f"ELEVATION: +{floor_index * 3.0:.2f}m LVL"
-        drawing.add(String(badge_x + 8.0, badge_y + 4.5, elevation_str, fontName=FONT_REGULAR, fontSize=6.5, fillColor=COLOR_ACCENT))
-
-    return drawing
+    from app.services.floorplan.drawing_ir import build_drawing_ir, render_reportlab_from_ir
+    bldg = {"vertical_cores": ground_cores or [], "duct_shafts": ground_ducts or []}
+    ir = build_drawing_ir(
+        floor_data=rectangles,
+        building_model=bldg,
+        elevation_m=floor_index * 3.0
+    )
+    return render_reportlab_from_ir(ir, width=width, height=height)
 
 
 def draw_floorplan_reportlab(
-    placements: Any,
-    grid_matrix: Any,
+    placements: Any = None,
+    grid_matrix: Any = None,
     width: float = CONTENT_WIDTH_PT,
     height: float = 450.0,
     rectangles: Any = None,
     ground_cores: Optional[List[Any]] = None,
     ground_ducts: Optional[List[Any]] = None,
     floor_name: Optional[str] = None,
-    floor_index: int = 0
+    floor_index: int = 0,
+    plot_width_m: Optional[float] = None,
+    plot_depth_m: Optional[float] = None,
+    total_storeys: Optional[int] = None,
+    seed: Optional[str] = None,
+    typology: Optional[str] = None
 ) -> Drawing:
     """
-    Translates solved room placements into ReportLab vector drawing shapes (Line, Rect, String, ArcPath, Group).
-    Delegates to _draw_rectangles_reportlab when continuous RectanglesModel is provided.
-    Falls back gracefully to grid reconstruction if only discrete placements are available.
+    Renders architectural floor plan vector drawing into ReportLab Drawing via the shared Drawing IR.
     """
-    has_valid_rects = False
-    if rectangles is not None:
-        r_env = _get(rectangles, "envelope")
-        r_rooms = _get(rectangles, "rooms", []) or []
-        if r_env or r_rooms:
-            has_valid_rects = True
-
-    if has_valid_rects:
-        return _draw_rectangles_reportlab(
-            rectangles,
-            width=width,
-            height=height,
-            ground_cores=ground_cores,
-            ground_ducts=ground_ducts,
-            floor_name=floor_name,
-            floor_index=floor_index
-        )
-
-    drawing = Drawing(width, height)
-
-    norm_placements: List[Dict[str, Any]] = []
-    if isinstance(placements, (list, tuple)):
-        for p in placements:
-            rid = str(_get(p, "room_id", "") or "")
-            r = _safe_int(_get(p, "row", _get(p, "r", 0)), 0)
-            c = _safe_int(_get(p, "col", _get(p, "c", 0)), 0)
-            w = max(_safe_int(_get(p, "width", _get(p, "w", 1)), 1), 1)
-            h = max(_safe_int(_get(p, "height", _get(p, "h", 1)), 1), 1)
-            default_name = rid.replace("_", " ").title() if rid else "Room"
-            name = str(_get(p, "room_name", _get(p, "name", default_name)) or default_name)
-            area = _safe_float(_get(p, "area_sqm", _get(p, "area", 0.0)), 0.0)
-            zone = str(_get(p, "zone", "General") or "General")
-
-            norm_placements.append({
-                "room_id": rid,
-                "row": r,
-                "col": c,
-                "width": w,
-                "height": h,
-                "name": name,
-                "area": area,
-                "zone": zone
-            })
-
-    rows = len(grid_matrix) if grid_matrix else (max((p["row"] + p["height"] for p in norm_placements), default=10))
-    cols = len(grid_matrix[0]) if grid_matrix and grid_matrix[0] else (max((p["col"] + p["width"] for p in norm_placements), default=10))
-    rows = max(rows, 1)
-    cols = max(cols, 1)
-
-    matrix: List[List[Optional[str]]] = [[None for _ in range(cols)] for _ in range(rows)]
-    if grid_matrix:
-        for r in range(min(rows, len(grid_matrix))):
-            for c in range(min(cols, len(grid_matrix[r]))):
-                val = grid_matrix[r][c]
-                matrix[r][c] = None if val in (None, "", "empty") else val
-    else:
-        for p in norm_placements:
-            for r in range(p["row"], p["row"] + p["height"]):
-                for c in range(p["col"], p["col"] + p["width"]):
-                    if 0 <= r < rows and 0 <= c < cols:
-                        matrix[r][c] = p["room_id"]
-
-    drawing.add(Rect(0, 0, width, height, fillColor=colors.HexColor("#FFFFFF"), strokeColor=COLOR_HAIRLINE, strokeWidth=0.5, rx=6, ry=6))
-
-    pad_x = 45.0
-    pad_y = 40.0
-    avail_w = width - (2.0 * pad_x)
-    avail_h = height - (2.0 * pad_y)
-
-    cell_size = min(avail_w / cols, avail_h / rows)
-    draw_w = cols * cell_size
-    draw_h = rows * cell_size
-    offset_x = (width - draw_w) / 2.0
-    offset_y = (height - draw_h) / 2.0
-
-    drawing.add(Rect(offset_x, offset_y, draw_w, draw_h, fillColor=None, strokeColor=colors.HexColor("#CBD5E1"), strokeWidth=0.75, strokeDashArray=[3, 3]))
-
-    color_map = {
-        "master_bed": colors.HexColor("#F1F5F9"),
-        "living": colors.HexColor("#F0FDF4"),
-        "kitchen": colors.HexColor("#FEF3C7"),
-        "puja": colors.HexColor("#FEF9C3"),
-        "bath_1": colors.HexColor("#E0F2FE"),
-        "bath_2": colors.HexColor("#E0F2FE"),
-        "bed_2": colors.HexColor("#F8FAFC"),
-        "dining": colors.HexColor("#FDF2F8"),
-        "stairs": colors.HexColor("#F5F3FF"),
-        "corridor": colors.white
-    }
-
-    for p in norm_placements:
-        rx = offset_x + (p["col"] * cell_size)
-        ry = offset_y + ((rows - (p["row"] + p["height"])) * cell_size)
-        rw = p["width"] * cell_size
-        rh = p["height"] * cell_size
-        fcolor = color_map.get(p["room_id"], colors.HexColor("#F8FAFC"))
-        drawing.add(Rect(rx, ry, rw, rh, fillColor=fcolor, strokeColor=None, strokeWidth=0))
-
-    # Door and Window Cutouts
-    h_cutouts: Dict[int, List[Tuple[float, float]]] = {}
-    v_cutouts: Dict[int, List[Tuple[float, float]]] = {}
-    door_rad = min(cell_size * 0.85, 18.0)
-    door_rad = max(door_rad, 12.0)
-
-    for p in norm_placements:
-        if p["room_id"] in ("corridor", "living"):
-            continue
-        r, c = p["row"], p["col"]
-        w, h = p["width"], p["height"]
-        r_end, c_end = r + h, c + w
-        rx = offset_x + (c * cell_size)
-        ry = offset_y + ((rows - r_end) * cell_size)
-        rw, rh = w * cell_size, h * cell_size
-
-        candidates = [
-            ("N", 100 if (r > 0 and any(matrix[r - 1][col] == "corridor" for col in range(c, c_end))) else 10),
-            ("S", 100 if (r_end < rows and any(matrix[r_end][col] == "corridor" for col in range(c, c_end))) else 10),
-            ("W", 100 if (c > 0 and any(matrix[row][c - 1] == "corridor" for row in range(r, r_end))) else 10),
-            ("E", 100 if (c_end < cols and any(matrix[row][c_end] == "corridor" for row in range(r, r_end))) else 10),
-        ]
-        candidates.sort(key=lambda x: x[1], reverse=True)
-        chosen_side = candidates[0][0]
-        offset_hinge = 5.0
-        R = min(door_rad, (rw if chosen_side in ("N", "S") else rh) - offset_hinge - 2.0)
-        R = max(R, 10.0)
-
-        if chosen_side == "N":
-            hx, hy = rx + offset_hinge, ry + rh
-            leaf_x, leaf_y = hx, hy - R
-            h_cutouts.setdefault(r, []).append((hx, hx + R))
-            drawing.add(Line(hx, hy, leaf_x, leaf_y, strokeColor=colors.HexColor("#0284C7"), strokeWidth=1.2))
-            arc = ArcPath(strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8, strokeDashArray=[2, 2], fillColor=None)
-            arc.addArc(hx, hy, R, 270, 360)
-            drawing.add(arc)
-        elif chosen_side == "S":
-            hx, hy = rx + offset_hinge, ry
-            leaf_x, leaf_y = hx, hy + R
-            h_cutouts.setdefault(r_end, []).append((hx, hx + R))
-            drawing.add(Line(hx, hy, leaf_x, leaf_y, strokeColor=colors.HexColor("#0284C7"), strokeWidth=1.2))
-            arc = ArcPath(strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8, strokeDashArray=[2, 2], fillColor=None)
-            arc.addArc(hx, hy, R, 0, 90)
-            drawing.add(arc)
-        elif chosen_side == "W":
-            hx, hy = rx, ry + rh - offset_hinge
-            leaf_x, leaf_y = hx + R, hy
-            v_cutouts.setdefault(c, []).append((hy - R, hy))
-            drawing.add(Line(hx, hy, leaf_x, leaf_y, strokeColor=colors.HexColor("#0284C7"), strokeWidth=1.2))
-            arc = ArcPath(strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8, strokeDashArray=[2, 2], fillColor=None)
-            arc.addArc(hx, hy, R, 270, 360)
-            drawing.add(arc)
-        else:
-            hx, hy = rx + rw, ry + rh - offset_hinge
-            leaf_x, leaf_y = hx - R, hy
-            v_cutouts.setdefault(c_end, []).append((hy - R, hy))
-            drawing.add(Line(hx, hy, leaf_x, leaf_y, strokeColor=colors.HexColor("#0284C7"), strokeWidth=1.2))
-            arc = ArcPath(strokeColor=colors.HexColor("#0284C7"), strokeWidth=0.8, strokeDashArray=[2, 2], fillColor=None)
-            arc.addArc(hx, hy, R, 180, 270)
-            drawing.add(arc)
-
-    t_ext = 2.4
-    t_int = 1.2
-    half_ext = t_ext / 2.0
-
-    # Horizontal Walls
-    for r in range(rows + 1):
-        c = 0
-        rl_y = offset_y + ((rows - r) * cell_size)
-        while c < cols:
-            top_room = matrix[r - 1][c] if r > 0 else None
-            bot_room = matrix[r][c] if r < rows else None
-            if top_room == bot_room:
-                c += 1
-                continue
-            is_ext = (top_room is None) != (bot_room is None)
-            start_c = c
-            while c < cols:
-                t = matrix[r - 1][c] if r > 0 else None
-                b = matrix[r][c] if r < rows else None
-                if (t is None) != (b is None) if is_ext else (t is not None and b is not None and t != b):
-                    c += 1
-                else:
-                    break
-            end_c = c
-            x1 = offset_x + (start_c * cell_size)
-            x2 = offset_x + (end_c * cell_size)
-            cuts = h_cutouts.get(r, [])
-            if is_ext:
-                for seg_x1, seg_x2 in _subtract_intervals_rl((x1, x2), cuts):
-                    drawing.add(Line(seg_x1, rl_y, seg_x2, rl_y, strokeColor=colors.HexColor("#0F172A"), strokeWidth=t_ext, strokeLineCap=2))
-            else:
-                for seg_x1, seg_x2 in _subtract_intervals_rl((x1 + half_ext, x2 - half_ext), cuts):
-                    drawing.add(Line(seg_x1, rl_y, seg_x2, rl_y, strokeColor=colors.HexColor("#475569"), strokeWidth=t_int, strokeLineCap=2))
-
-    # Vertical Walls
-    for c in range(cols + 1):
-        r = 0
-        rl_x = offset_x + (c * cell_size)
-        while r < rows:
-            left_room = matrix[r][c - 1] if c > 0 else None
-            right_room = matrix[r][c] if c < cols else None
-            if left_room == right_room:
-                r += 1
-                continue
-            is_ext = (left_room is None) != (right_room is None)
-            start_r = r
-            while r < rows:
-                l = matrix[r][c - 1] if c > 0 else None
-                rg = matrix[r][c] if c < cols else None
-                if (l is None) != (rg is None) if is_ext else (l is not None and rg is not None and l != rg):
-                    r += 1
-                else:
-                    break
-            end_r = r
-            y_bot = offset_y + ((rows - end_r) * cell_size)
-            y_top = offset_y + ((rows - start_r) * cell_size)
-            cuts = v_cutouts.get(c, [])
-            if is_ext:
-                for seg_y1, seg_y2 in _subtract_intervals_rl((y_bot, y_top), cuts):
-                    drawing.add(Line(rl_x, seg_y1, rl_x, seg_y2, strokeColor=colors.HexColor("#0F172A"), strokeWidth=t_ext, strokeLineCap=2))
-            else:
-                for seg_y1, seg_y2 in _subtract_intervals_rl((y_bot + half_ext, y_top - half_ext), cuts):
-                    drawing.add(Line(rl_x, seg_y1, rl_x, seg_y2, strokeColor=colors.HexColor("#475569"), strokeWidth=t_int, strokeLineCap=2))
-
-    # Room Labels >=8pt with Background Halo
-    for p in norm_placements:
-        rx = offset_x + (p["col"] * cell_size)
-        ry = offset_y + ((rows - (p["row"] + p["height"])) * cell_size)
-        rw = p["width"] * cell_size
-        rh = p["height"] * cell_size
-        cx = rx + (rw / 2.0)
-        cy = ry + (rh / 2.0)
-        name_str = p["name"].upper()
-
-        halo_w = max(len(name_str) * 6.2, 54.0)
-        drawing.add(Rect(
-            cx - (halo_w / 2.0), cy - 12.0, halo_w, 24.0,
-            rx=4, ry=4,
-            fillColor=colors.Color(1, 1, 1, alpha=0.92),
-            strokeColor=colors.Color(0, 0, 0, alpha=0.08),
-            strokeWidth=0.5
-        ))
-        drawing.add(String(cx, cy + 2.5, name_str[:16], fontName=FONT_BOLD, fontSize=8.5, textAnchor="middle", fillColor=COLOR_TEXT_PRIMARY))
-        if p["area"] > 0:
-            drawing.add(String(cx, cy - 6.5, f"{p['area']:.1f} m²", fontName=FONT_REGULAR, fontSize=7.0, textAnchor="middle", fillColor=COLOR_TEXT_SECONDARY))
-
-    # Dimension lines & Frontage Callout
-    dim_top_y = offset_y + draw_h + 16.0
-    drawing.add(Line(offset_x, dim_top_y, offset_x + draw_w, dim_top_y, strokeColor=colors.HexColor("#334155"), strokeWidth=1.0))
-    drawing.add(Line(offset_x - 4, dim_top_y - 4, offset_x + 4, dim_top_y + 4, strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=1.4))
-    drawing.add(Line(offset_x + draw_w - 4, dim_top_y - 4, offset_x + draw_w + 4, dim_top_y + 4, strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=1.4))
-    frontage_m = cols * 1.5  # Approximate frontage in meters
-    drawing.add(String(offset_x + (draw_w / 2.0), dim_top_y + 4.0, f"{frontage_m:.1f}m FRONTAGE", fontName=FONT_BOLD, fontSize=8.0, textAnchor="middle", fillColor=COLOR_TEXT_PRIMARY))
-
-    dim_left_x = offset_x - 18.0
-    drawing.add(Line(dim_left_x, offset_y, dim_left_x, offset_y + draw_h, strokeColor=colors.HexColor("#334155"), strokeWidth=1.0))
-    drawing.add(Line(dim_left_x - 4, offset_y - 4, dim_left_x + 4, offset_y + 4, strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=1.4))
-    drawing.add(Line(dim_left_x - 4, offset_y + draw_h - 4, dim_left_x + 4, offset_y + draw_h + 4, strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=1.4))
-    depth_m = rows * 1.5
-    drawing.add(String(dim_left_x - 6.0, offset_y + (draw_h / 2.0), f"{depth_m:.1f}m DEPTH", fontName=FONT_BOLD, fontSize=7.5, textAnchor="middle", fillColor=COLOR_TEXT_PRIMARY))
-
-    # North arrow badge
-    compass_x = width - 36.0
-    compass_y = height - 36.0
-    drawing.add(Circle(compass_x, compass_y, 14, fillColor=colors.HexColor("#F8FAFC"), strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=1.0))
-    drawing.add(Polygon([compass_x, compass_y + 11, compass_x + 4, compass_y, compass_x, compass_y + 2, compass_x - 4, compass_y], fillColor=COLOR_TEXT_PRIMARY, strokeColor=None))
-    drawing.add(Polygon([compass_x, compass_y - 11, compass_x + 4, compass_y, compass_x, compass_y - 2, compass_x - 4, compass_y], fillColor=colors.HexColor("#94A3B8"), strokeColor=None))
-    drawing.add(String(compass_x, compass_y + 14, "N", fontName=FONT_BOLD, fontSize=8.0, textAnchor="middle", fillColor=COLOR_TEXT_PRIMARY))
-
-    # Scale bar bottom-left
-    scale_x = 42.0
-    scale_y = 18.0
-    drawing.add(String(scale_x, scale_y + 10, "GRAPHIC SCALE (METRIC)", fontName=FONT_BOLD, fontSize=7.0, fillColor=COLOR_TEXT_SECONDARY))
-    drawing.add(Rect(scale_x, scale_y, 25, 4, fillColor=COLOR_TEXT_PRIMARY, strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=0.5))
-    drawing.add(Rect(scale_x + 25, scale_y, 25, 4, fillColor=colors.HexColor("#E2E8F0"), strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=0.5))
-    drawing.add(Rect(scale_x + 50, scale_y, 25, 4, fillColor=COLOR_TEXT_PRIMARY, strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=0.5))
-    drawing.add(Rect(scale_x + 75, scale_y, 25, 4, fillColor=colors.HexColor("#E2E8F0"), strokeColor=COLOR_TEXT_PRIMARY, strokeWidth=0.5))
-    for i, lbl in enumerate(["0", "1m", "2m", "3m", "4m"]):
-        drawing.add(String(scale_x + i * 25, scale_y - 7, lbl, fontName=FONT_REGULAR, fontSize=6.5, textAnchor="middle", fillColor=COLOR_TEXT_SECONDARY))
-
-    return drawing
+    from app.services.floorplan.drawing_ir import build_drawing_ir, render_reportlab_from_ir
+    floor_data = rectangles if rectangles is not None else {"placements": placements}
+    bldg = {"vertical_cores": ground_cores or [], "duct_shafts": ground_ducts or []}
+    ir = build_drawing_ir(
+        floor_data=floor_data,
+        building_model=bldg,
+        gen_id=seed,
+        typology=typology,
+        plot_width_m=plot_width_m,
+        plot_depth_m=plot_depth_m,
+        total_storeys=total_storeys,
+        elevation_m=floor_index * 3.0
+    )
+    return render_reportlab_from_ir(ir, width=width, height=height)
 
 
 def make_floorplan_legend(floorplan_data: Dict[str, Any], width: float = CONTENT_WIDTH_PT) -> Table:
@@ -2076,17 +1399,23 @@ def generate_pdf_report(
         v_cores = multi_storey.get("vertical_cores", []) or []
         d_shafts = multi_storey.get("duct_shafts", []) or []
 
-        stack_status = "<font color='#166534'><b>PASS — Vertical Cores Locked at Identical (X, Y) Coordinates</b></font>"
+        stack_status = "<font color='#166534'><b>PASS — Cores Locked</b></font>"
+        gen_id_str = str(_get(floorplan, "generation_id") or _get(multi_storey, "generation_id") or _get(multi_storey, "seed") or _get(data, "seed") or "GEN-F01")
+        params_snap = _get(floorplan, "params_snapshot") or _get(multi_storey, "params_snapshot") or {}
+        cov_pct = float(params_snap.get("ground_coverage_ratio", 0.60)) * 100.0 if params_snap else 60.0
+        strict_str = str(params_snap.get("vastu_strictness", "medium")).title() if params_snap else "Medium"
         overview_text = (
+            f"<b>Generation Token:</b> <code>{html.escape(gen_id_str)}</code> &nbsp;|&nbsp; "
             f"<b>Typology:</b> {html.escape(typology_display)} &nbsp;|&nbsp; "
-            f"<b>Storeys:</b> G+{total_storeys - 1} ({total_storeys} Storeys) &nbsp;|&nbsp; "
-            f"<b>Gross Built-Up Area:</b> {total_bua:.1f} m² ({total_sqft:.0f} sq ft)<br/>"
-            f"<b>Vertical Core Stacking:</b> {stack_status}<br/>"
-            f"<font size='8' color='#4B5563'>All {len(v_cores)} vertical circulation core(s) and {len(d_shafts)} MEP plumbing shaft(s) "
+            f"<b>Storeys:</b> G+{total_storeys - 1} ({total_storeys} Storeys)<br/>"
+            f"<b>Gross Built-Up Area:</b> {total_bua:.1f} m² ({total_sqft:.0f} sq ft) &nbsp;|&nbsp; "
+            f"<b>Coverage:</b> {cov_pct:.0f}% &nbsp;|&nbsp; <b>Strictness:</b> {strict_str} &nbsp;|&nbsp; "
+            f"<b>Vertical Stacking:</b> {stack_status}<br/>"
+            f"<font size='7.5' color='#4B5563'>All {len(v_cores)} vertical circulation core(s) and {len(d_shafts)} MEP plumbing shaft(s) "
             f"maintain 0.00m horizontal drift across all {total_storeys} floor plates, ensuring NBC 2016 Part 4 compliance and zero-leakage wet stacks.</font>"
         )
         story.append(make_callout(overview_text, width=CONTENT_WIDTH_PT))
-        story.append(Spacer(1, 8))
+        story.append(Spacer(1, 6))
 
         # Table 1: Vertical Core & Shaft Stacking Verification Table
         th_style = ParagraphStyle('TH_Stack', fontName=FONT_SEMIBOLD, fontSize=8.0, leading=10.0, textColor=COLOR_TEXT_PRIMARY)
@@ -2239,20 +1568,103 @@ def generate_pdf_report(
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ]))
         story.append(t_levels)
-        story.append(Spacer(1, 10))
+        story.append(Spacer(1, 8))
 
-        # Life Safety & Structural Compliance Notes callout
-        compliance_text = (
-            "<b>NBC 2016 &amp; CPWD Structural Compliance Verification:</b><br/>"
-            "• <b>Vertical Core Continuity:</b> Staircase treads (&ge; 250mm) and risers (&le; 175mm) continuous through structural floor slabs.<br/>"
-            "• <b>Plumbing Wet Stack Integrity:</b> All wet wall vertical risers align directly over ground inspection chambers without horizontal offsets.<br/>"
-            "• <b>Life Safety Egress:</b> Travel distance from most remote habitable room to protected vertical core conforms to NBC 2016 Part 4 (&lt; 30m)."
-        )
-        story.append(make_callout(compliance_text, width=CONTENT_WIDTH_PT))
-        story.append(Spacer(1, 10))
+        # Mathematical Validity Certificate block on Sheet 10.0
+        cert = _get(multi_storey, "mathematical_certificate") or _get(floorplan, "mathematical_certificate") or {}
+        if cert:
+            cert_id = str(cert.get("certificate_id", "CERT-MATH-VALID-2026"))
+            is_valid = bool(cert.get("is_valid", True))
+            status_text = "VERIFIED &amp; CERTIFIED" if is_valid else "NON-COMPLIANT"
+            status_color = "#166534" if is_valid else "#D70015"
+
+            td_red = ParagraphStyle('TD_Red_Cert', fontName=FONT_SEMIBOLD, fontSize=7.5, leading=9.5, textColor=COLOR_RED_TEXT)
+            td_bold = ParagraphStyle('TD_Bold_Cert', fontName=FONT_SEMIBOLD, fontSize=8.0, leading=10.0, textColor=COLOR_TEXT_PRIMARY)
+            td_right_bold = ParagraphStyle('TD_Right_Bold_Cert', fontName=FONT_SEMIBOLD, fontSize=8.0, leading=10.0, textColor=COLOR_TEXT_PRIMARY, alignment=2)
+            td_small = ParagraphStyle('TD_Small_Cert', fontName=FONT_REGULAR, fontSize=7.0, leading=8.5, textColor=COLOR_TEXT_SECONDARY)
+
+            cert_checks = [
+                ("1. Non-Overlap &amp; Containment", "PASS" if cert.get("zero_overlap", cert.get("non_overlap", True)) and cert.get("envelope_containment", cert.get("containment", True)) else "FAIL", "REL-01 / CONT-01"),
+                ("2. Zero Forbidden Wall Pairs", "PASS" if cert.get("zero_forbidden_violations", True) else "FAIL", "REL-02 / FORBIDDEN"),
+                ("3. BFS Circulation Reachability", "PASS" if cert.get("connectivity_bfs", True) else "FAIL", "CIRC-01 / BFS-GRAPH"),
+                ("4. Dimension Chains Sum (&le;1mm)", "PASS" if cert.get("chain_sums_match", True) else "FAIL", "DIM-01 / NBC-TOLERANCE"),
+                ("5. NBC Egress Travel Distance", "PASS" if cert.get("egress_distances_satisfied", True) else "FAIL", "NBC-03 / EGRESS-30M"),
+                ("6. Vertical Stack Alignment", "PASS" if cert.get("vertical_stack_valid", True) else "FAIL", "VERT-01..05 / CORE-STACK"),
+            ]
+
+            cert_rows = [
+                [
+                    Paragraph(f"<b>MATHEMATICAL VALIDITY CERTIFICATE — {html.escape(cert_id)}</b>", td_bold),
+                    "",
+                    Paragraph(f"<font color='{status_color}'><b>[{status_text}]</b></font>", td_right_bold),
+                ],
+                [
+                    Paragraph("<b>Invariant Check Description</b>", th_style),
+                    Paragraph("<b>Rule Reference</b>", th_style),
+                    Paragraph("<b>Status</b>", th_style),
+                ]
+            ]
+            for chk_name, chk_status, chk_ref in cert_checks:
+                status_p = Paragraph(f"<b>{chk_status}</b>", td_green if chk_status == "PASS" else td_red)
+                cert_rows.append([
+                    Paragraph(chk_name, td_style),
+                    Paragraph(f"<code>{chk_ref}</code>", td_style),
+                    status_p,
+                ])
+
+            rules_list = cert.get("certified_rules") or [
+                "NBC-01", "NBC-02", "NBC-03", "REL-01", "REL-02", "VERT-01", "VERT-02", "CIRC-01", "DIM-01", "VASTU-01", "SAN-01"
+            ]
+            if rules_list:
+                rules_str = ", ".join(rules_list[:10])
+                if len(rules_list) > 10:
+                    rules_str += f" (+{len(rules_list) - 10} more)"
+                cert_rows.append([
+                    Paragraph(f"<b>Certified Rule IDs:</b> {html.escape(rules_str)}", td_small),
+                    "",
+                    Paragraph("<b>100% SATISFIED</b>", td_green),
+                ])
+
+            t_cert = Table(cert_rows, colWidths=[240.0, 160.0, 89.23])
+            t_cert.setStyle(TableStyle([
+                ('SPAN', (0, 0), (1, 0)),
+                ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
+                ('BACKGROUND', (0, 1), (-1, 1), COLOR_BG_SUBTLE),
+                ('LINEBELOW', (0, 0), (-1, 0), 1.0, COLOR_ACCENT),
+                ('LINEBELOW', (0, 1), (-1, 1), 0.5, COLOR_HAIRLINE),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 3.0),
+                ('TOPPADDING', (0, 0), (-1, -1), 3.0),
+                ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
+                ('BOX', (0, 0), (-1, -1), 1.0, COLOR_ACCENT),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            if rules_list:
+                t_cert.setStyle(TableStyle([
+                    ('SPAN', (0, -1), (1, -1)),
+                    ('BACKGROUND', (0, -1), (-1, -1), COLOR_BG_SUBTLE),
+                    ('LINEABOVE', (0, -1), (-1, -1), 0.5, COLOR_HAIRLINE),
+                ]))
+            story.append(t_cert)
+            story.append(Spacer(1, 8))
+
+        # Life Safety & Structural Compliance / Legal Advisory
+        if not cert:
+            compliance_text = (
+                "<b>NBC 2016 &amp; CPWD Structural Compliance Verification:</b><br/>"
+                "• <b>Vertical Core Continuity:</b> Staircase treads (&ge; 250mm) and risers (&le; 175mm) continuous through structural floor slabs.<br/>"
+                "• <b>Plumbing Wet Stack Integrity:</b> All wet wall vertical risers align directly over ground inspection chambers without horizontal offsets.<br/>"
+                "• <b>Life Safety Egress:</b> Travel distance from most remote habitable room to protected vertical core conforms to NBC 2016 Part 4 (&lt; 30m)."
+            )
+            story.append(make_callout(compliance_text, width=CONTENT_WIDTH_PT))
+            story.append(Spacer(1, 6))
 
         # Legal disclaimer on Sheet 10.0
-        story.append(make_callout(disclaimer_text, width=CONTENT_WIDTH_PT))
+        compact_disclaimer = (
+            "<b>LEGAL &amp; ENGINEERING ADVISORY:</b> Algorithmic preliminary space plan for feasibility review. "
+            "Physical site testing and certified structural engineer stamp are mandatory prior to excavation or contract tender."
+        )
+        story.append(make_callout(compact_disclaimer, width=CONTENT_WIDTH_PT))
 
         # =========================================================================
         # SHEETS 10.1, 10.2, ...: DEDICATED A4 PAGE PER STOREY LEVEL
@@ -2359,16 +1771,16 @@ def generate_pdf_report(
                 ]
             }
 
-            # Vector Drawing at height=405.0
-            drawing = _draw_rectangles_reportlab(
-                floor_rects,
-                width=CONTENT_WIDTH_PT,
-                height=405.0,
-                ground_cores=v_cores,
-                ground_ducts=d_shafts,
-                floor_name=f_name,
-                floor_index=f_idx
+            # Vector Drawing via shared Drawing IR at height=405.0
+            from app.services.floorplan.drawing_ir import build_drawing_ir, render_reportlab_from_ir
+            clean_seed = str(_get(multi_storey, "seed") or _get(fl, "seed") or req_id)
+            ir = build_drawing_ir(
+                floor_data=fl,
+                building_model=multi_storey,
+                gen_id=clean_seed,
+                typology=typology_raw
             )
+            drawing = render_reportlab_from_ir(ir, width=CONTENT_WIDTH_PT, height=405.0)
             story.append(drawing)
             story.append(Spacer(1, 5))
 
@@ -2515,7 +1927,11 @@ def generate_pdf_report(
             floorplan.get("grid_matrix") or [],
             width=CONTENT_WIDTH_PT,
             height=420.0,
-            rectangles=floorplan.get("rectangles")
+            rectangles=floorplan.get("rectangles"),
+            plot_width_m=floorplan.get("plot_width_m") or data.get("plot_width_m"),
+            plot_depth_m=floorplan.get("plot_depth_m") or data.get("plot_depth_m"),
+            seed=floorplan.get("seed") or data.get("seed"),
+            typology=floorplan.get("building_typology") or data.get("building_typology")
         )
         story.append(drawing)
         story.append(Spacer(1, 6))

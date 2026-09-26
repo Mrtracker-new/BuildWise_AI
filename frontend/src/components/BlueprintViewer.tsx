@@ -157,14 +157,6 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
     const styleInjection = `
       <style>
         ${ghostOverlayCss}
-        text {
-          paint-order: stroke fill;
-          stroke: var(--blueprint-bg, #0E1726);
-          stroke-width: 2px;
-          stroke-linecap: round;
-          stroke-linejoin: round;
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        }
       </style>
     `;
 

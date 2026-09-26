@@ -11,6 +11,9 @@ export interface RoomOption {
   label: string;
   required: boolean;
   isCore?: boolean;
+  minAreaSqm?: number;
+  minDimensionM?: number;
+  zone?: string;
 }
 
 export interface TypologyOption {
@@ -42,53 +45,53 @@ export const TYPOLOGY_LABELS: Record<CanonicalTypology, string> = {
 
 export const TYPOLOGY_ROOM_CATALOGS: Record<CanonicalTypology, RoomOption[]> = {
   T1_SINGLE_FAMILY: [
-    { id: 'master_bed', label: 'Master Bedroom (SW)', required: true },
-    { id: 'kitchen', label: 'Kitchen (SE)', required: true },
-    { id: 'living', label: 'Living Room (N/NE)', required: true },
-    { id: 'puja', label: 'Puja Room (NE)', required: false },
-    { id: 'bath_1', label: 'Primary Bath (W)', required: true },
-    { id: 'bath_2', label: 'Common Bath (NW)', required: false },
-    { id: 'bed_2', label: 'Bedroom 2 (NW)', required: false },
-    { id: 'dining', label: 'Dining Area (W)', required: false },
-    { id: 'stairs', label: 'Staircase Core (SW/W)', required: false, isCore: true },
-    { id: 'balcony', label: 'Balcony (N/E)', required: false },
-    { id: 'study', label: 'Study / Office (NE)', required: false },
-    { id: 'utility', label: 'Utility / Store (SE)', required: false },
+    { id: 'master_bed', label: 'Master Bedroom', required: true, minAreaSqm: 9.5, minDimensionM: 2.8, zone: 'SW' },
+    { id: 'kitchen', label: 'Kitchen', required: true, minAreaSqm: 5.0, minDimensionM: 1.8, zone: 'SE' },
+    { id: 'living', label: 'Living Room', required: true, minAreaSqm: 11.0, minDimensionM: 3.0, zone: 'N' },
+    { id: 'puja', label: 'Puja Room', required: false, minAreaSqm: 3.0, minDimensionM: 1.5, zone: 'NE' },
+    { id: 'bath_1', label: 'Primary Bath', required: true, minAreaSqm: 3.0, minDimensionM: 1.5, zone: 'W' },
+    { id: 'bath_2', label: 'Common Bath', required: false, minAreaSqm: 2.5, minDimensionM: 1.2, zone: 'NW' },
+    { id: 'bed_2', label: 'Bedroom 2', required: false, minAreaSqm: 9.5, minDimensionM: 2.8, zone: 'NW' },
+    { id: 'dining', label: 'Dining Area', required: false, minAreaSqm: 7.5, minDimensionM: 2.4, zone: 'W' },
+    { id: 'stairs', label: 'Staircase Core', required: false, isCore: true, minAreaSqm: 6.0, minDimensionM: 2.0, zone: 'W' },
+    { id: 'balcony', label: 'Balcony', required: false, minAreaSqm: 3.0, minDimensionM: 1.2, zone: 'N' },
+    { id: 'study', label: 'Study / Office', required: false, minAreaSqm: 6.0, minDimensionM: 2.0, zone: 'NE' },
+    { id: 'utility', label: 'Utility / Store', required: false, minAreaSqm: 3.0, minDimensionM: 1.5, zone: 'SE' },
   ],
   T2_FAMILY_APARTMENT: [
-    { id: 'staircase_core', label: 'Common Stair Core', required: true, isCore: true },
-    { id: 'lift_core', label: 'Passenger Lift Core', required: false, isCore: true },
-    { id: 'lobby', label: 'Central Floor Lobby', required: true },
-    { id: 'apt_a_living', label: 'Unit A Living Room', required: true },
-    { id: 'apt_a_kitchen', label: 'Unit A Kitchen (SE)', required: true },
-    { id: 'apt_a_bed', label: 'Unit A Master Bed (SW)', required: true },
-    { id: 'apt_a_bath', label: 'Unit A Bathroom (W)', required: true },
-    { id: 'apt_b_living', label: 'Unit B Living Room', required: false },
-    { id: 'apt_b_kitchen', label: 'Unit B Kitchen', required: false },
-    { id: 'apt_b_bed', label: 'Unit B Bedroom', required: false },
-    { id: 'apt_b_bath', label: 'Unit B Bathroom', required: false },
-    { id: 'apt_balcony', label: 'Apartment Balcony', required: false },
+    { id: 'staircase_core', label: 'Common Stair Core', required: true, isCore: true, minAreaSqm: 7.2, minDimensionM: 2.15, zone: 'W' },
+    { id: 'lift_core', label: 'Passenger Lift Core', required: false, isCore: true, minAreaSqm: 4.5, minDimensionM: 1.8, zone: 'CENTER' },
+    { id: 'lobby', label: 'Central Floor Lobby', required: true, minAreaSqm: 8.0, minDimensionM: 1.5, zone: 'CENTER' },
+    { id: 'apt_a_living', label: 'Unit A Living Room', required: true, minAreaSqm: 12.0, minDimensionM: 3.0, zone: 'N' },
+    { id: 'apt_a_kitchen', label: 'Unit A Kitchen', required: true, minAreaSqm: 5.0, minDimensionM: 1.8, zone: 'SE' },
+    { id: 'apt_a_bed', label: 'Unit A Master Bed', required: true, minAreaSqm: 9.5, minDimensionM: 2.8, zone: 'SW' },
+    { id: 'apt_a_bath', label: 'Unit A Bathroom', required: true, minAreaSqm: 3.0, minDimensionM: 1.5, zone: 'W' },
+    { id: 'apt_b_living', label: 'Unit B Living Room', required: false, minAreaSqm: 12.0, minDimensionM: 3.0, zone: 'N' },
+    { id: 'apt_b_kitchen', label: 'Unit B Kitchen', required: false, minAreaSqm: 5.0, minDimensionM: 1.8, zone: 'SE' },
+    { id: 'apt_b_bed', label: 'Unit B Bedroom', required: false, minAreaSqm: 9.5, minDimensionM: 2.8, zone: 'SW' },
+    { id: 'apt_b_bath', label: 'Unit B Bathroom', required: false, minAreaSqm: 3.0, minDimensionM: 1.5, zone: 'W' },
+    { id: 'apt_balcony', label: 'Apartment Balcony', required: false, minAreaSqm: 3.5, minDimensionM: 1.2, zone: 'N' },
   ],
   T3_LARGE_COMPLEX: [
-    { id: 'fire_stair_1', label: 'Fire Stair Core 1', required: true, isCore: true },
-    { id: 'fire_stair_2', label: 'Fire Exit Stair 2', required: false, isCore: true },
-    { id: 'lift_bank', label: 'Dual Lift Bank & Lobby', required: true, isCore: true },
-    { id: 'corridor', label: '1.5m Spine Corridor', required: true },
-    { id: 'commercial_suite_a', label: 'Commercial Suite A', required: true },
-    { id: 'commercial_suite_b', label: 'Commercial Suite B', required: false },
-    { id: 'commercial_suite_c', label: 'Commercial Suite C', required: false },
-    { id: 'restroom_block', label: 'Public Restrooms (M/F)', required: true },
-    { id: 'mep_room', label: 'MEP & Service Room', required: false },
+    { id: 'fire_stair_1', label: 'Fire Stair Core 1', required: true, isCore: true, minAreaSqm: 9.0, minDimensionM: 2.5, zone: 'W' },
+    { id: 'fire_stair_2', label: 'Fire Exit Stair 2', required: false, isCore: true, minAreaSqm: 9.0, minDimensionM: 2.5, zone: 'E' },
+    { id: 'lift_bank', label: 'Dual Lift Bank & Lobby', required: true, isCore: true, minAreaSqm: 12.0, minDimensionM: 2.4, zone: 'CENTER' },
+    { id: 'corridor', label: '1.5m Spine Corridor', required: true, minAreaSqm: 15.0, minDimensionM: 1.5, zone: 'CENTER' },
+    { id: 'commercial_suite_a', label: 'Commercial Suite A', required: true, minAreaSqm: 25.0, minDimensionM: 4.5, zone: 'N' },
+    { id: 'commercial_suite_b', label: 'Commercial Suite B', required: false, minAreaSqm: 25.0, minDimensionM: 4.5, zone: 'S' },
+    { id: 'commercial_suite_c', label: 'Commercial Suite C', required: false, minAreaSqm: 20.0, minDimensionM: 4.0, zone: 'E' },
+    { id: 'restroom_block', label: 'Public Restrooms (M/F)', required: true, minAreaSqm: 8.0, minDimensionM: 2.0, zone: 'W' },
+    { id: 'mep_room', label: 'MEP & Service Room', required: false, minAreaSqm: 6.0, minDimensionM: 2.0, zone: 'SE' },
   ],
   T4_WAREHOUSE: [
-    { id: 'storage_bay', label: 'Clear-Span Storage Bay', required: true },
-    { id: 'loading_dock', label: 'Loading Dock Shutter', required: true },
-    { id: 'dispatch_buffer', label: 'Dispatch Buffer Area', required: true },
-    { id: 'staff_amenities', label: 'Staff Locker & WC', required: false },
-    { id: 'steel_stair', label: 'Industrial Steel Stair', required: false, isCore: true },
-    { id: 'mezzanine_office', label: 'Mezzanine Admin Office', required: false },
-    { id: 'conference_room', label: 'Conference Room', required: false },
-    { id: 'catwalk', label: 'Inspection Catwalk', required: false },
+    { id: 'storage_bay', label: 'Clear-Span Storage Bay', required: true, minAreaSqm: 120.0, minDimensionM: 9.0, zone: 'CENTER' },
+    { id: 'loading_dock', label: 'Loading Dock Shutter', required: true, minAreaSqm: 30.0, minDimensionM: 4.0, zone: 'N' },
+    { id: 'dispatch_buffer', label: 'Dispatch Buffer Area', required: true, minAreaSqm: 20.0, minDimensionM: 3.5, zone: 'N' },
+    { id: 'staff_amenities', label: 'Staff Locker & WC', required: false, minAreaSqm: 10.0, minDimensionM: 2.5, zone: 'SW' },
+    { id: 'steel_stair', label: 'Industrial Steel Stair', required: false, isCore: true, minAreaSqm: 6.0, minDimensionM: 2.0, zone: 'W' },
+    { id: 'mezzanine_office', label: 'Mezzanine Admin Office', required: false, minAreaSqm: 25.0, minDimensionM: 4.0, zone: 'N' },
+    { id: 'conference_room', label: 'Conference Room', required: false, minAreaSqm: 18.0, minDimensionM: 3.5, zone: 'NE' },
+    { id: 'catwalk', label: 'Inspection Catwalk', required: false, minAreaSqm: 12.0, minDimensionM: 1.2, zone: 'CENTER' },
   ],
 };
 
@@ -148,6 +151,55 @@ export function getTypologyConfig(raw?: string) {
     label: TYPOLOGY_LABELS[canonical],
     rooms: TYPOLOGY_ROOM_CATALOGS[canonical] || TYPOLOGY_ROOM_CATALOGS.T1_SINGLE_FAMILY,
   };
+}
+
+export function getMaxStoreys(raw?: string): number {
+  const canonical = normalizeTypology(raw);
+  switch (canonical) {
+    case 'T4_WAREHOUSE':
+      return 2;
+    case 'T1_SINGLE_FAMILY':
+      return 3;
+    case 'T2_FAMILY_APARTMENT':
+    case 'T3_LARGE_COMPLEX':
+    default:
+      return 4;
+  }
+}
+
+export function getVerticalProgram(raw?: string, storeys: number = 1): Array<{ level: number; label: string; spaceIds: string[] }> {
+  const canonical = normalizeTypology(raw);
+  const maxS = getMaxStoreys(canonical);
+  const N = Math.max(1, Math.min(maxS, storeys));
+  const res = [];
+  for (let l = 0; l < N; l++) {
+    if (canonical === 'T1_SINGLE_FAMILY') {
+      res.push({
+        level: l,
+        label: l === 0 ? 'Ground Floor (G)' : l === 1 ? 'First Floor (G+1)' : 'Second Floor (G+2)',
+        spaceIds: l === 0 ? ['living', 'kitchen', 'puja', 'bath_1', 'dining', 'stairs'] : ['master_bed', 'bed_2', 'bath_2', 'balcony', 'study'],
+      });
+    } else if (canonical === 'T2_FAMILY_APARTMENT') {
+      res.push({
+        level: l,
+        label: l === 0 ? 'Ground Floor (G) — Entry & Core' : `Typical Floor ${l} (G+${l})`,
+        spaceIds: ['staircase_core', 'lift_core', 'lobby', 'apt_a_living', 'apt_a_kitchen', 'apt_a_bed', 'apt_a_bath', 'apt_b_living', 'apt_b_kitchen', 'apt_b_bed', 'apt_b_bath'],
+      });
+    } else if (canonical === 'T3_LARGE_COMPLEX') {
+      res.push({
+        level: l,
+        label: l === 0 ? 'Ground Floor (G) — Reception' : `Office Plate ${l} (G+${l})`,
+        spaceIds: l === 0 ? ['fire_stair_1', 'lift_bank', 'corridor', 'reception', 'conference_room', 'restroom_block'] : ['fire_stair_1', 'fire_stair_2', 'lift_bank', 'corridor', 'commercial_suite_a', 'commercial_suite_b', 'restroom_block', 'mep_room'],
+      });
+    } else {
+      res.push({
+        level: l,
+        label: l === 0 ? 'Ground Floor (G) — Storage Bay' : 'Mezzanine Level (+3.60m)',
+        spaceIds: l === 0 ? ['storage_bay', 'loading_dock', 'dispatch_buffer', 'staff_amenities', 'steel_stair'] : ['steel_stair', 'mezzanine_office', 'conference_room', 'catwalk'],
+      });
+    }
+  }
+  return res;
 }
 
 export function formatStoreysChip(floors: number): string {

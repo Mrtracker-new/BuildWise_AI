@@ -100,6 +100,8 @@ class RoomRectangle(BaseModel):
     area_sqm: float
     zone: str
     vastu_compliant: bool
+    applied_rules: List[str] = Field(default_factory=list, description="Ontology rule IDs shaping this room")
+    relaxations: List[Dict[str, str]] = Field(default_factory=list, description="Rule relaxations with rationale tags")
 
 class DoorGeometry(BaseModel):
     door_id: str
@@ -194,4 +196,37 @@ class FloorPlanResponse(BaseModel):
         default=None,
         description="Structured design constraints parsed from client requirements"
     )
+    mathematical_certificate: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Mathematical validity certificate certifying non-overlap, containment, egress, adjacency, and stacking"
+    )
+    params_snapshot: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Snapshot of generation input parameters"
+    )
+    generation_id: Optional[str] = Field(
+        default=None,
+        description="Unique generation ID token"
+    )
+    seed: Optional[str] = Field(
+        default=None,
+        description="Deterministic generation seed"
+    )
+    generated_at: Optional[float] = Field(
+        default=None,
+        description="Timestamp of generation in epoch milliseconds"
+    )
+
+
+class FloorPlanParamsSnapshot(BaseModel):
+    building_typology: str
+    floors: int
+    ground_coverage_ratio: float
+    plot_width_m: float
+    plot_depth_m: float
+    required_rooms: List[str] = Field(default_factory=list)
+    vastu_strictness: str = "high"
+    built_up_area_sqft: Optional[float] = None
+    client_notes: Optional[str] = None
+    ai_provider: Optional[str] = None
 

@@ -4,7 +4,7 @@ import { Icon } from './Icon';
 import { IosSelect } from './IosSelect';
 import { ConstraintChips } from './ConstraintChips';
 import { parseRequirements, parseRequirementsClientFallback } from '../services/api';
-import { TYPOLOGY_OPTIONS } from '../services/typology';
+import { TYPOLOGY_OPTIONS, getMaxStoreys } from '../services/typology';
 
 interface AnalysisFormProps {
   request: AnalysisRequest;
@@ -71,12 +71,13 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
     { id: 'premium', label: 'Premium', rate: '₹3,500/sq ft' },
   ];
 
+  const maxAllowedStoreys = getMaxStoreys(request.building_typology);
   const floorOptions = [
     { id: 1, label: 'G (1 Level)' },
     { id: 2, label: 'G + 1 (2 Levels)' },
     { id: 3, label: 'G + 2 (3 Levels)' },
     { id: 4, label: 'G + 3 (4 Levels)' },
-  ];
+  ].filter((opt) => opt.id <= maxAllowedStoreys);
 
   const aiProviders = [
     { id: 'groq', label: 'Groq Cloud LLM (Llama 3.3 70B)' },
@@ -207,7 +208,11 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
           <IosSelect
             id="typology-select"
             value={request.building_typology}
-            onChange={(val) => onChange({ building_typology: val })}
+            onChange={(val) => {
+              const maxFloors = getMaxStoreys(val);
+              const newFloors = Math.min(request.floors, maxFloors);
+              onChange({ building_typology: val, floors: newFloors });
+            }}
             options={TYPOLOGY_OPTIONS}
             ariaLabel="Building Typology"
           />
