@@ -14,6 +14,7 @@ interface BlueprintViewerProps {
   generationTimestamp?: number;
   generationId?: string;
   storeys?: number;
+  isStale?: boolean;
 }
 
 const ROOM_METADATA: Record<string, { dotColor: string; label: string; zone: string; isCore?: boolean }> = {
@@ -77,6 +78,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   generationTimestamp,
   generationId,
   storeys,
+  isStale = false,
 }) => {
   const [mode, setMode] = useState<'cad' | 'paper'>('cad');
   const [zoom, setZoom] = useState<number>(1.0);
@@ -210,6 +212,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   };
 
   const handleDownloadSvg = () => {
+    if (isStale) return;
     if (!sanitizedSvg) return;
     const blob = new Blob([sanitizedSvg], { type: 'image/svg+xml;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -227,6 +230,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   };
 
   const handleExportPdf = async () => {
+    if (isStale) return;
     try {
       setIsExportingPdf(true);
       const payload: Record<string, any> = {
@@ -373,7 +377,17 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
             {isMultiStorey && currentFloor ? `${currentFloor.floor_name}` : 'Architectural Blueprint'}
           </h3>
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+          {isStale && (
+            <span
+              data-testid="stale-plan-chip"
+              title="Parameters have changed since this blueprint was generated. Please regenerate."
+              className="font-mono text-[11px] font-semibold text-amber-800 dark:text-amber-200 bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 rounded-[6px] whitespace-nowrap flex items-center gap-1.5 select-none animate-pulse shadow-xs"
+            >
+              <Icon name="alert-triangle" size={13} className="text-amber-600 dark:text-amber-400 shrink-0" />
+              <span>Parameters changed - regenerate</span>
+            </span>
+          )}
           <span
             data-testid="blueprint-freshness-token"
             title="Blueprint Generation Freshness Token (Generation ID | Dimensions | Levels)"
@@ -495,10 +509,18 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
             type="button"
             id="blueprint-export-dossier-btn"
             onClick={handleExportPdf}
-            disabled={isExportingPdf}
-            title="Export Multi-Page Architectural PDF Dossier (Cover Sheet 10.0 + Floor Sheets 10.1-10.N)"
+            disabled={isExportingPdf || isStale}
+            title={
+              isStale
+                ? 'Parameters changed — regenerate blueprint before exporting.'
+                : 'Export Multi-Page Architectural PDF Dossier (Cover Sheet 10.0 + Floor Sheets 10.1-10.N)'
+            }
             aria-label="Export Dossier (PDF)"
-            className="h-7 px-2.5 rounded-[8px] bg-red-600/10 hover:bg-red-600/20 active:bg-red-600/25 text-red-600 dark:text-red-400 border border-red-500/20 text-[11px] font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed select-none shadow-xs"
+            className={`h-7 px-2.5 rounded-[8px] text-[11px] font-semibold flex items-center gap-1.5 transition-all select-none shadow-xs ${
+              isStale
+                ? 'opacity-40 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)] border border-[var(--hairline)]'
+                : 'bg-red-600/10 hover:bg-red-600/20 active:bg-red-600/25 text-red-600 dark:text-red-400 border border-red-500/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
+            }`}
           >
             {isExportingPdf ? (
               <>
@@ -642,6 +664,16 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                       <h3 className="text-[16px] font-semibold text-[var(--text-1)] tracking-tight">
                         {isMultiStorey && currentFloor ? `${currentFloor.floor_name}` : 'Architectural Floor Plan'}
                       </h3>
+                      {isStale && (
+                        <span
+                          data-testid="modal-stale-plan-chip"
+                          title="Parameters changed — regenerate blueprint before exporting."
+                          className="font-mono text-[11px] font-semibold text-amber-800 dark:text-amber-200 bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 rounded-[6px] whitespace-nowrap flex items-center gap-1 select-none animate-pulse"
+                        >
+                          <Icon name="alert-triangle" size={12} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                          <span>Parameters changed - regenerate</span>
+                        </span>
+                      )}
                       <span
                         data-testid="modal-blueprint-freshness-token"
                         className="font-mono text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-2 py-0.5 rounded-[6px] whitespace-nowrap border border-[var(--accent)]/20"
@@ -751,9 +783,17 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                   <button
                     type="button"
                     onClick={handleExportPdf}
-                    disabled={isExportingPdf}
-                    title="Export Multi-Page Architectural PDF Dossier"
-                    className="h-8 px-3 rounded-[8px] bg-red-600/15 hover:bg-red-600/25 active:bg-red-600/30 text-red-600 dark:text-red-400 border border-red-500/25 text-[12px] font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed mr-2 select-none shadow-xs"
+                    disabled={isExportingPdf || isStale}
+                    title={
+                      isStale
+                        ? 'Parameters changed — regenerate blueprint before exporting.'
+                        : 'Export Multi-Page Architectural PDF Dossier'
+                    }
+                    className={`h-8 px-3 rounded-[8px] text-[12px] font-semibold flex items-center gap-1.5 transition-all mr-2 select-none shadow-xs ${
+                      isStale
+                        ? 'opacity-40 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)] border border-[var(--hairline)]'
+                        : 'bg-red-600/15 hover:bg-red-600/25 active:bg-red-600/30 text-red-600 dark:text-red-400 border border-red-500/25 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
+                    }`}
                   >
                     {isExportingPdf ? (
                       <>
@@ -772,7 +812,17 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                   <button
                     type="button"
                     onClick={handleDownloadSvg}
-                    className="px-3.5 py-1.5 rounded-[10px] bg-[var(--accent)] text-white text-[12px] font-semibold flex items-center gap-1.5 hover:brightness-95 transition-all cursor-pointer shadow-sm mr-2"
+                    disabled={isStale}
+                    title={
+                      isStale
+                        ? 'Parameters changed — regenerate blueprint before exporting.'
+                        : 'Export SVG'
+                    }
+                    className={`px-3.5 py-1.5 rounded-[10px] text-[12px] font-semibold flex items-center gap-1.5 transition-all select-none shadow-sm mr-2 ${
+                      isStale
+                        ? 'opacity-40 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)] border border-[var(--hairline)]'
+                        : 'bg-[var(--accent)] text-white hover:brightness-95 cursor-pointer'
+                    }`}
                   >
                     <Icon name="download" size={14} />
                     <span>Export SVG</span>

@@ -298,14 +298,9 @@ export const App: React.FC = () => {
 
   const handleRequestChange = (updated: Partial<AnalysisRequest>) => {
     setRequest((prev) => ({ ...prev, ...updated }));
-    if (
-      updated.floors !== undefined ||
-      updated.building_typology !== undefined ||
-      updated.built_up_area_sqft !== undefined ||
-      updated.ground_coverage_ratio !== undefined ||
-      updated.latitude !== undefined ||
-      updated.longitude !== undefined
-    ) {
+    // Do not clear floorPlanData on parameter changes (floors, typology, area, coverage)
+    // so the stale-plan guard can display the "Parameters changed - regenerate" indicator.
+    if (updated.latitude !== undefined || updated.longitude !== undefined) {
       setFloorPlanData(null);
     }
   };

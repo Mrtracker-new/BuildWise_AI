@@ -1,14 +1,32 @@
 import React, { useState, useEffect, useRef } from 'react';
-import type { FloorPlanRequest, FloorPlanResponse } from '../services/types';
+import type { FloorPlanRequest, FloorPlanResponse, AnalysisRequest, FloorPlanParamsSnapshot } from '../services/types';
 import { generateFloorPlan } from '../services/api';
 import { BlueprintViewer } from './BlueprintViewer';
 import { Icon } from './Icon';
+import { ConstraintChips } from './ConstraintChips';
+import {
+  type CanonicalTypology,
+  type RoomOption,
+  normalizeTypology,
+  getTypologyConfig,
+  formatStoreysChip,
+  formatCoverageChip,
+  isFloorPlanStale,
+  TYPOLOGY_LABELS,
+  TYPOLOGY_ROOM_CATALOGS,
+} from '../services/typology';
+
+// Re-export for compatibility
+export type { CanonicalTypology, RoomOption };
+export { normalizeTypology, TYPOLOGY_LABELS, TYPOLOGY_ROOM_CATALOGS };
 
 interface FloorPlanGeneratorCardProps {
   defaultWidthM?: number;
   defaultDepthM?: number;
   onFloorPlanGenerated?: (plan: FloorPlanResponse) => void;
   activeFloorPlan?: FloorPlanResponse | null;
+  // Shared AnalysisRequest object from App.tsx (single source of truth)
+  analysisRequest?: AnalysisRequest;
   buildingTypology?: string;
   qualityGrade?: string;
   floors?: number;
@@ -21,94 +39,12 @@ interface FloorPlanGeneratorCardProps {
   topVastuEntrances?: string[];
 }
 
-interface RoomOption {
-  id: string;
-  label: string;
-  required: boolean;
-  isCore?: boolean;
-}
-
-export type CanonicalTypology = 'T1_SINGLE_FAMILY' | 'T2_FAMILY_APARTMENT' | 'T3_LARGE_COMPLEX' | 'T4_WAREHOUSE';
-
-export const TYPOLOGY_LABELS: Record<CanonicalTypology, string> = {
-  T1_SINGLE_FAMILY: 'Single-Family Residence (T1)',
-  T2_FAMILY_APARTMENT: 'Family Apartment (T2)',
-  T3_LARGE_COMPLEX: 'Large Commercial Complex (T3)',
-  T4_WAREHOUSE: 'Warehouse & Logistics (T4)',
-};
-
-export const TYPOLOGY_ROOM_CATALOGS: Record<CanonicalTypology, RoomOption[]> = {
-  T1_SINGLE_FAMILY: [
-    { id: 'master_bed', label: 'Master Bedroom (SW)', required: true },
-    { id: 'kitchen', label: 'Kitchen (SE)', required: true },
-    { id: 'living', label: 'Living Room (N/NE)', required: true },
-    { id: 'puja', label: 'Puja Room (NE)', required: false },
-    { id: 'bath_1', label: 'Primary Bath (W)', required: true },
-    { id: 'bath_2', label: 'Common Bath (NW)', required: false },
-    { id: 'bed_2', label: 'Bedroom 2 (NW)', required: false },
-    { id: 'dining', label: 'Dining Area (W)', required: false },
-    { id: 'stairs', label: 'Staircase Core (SW/W)', required: false, isCore: true },
-    { id: 'balcony', label: 'Balcony (N/E)', required: false },
-    { id: 'study', label: 'Study / Office (NE)', required: false },
-    { id: 'utility', label: 'Utility / Store (SE)', required: false },
-  ],
-  T2_FAMILY_APARTMENT: [
-    { id: 'staircase_core', label: 'Common Stair Core', required: true, isCore: true },
-    { id: 'lift_core', label: 'Passenger Lift Core', required: false, isCore: true },
-    { id: 'lobby', label: 'Central Floor Lobby', required: true },
-    { id: 'apt_a_living', label: 'Unit A Living Room', required: true },
-    { id: 'apt_a_kitchen', label: 'Unit A Kitchen (SE)', required: true },
-    { id: 'apt_a_bed', label: 'Unit A Master Bed (SW)', required: true },
-    { id: 'apt_a_bath', label: 'Unit A Bathroom (W)', required: true },
-    { id: 'apt_b_living', label: 'Unit B Living Room', required: false },
-    { id: 'apt_b_kitchen', label: 'Unit B Kitchen', required: false },
-    { id: 'apt_b_bed', label: 'Unit B Bedroom', required: false },
-    { id: 'apt_b_bath', label: 'Unit B Bathroom', required: false },
-    { id: 'apt_balcony', label: 'Apartment Balcony', required: false },
-  ],
-  T3_LARGE_COMPLEX: [
-    { id: 'fire_stair_1', label: 'Fire Stair Core 1', required: true, isCore: true },
-    { id: 'fire_stair_2', label: 'Fire Exit Stair 2', required: false, isCore: true },
-    { id: 'lift_bank', label: 'Dual Lift Bank & Lobby', required: true, isCore: true },
-    { id: 'corridor', label: '1.5m Spine Corridor', required: true },
-    { id: 'commercial_suite_a', label: 'Commercial Suite A', required: true },
-    { id: 'commercial_suite_b', label: 'Commercial Suite B', required: false },
-    { id: 'commercial_suite_c', label: 'Commercial Suite C', required: false },
-    { id: 'restroom_block', label: 'Public Restrooms (M/F)', required: true },
-    { id: 'mep_room', label: 'MEP & Service Room', required: false },
-  ],
-  T4_WAREHOUSE: [
-    { id: 'storage_bay', label: 'Clear-Span Storage Bay', required: true },
-    { id: 'loading_dock', label: 'Loading Dock Shutter', required: true },
-    { id: 'dispatch_buffer', label: 'Dispatch Buffer Area', required: true },
-    { id: 'staff_amenities', label: 'Staff Locker & WC', required: false },
-    { id: 'steel_stair', label: 'Industrial Steel Stair', required: false, isCore: true },
-    { id: 'mezzanine_office', label: 'Mezzanine Admin Office', required: false },
-    { id: 'conference_room', label: 'Conference Room', required: false },
-    { id: 'catwalk', label: 'Inspection Catwalk', required: false },
-  ],
-};
-
-export function normalizeTypology(raw?: string): CanonicalTypology {
-  if (!raw) return 'T1_SINGLE_FAMILY';
-  const t = raw.toLowerCase().trim();
-  if (t.includes('t2') || t.includes('apartment') || t.includes('multi') || t.includes('duplex') || t.includes('builder_floor')) {
-    return 'T2_FAMILY_APARTMENT';
-  }
-  if (t.includes('t3') || t.includes('complex') || t.includes('commercial') || t.includes('office') || t.includes('mixed')) {
-    return 'T3_LARGE_COMPLEX';
-  }
-  if (t.includes('t4') || t.includes('warehouse') || t.includes('industrial') || t.includes('logistics') || t.includes('shed') || t.includes('factory')) {
-    return 'T4_WAREHOUSE';
-  }
-  return 'T1_SINGLE_FAMILY';
-}
-
 export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   defaultWidthM = 10.0,
   defaultDepthM = 12.0,
   onFloorPlanGenerated,
   activeFloorPlan = null,
+  analysisRequest,
   buildingTypology,
   qualityGrade,
   floors = 1,
@@ -120,13 +56,22 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   prevailingWindDirectionDegrees,
   topVastuEntrances,
 }) => {
+  // Inherit parameters directly from shared request (single source of truth)
+  // Delete card's local copies of storeys/typology/coverage so disagreement is impossible.
+  const activeFloors = analysisRequest?.floors ?? floors ?? 1;
+  const activeTypology = analysisRequest?.building_typology ?? buildingTypology ?? 'residential_single';
+  const activeCoverage = analysisRequest?.ground_coverage_ratio ?? groundCoverageRatio ?? 0.60;
+  const activeNotes = analysisRequest?.client_requirements ?? clientNotes;
+  const activeGrade = analysisRequest?.quality_grade ?? qualityGrade ?? 'standard';
+  const activeAreaSqft = analysisRequest?.built_up_area_sqft ?? builtUpAreaSqft;
+  const activeProvider = analysisRequest?.ai_provider ?? aiProvider;
+  const activeConstraints = analysisRequest?.extracted_constraints;
+
   const [userWidth, setUserWidth] = useState<number | null>(null);
   const [userDepth, setUserDepth] = useState<number | null>(null);
-  const [userFloors, setUserFloors] = useState<number | null>(null);
 
   const plotWidth = userWidth ?? defaultWidthM;
   const plotDepth = userDepth ?? defaultDepthM;
-  const activeFloors = userFloors ?? floors ?? 1;
 
   // Sync user dimensions when default props change
   useEffect(() => {
@@ -134,15 +79,11 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
     setUserDepth(null);
   }, [defaultWidthM, defaultDepthM]);
 
-  // Sync user floors when default floors prop changes
-  useEffect(() => {
-    setUserFloors(null);
-  }, [floors]);
+  const typologyConfig = getTypologyConfig(activeTypology);
+  const canonicalTypology = typologyConfig.canonical;
+  const availableRooms = typologyConfig.rooms;
 
-  const canonicalTypology = normalizeTypology(buildingTypology);
-  const availableRooms = TYPOLOGY_ROOM_CATALOGS[canonicalTypology] || TYPOLOGY_ROOM_CATALOGS.T1_SINGLE_FAMILY;
-
-  // Initialize selected rooms
+  // Initialize selected rooms based on inherited typology and storeys
   const [selectedRooms, setSelectedRooms] = useState<string[]>(() => {
     return availableRooms
       .filter((r) => r.required || (activeFloors >= 2 && r.isCore))
@@ -152,7 +93,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   const prevTypologyRef = useRef<string>(canonicalTypology);
   const prevFloorsRef = useRef<number>(activeFloors);
 
-  // Dynamically adapt selected rooms when Typology or Floors changes
+  // Live propagation: dynamically adapt selected rooms when inherited Typology or Floors changes
   useEffect(() => {
     const isTypologyChanged = prevTypologyRef.current !== canonicalTypology;
     const isFloorsChanged = prevFloorsRef.current !== activeFloors;
@@ -202,6 +143,27 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
     }
   }, [activeFloorPlan]);
 
+  // STALE-PLAN GUARD: Check if active parameters differ from snapshot in current plan
+  const isPlanStale = Boolean(
+    floorPlan &&
+    (floorPlan.params_snapshot
+      ? isFloorPlanStale(floorPlan.params_snapshot, {
+          building_typology: activeTypology,
+          floors: activeFloors,
+          ground_coverage_ratio: activeCoverage,
+          plot_width_m: Number(plotWidth),
+          plot_depth_m: Number(plotDepth),
+          required_rooms: selectedRooms,
+          vastu_strictness: strictness,
+          built_up_area_sqft: activeAreaSqft,
+          client_notes: activeNotes,
+        })
+      : (
+        (floorPlan.multi_storey && floorPlan.multi_storey.total_storeys !== activeFloors) ||
+        (floorPlan.multi_storey && normalizeTypology(floorPlan.multi_storey.building_typology) !== canonicalTypology)
+      ))
+  );
+
   const toggleRoom = (roomId: string) => {
     setSelectedRooms((prev) =>
       prev.includes(roomId)
@@ -219,31 +181,48 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
     setIsGenerating(true);
     setErrorMessage(null);
 
+    const currentWidth = Math.max(6.0, Math.min(60.0, Number(plotWidth) || 10.0));
+    const currentDepth = Math.max(6.0, Math.min(60.0, Number(plotDepth) || 12.0));
+
     const req: FloorPlanRequest = {
-      plot_width_m: Math.max(6.0, Math.min(60.0, Number(plotWidth) || 10.0)),
-      plot_depth_m: Math.max(6.0, Math.min(60.0, Number(plotDepth) || 12.0)),
+      plot_width_m: currentWidth,
+      plot_depth_m: currentDepth,
       required_rooms: selectedRooms,
       vastu_strictness: strictness,
-      building_typology: buildingTypology,
-      quality_grade: qualityGrade,
+      building_typology: activeTypology,
+      quality_grade: activeGrade,
       floors: activeFloors,
-      built_up_area_sqft: builtUpAreaSqft,
-      ground_coverage_ratio: groundCoverageRatio,
-      client_notes: clientNotes,
-      ai_provider: aiProvider,
+      built_up_area_sqft: activeAreaSqft,
+      ground_coverage_ratio: activeCoverage,
+      client_notes: activeNotes,
+      ai_provider: activeProvider,
       solar_axis_degrees: solarAxisDegrees,
       prevailing_wind_direction_degrees: prevailingWindDirectionDegrees,
       top_vastu_entrances: topVastuEntrances,
+      extracted_constraints: activeConstraints,
       bypass_cache: true,
     };
 
     try {
       const resp = await generateFloorPlan(req);
       const genId = 'GEN-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+      const snapshot: FloorPlanParamsSnapshot = {
+        building_typology: activeTypology,
+        floors: activeFloors,
+        ground_coverage_ratio: activeCoverage,
+        plot_width_m: currentWidth,
+        plot_depth_m: currentDepth,
+        required_rooms: [...selectedRooms].sort(),
+        vastu_strictness: strictness,
+        built_up_area_sqft: activeAreaSqft,
+        client_notes: (activeNotes || '').trim(),
+        ai_provider: activeProvider,
+      };
       const freshPlan: FloorPlanResponse = {
         ...resp,
         generation_id: genId,
         generated_at: Date.now(),
+        params_snapshot: snapshot,
       };
       setLocalFloorPlan(freshPlan);
       if (onFloorPlanGenerated) {
@@ -258,27 +237,62 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
 
   return (
     <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-3.5 w-full min-w-0">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 min-w-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <Icon name="blueprint" size={15} className="text-[var(--text-2)] shrink-0" />
-          <h3 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight">
-            Generative Floor Plan Engine
-          </h3>
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-            activeFloors > 1
-              ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/25'
-              : 'bg-[var(--fill)] text-[var(--text-2)] border-[var(--hairline)]'
-          }`}>
-            {activeFloors === 1 ? '1 STOREY (G)' : `${activeFloors} STOREYS (G+${activeFloors - 1})`}
-          </span>
+      {/* Header with Title and READ-ONLY Inherited Parameter Summary Chips */}
+      <div className="border-b border-[var(--hairline)] pb-2.5 space-y-2 min-w-0">
+        <div className="flex items-center justify-between gap-2 min-w-0 flex-wrap">
+          <div className="flex items-center gap-2 min-w-0">
+            <Icon name="blueprint" size={15} className="text-[var(--text-2)] shrink-0" />
+            <h3 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight">
+              Generative Floor Plan Engine
+            </h3>
+          </div>
           {floorPlan && (
             <span className="px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-[var(--fill)] text-[var(--text-1)] capitalize shrink-0">
               {floorPlan.status}
             </span>
           )}
+        </div>
+
+        {/* READ-ONLY Parameter Inheritance Summary Chips */}
+        <div className="flex items-center justify-between gap-2 flex-wrap text-[11px]">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {/* Typology Chip */}
+            <span
+              data-testid="inherited-typology-chip"
+              title={`Inherited from Project Parameters: ${typologyConfig.label}`}
+              className="px-2.5 py-1 rounded-[6px] font-mono font-semibold bg-[var(--fill)] text-[var(--text-1)] border border-[var(--hairline)] tracking-tight select-none"
+            >
+              {typologyConfig.shortCode}
+            </span>
+
+            {/* Storeys Chip */}
+            <span
+              data-testid="inherited-storeys-chip"
+              title={`Inherited from Project Parameters: ${activeFloors} level(s)`}
+              className={`px-2.5 py-1 rounded-[6px] font-mono font-semibold select-none border ${
+                activeFloors > 1
+                  ? 'bg-purple-500/15 text-purple-700 dark:text-purple-300 border-purple-500/30'
+                  : 'bg-[var(--fill)] text-[var(--text-1)] border-[var(--hairline)]'
+              }`}
+            >
+              {formatStoreysChip(activeFloors)}
+            </span>
+
+            {/* Coverage Chip */}
+            <span
+              data-testid="inherited-coverage-chip"
+              title={`Inherited from Project Parameters: ${Math.round(activeCoverage * 100)}% Ground Coverage Ratio`}
+              className="px-2.5 py-1 rounded-[6px] font-mono font-semibold bg-[var(--fill)] text-[var(--text-1)] border border-[var(--hairline)] tracking-tight select-none"
+            >
+              {formatCoverageChip(activeCoverage)}
+            </span>
+          </div>
+
+          {/* Subtle Edit Hint */}
+          <span className="text-[11px] text-[var(--text-3)] italic flex items-center gap-1 select-none">
+            <Icon name="info" size={11} className="shrink-0 opacity-70" />
+            <span>Edit in Project Parameters</span>
+          </span>
         </div>
       </div>
 
@@ -290,8 +304,8 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         </div>
       )}
 
-      {/* Dimensions, Storeys & Strictness */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-[12px]">
+      {/* Drafting-Specific Controls: Plot Dimensions (m) & Vastu Strictness */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[12px]">
         {/* Plot Dimensions */}
         <div className="space-y-1 min-w-0">
           <label className="text-[12px] font-normal text-[var(--text-3)] block">
@@ -323,35 +337,6 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
               />
             </div>
           </div>
-        </div>
-
-        {/* Storeys / Levels Selector */}
-        <div className="space-y-1 min-w-0">
-          <label className="text-[12px] font-normal text-[var(--text-3)] block">
-            Storeys (Levels)
-          </label>
-          <div className="bg-[var(--fill)] rounded-[10px] p-[2px] grid grid-cols-4 gap-1">
-            {[1, 2, 3, 4].map((f) => (
-              <button
-                key={f}
-                type="button"
-                onClick={() => setUserFloors(f)}
-                className={`py-1 px-1 rounded-[8px] text-[11px] font-medium text-center transition-all ${
-                  activeFloors === f
-                    ? 'bg-[var(--segmented-active-bg)] shadow-[var(--segmented-active-shadow)] font-semibold'
-                    : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
-                }`}
-                style={{
-                  color: activeFloors === f ? 'var(--segmented-active-label)' : 'var(--text-2)',
-                }}
-              >
-                {f === 1 ? '1 (G)' : f === 2 ? '2 (G+1)' : f === 3 ? '3 (G+2)' : '4 (G+3)'}
-              </button>
-            ))}
-          </div>
-          <span className="text-[11px] text-[var(--text-3)] block leading-tight">
-            {activeFloors === 1 ? 'Single level ground plan.' : `${activeFloors} storeys with vertical core & MEP stack.`}
-          </span>
         </div>
 
         {/* Vastu Strictness: iOS Segmented Control */}
@@ -388,19 +373,30 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         </div>
       </div>
 
+      {/* Inherited Client Constraint Chips (if present) */}
+      {activeConstraints && (
+        <div className="space-y-1 min-w-0 pt-0.5">
+          <div className="flex items-center justify-between text-[11px] text-[var(--text-3)]">
+            <span className="font-semibold uppercase tracking-wider">Active Client Constraints</span>
+            <span>Inherited from Project Parameters</span>
+          </div>
+          <ConstraintChips constraints={activeConstraints} onChange={() => {}} />
+        </div>
+      )}
+
       {/* Dynamic Typology Room Selection */}
       <div className="space-y-1.5 min-w-0">
         <div className="flex items-center justify-between text-[12px] text-[var(--text-3)] flex-wrap gap-1">
           <div className="flex items-center gap-1.5 min-w-0">
             <span className="font-semibold text-[var(--text-1)] truncate">
-              {TYPOLOGY_LABELS[canonicalTypology]}
+              {typologyConfig.label}
             </span>
             <span className="text-[11px] font-mono">
               ({selectedRooms.length} selected)
             </span>
           </div>
           <div className="flex items-center gap-1.5 text-[11px]">
-            {floors && floors > 1 ? (
+            {activeFloors > 1 ? (
               <span className="text-amber-600 dark:text-amber-400 font-medium">
                 Vertical cores anchor-locked
               </span>
@@ -474,8 +470,8 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
           <>
             <Icon name="blueprint" size={14} />
             <span>
-              {floors && floors > 1
-                ? `Generate ${floors}-Storey Architectural Blueprint`
+              {activeFloors > 1
+                ? `Generate ${activeFloors}-Storey Architectural Blueprint`
                 : 'Generate Architectural Blueprint'}
             </span>
           </>
@@ -699,7 +695,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
             </div>
           </div>
 
-          {/* Blueprint SVG Viewer */}
+          {/* Blueprint SVG Viewer with Stale Plan Guard */}
           <BlueprintViewer
             svgString={floorPlan.svg_blueprint}
             svgPaperString={floorPlan.svg_blueprint_paper}
@@ -710,10 +706,10 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
             generationTimestamp={floorPlan.generated_at}
             generationId={floorPlan.generation_id}
             storeys={activeFloors}
+            isStale={isPlanStale}
           />
         </div>
       )}
     </div>
   );
 };
-

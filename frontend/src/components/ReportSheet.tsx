@@ -515,6 +515,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                         }
                         activeFloorPlan={floorPlanData}
                         onFloorPlanGenerated={onFloorPlanGenerated}
+                        analysisRequest={analysisRequest}
                         buildingTypology={analysisRequest?.building_typology}
                         qualityGrade={analysisRequest?.quality_grade}
                         floors={analysisRequest?.floors}

@@ -586,6 +586,19 @@ export interface FloorPlanMetrics {
   circulation_status?: string;
 }
 
+export interface FloorPlanParamsSnapshot {
+  building_typology: string;
+  floors: number;
+  ground_coverage_ratio: number;
+  plot_width_m: number;
+  plot_depth_m: number;
+  required_rooms: string[];
+  vastu_strictness: string;
+  built_up_area_sqft?: number;
+  client_notes?: string;
+  ai_provider?: string;
+}
+
 export interface FloorPlanResponse {
   status: 'optimal' | 'compromise' | 'failed';
   grid_matrix: string[][];
@@ -608,6 +621,7 @@ export interface FloorPlanResponse {
   client_constraints?: ExtractedClientConstraints;
   generated_at?: number;
   generation_id?: string;
+  params_snapshot?: FloorPlanParamsSnapshot;
 }
 
 export interface ReportRequestPayload {

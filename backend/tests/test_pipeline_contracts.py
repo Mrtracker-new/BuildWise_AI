@@ -282,3 +282,66 @@ def test_pdf_dossier_generation_with_schedules():
     pdf_bytes = pdf_buf.getvalue()
     assert len(pdf_bytes) > 5000, "PDF stream is too small or empty"
     assert pdf_bytes.startswith(b"%PDF-"), "Generated stream is not a valid PDF"
+
+
+# =============================================================================
+# 7. SINGLE SOURCE OF TRUTH: SIDEBAR TYPOLOGY & STOREYS COMBINATIONS (4x4)
+# =============================================================================
+
+@pytest.mark.parametrize("sidebar_typology,expected_canonical", [
+    ("residential_single", "T1_SINGLE_FAMILY"),
+    ("residential_multi", "T2_FAMILY_APARTMENT"),
+    ("commercial", "T3_LARGE_COMPLEX"),
+    ("industrial", "T4_WAREHOUSE"),
+])
+@pytest.mark.parametrize("sidebar_storeys", [1, 2, 3, 4])
+def test_sidebar_single_source_contract_all_combinations(sidebar_typology, expected_canonical, sidebar_storeys):
+    """
+    Contract test: verifies that payload.floors and payload.building_typology
+    always equal sidebar values for all 16 combinations (4 typologies x 4 storeys),
+    and that the multi-floor engine properly maps and fulfills them.
+    """
+    from app.services.floorplan.typologies import normalize_typology
+
+    req = FloorPlanRequest(
+        plot_width_m=14.0,
+        plot_depth_m=12.0,
+        building_typology=sidebar_typology,
+        floors=sidebar_storeys,
+        ground_coverage_ratio=0.60,
+        vastu_strictness="medium",
+        ai_provider="mock",
+    )
+
+    # Invariant 1: Request payload directly reflects sidebar input
+    assert req.floors == sidebar_storeys, f"Expected floors {sidebar_storeys}, got {req.floors}"
+    assert req.building_typology == sidebar_typology, f"Expected typology {sidebar_typology}, got {req.building_typology}"
+
+    # Invariant 2: Typology normalizer correctly resolves canonical model key
+    resolved_canonical = normalize_typology(req.building_typology)
+    assert resolved_canonical == expected_canonical, (
+        f"Typology mapping mismatch: {sidebar_typology} resolved to {resolved_canonical}, expected {expected_canonical}"
+    )
+
+    # Invariant 3: Solver executes and produces the exact number of levels
+    res = generate_floor_plan(req)
+    assert res.status in ("optimal", "compromise"), f"Generation failed for {sidebar_typology} {sidebar_storeys} storeys: {res.warnings}"
+
+    if sidebar_storeys > 1:
+        assert res.multi_storey is not None, f"MultiStorey model missing for {sidebar_storeys} storeys"
+        assert res.multi_storey.total_storeys == sidebar_storeys, (
+            f"Expected {sidebar_storeys} total_storeys, got {res.multi_storey.total_storeys}"
+        )
+        assert len(res.multi_storey.floors) == sidebar_storeys, (
+            f"Expected {sidebar_storeys} floor slices, got {len(res.multi_storey.floors)}"
+        )
+        assert res.multi_storey.building_typology == sidebar_typology, (
+            f"Expected building_typology {sidebar_typology}, got {res.multi_storey.building_typology}"
+        )
+        assert normalize_typology(res.multi_storey.building_typology) == expected_canonical, (
+            f"Expected canonical typology {expected_canonical}, got {normalize_typology(res.multi_storey.building_typology)}"
+        )
+    else:
+        # Single level
+        assert len(res.placements) >= 3, "Single level must have at least 3 room placements"
+

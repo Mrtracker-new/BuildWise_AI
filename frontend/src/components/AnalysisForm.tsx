@@ -4,6 +4,7 @@ import { Icon } from './Icon';
 import { IosSelect } from './IosSelect';
 import { ConstraintChips } from './ConstraintChips';
 import { parseRequirements, parseRequirementsClientFallback } from '../services/api';
+import { TYPOLOGY_OPTIONS } from '../services/typology';
 
 interface AnalysisFormProps {
   request: AnalysisRequest;
@@ -68,13 +69,6 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
     { id: 'basic', label: 'Basic', rate: '₹1,500/sq ft' },
     { id: 'standard', label: 'Standard', rate: '₹2,200/sq ft' },
     { id: 'premium', label: 'Premium', rate: '₹3,500/sq ft' },
-  ];
-
-  const typologies = [
-    { id: 'residential_single', label: 'Residential (Single-Family)' },
-    { id: 'residential_multi', label: 'Residential (Apartments/Multi-Family)' },
-    { id: 'commercial', label: 'Commercial Office / Retail' },
-    { id: 'industrial', label: 'Light Industrial / Warehouse' },
   ];
 
   const floorOptions = [
@@ -214,7 +208,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
             id="typology-select"
             value={request.building_typology}
             onChange={(val) => onChange({ building_typology: val })}
-            options={typologies}
+            options={TYPOLOGY_OPTIONS}
             ariaLabel="Building Typology"
           />
         </div>
