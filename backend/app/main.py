@@ -46,6 +46,7 @@ from app.services import (
 )
 
 from app.ai import get_ai_adapter, generate_room_program
+from app.services.geocode_service import geocode_search
 
 app = FastAPI(
     title="BuildWise AI API",
@@ -120,6 +121,22 @@ async def health_check():
         ai_adapters_available=["mock", "groq", "gemini", "ollama"],
         active_default_ai=settings.DEFAULT_AI_PROVIDER
     )
+
+@app.get("/api/geocode")
+async def geocode_endpoint(q: str = Query(..., min_length=1, description="Free-text location search query")):
+    """
+    Forward-geocoding proxy: searches Nominatim (primary) with Photon fallback.
+
+    Policy:
+    - Server-side 1 req/s throttle for Nominatim (OSM usage policy).
+    - User-Agent identifies BuildWise.
+    - Results cached server-side (LRU, 24h TTL) to minimise upstream calls.
+    - Client should additionally cache in localStorage (24h).
+    - Attribution: Nominatim / OpenStreetMap contributors; Photon / Komoot.
+    - No API key, no paid service.
+    """
+    result = await geocode_search(q.strip())
+    return result
 
 @app.post("/api/analyze", response_model=AnalysisResponse)
 async def analyze_site(req: AnalysisRequest, request: Request):

@@ -40,7 +40,8 @@ export type IconName =
   | 'arrow-up-right'
   | 'printer'
   | 'shield'
-  | 'sparkles';
+  | 'sparkles'
+  | 'search';
 
 interface IconProps {
   name: IconName;
@@ -384,6 +385,13 @@ export const Icon: React.FC<IconProps> = ({
           <path d="M19 17v4" />
           <path d="M3 5h4" />
           <path d="M17 19h4" />
+        </svg>
+      );
+    case 'search':
+      return (
+        <svg {...commonProps}>
+          <circle cx="11" cy="11" r="8" />
+          <line x1="21" y1="21" x2="16.65" y2="16.65" />
         </svg>
       );
     default:
