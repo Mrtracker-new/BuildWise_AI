@@ -21,6 +21,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Any, Literal
+from shapely.geometry import box as shapely_box
+from shapely.ops import unary_union
 
 
 # =============================================================================
@@ -333,6 +335,8 @@ class WallSegment:
     is_load_bearing: bool = False
     adjacent_rooms: List[str] = field(default_factory=list)
     openings: List[HostedOpening] = field(default_factory=list)
+    is_street_facade: bool = False
+    label: Optional[str] = None
 
     @property
     def length_m(self) -> float:
@@ -380,6 +384,8 @@ class WallSegment:
             "is_load_bearing": self.is_load_bearing,
             "adjacent_rooms": list(self.adjacent_rooms),
             "openings": [op.to_dict() for op in self.openings],
+            "is_street_facade": self.is_street_facade,
+            "label": self.label,
         }
 
 
@@ -720,55 +726,111 @@ def build_constructible_wall_graph(
     # 4. Generate First-Class Wall Segments
     walls: Dict[str, WallSegment] = {}
 
-    # (a) Four Exterior Boundary Walls (W1 = 230mm)
-    walls["WAL_EXT_N"] = WallSegment(
-        wall_id="WAL_EXT_N",
-        wall_type="W1",
-        thickness_m=W1_EXTERIOR_THICKNESS_M,
-        x1=0.0,
-        y1=0.0,
-        x2=env_w,
-        y2=0.0,
-        orientation="horizontal",
-        is_exterior=True,
-        is_load_bearing=True,
-    )
-    walls["WAL_EXT_S"] = WallSegment(
-        wall_id="WAL_EXT_S",
-        wall_type="W1",
-        thickness_m=W1_EXTERIOR_THICKNESS_M,
-        x1=0.0,
-        y1=env_d,
-        x2=env_w,
-        y2=env_d,
-        orientation="horizontal",
-        is_exterior=True,
-        is_load_bearing=True,
-    )
-    walls["WAL_EXT_W"] = WallSegment(
-        wall_id="WAL_EXT_W",
-        wall_type="W1",
-        thickness_m=W1_EXTERIOR_THICKNESS_M,
-        x1=0.0,
-        y1=0.0,
-        x2=0.0,
-        y2=env_d,
-        orientation="vertical",
-        is_exterior=True,
-        is_load_bearing=True,
-    )
-    walls["WAL_EXT_E"] = WallSegment(
-        wall_id="WAL_EXT_E",
-        wall_type="W1",
-        thickness_m=W1_EXTERIOR_THICKNESS_M,
-        x1=env_w,
-        y1=0.0,
-        x2=env_w,
-        y2=env_d,
-        orientation="vertical",
-        is_exterior=True,
-        is_load_bearing=True,
-    )
+    # (a) Exterior Boundary Walls (W1 = 230mm)
+    # For multi-wing / L-shapes: construct stepped boundary from union of wings and corridors
+    wings_in = envelope.get("wings") if isinstance(envelope, dict) else getattr(envelope, "wings", None)
+    if wings_in and len(wings_in) > 1:
+        e_x = float(envelope.get("x", 0.0) if isinstance(envelope, dict) else getattr(envelope, "x", 0.0))
+        e_y = float(envelope.get("y", 0.0) if isinstance(envelope, dict) else getattr(envelope, "y", 0.0))
+        wing_boxes = []
+        for w in wings_in:
+            wx = float(getattr(w, "x", 0.0)) - e_x
+            wy = float(getattr(w, "y", 0.0)) - e_y
+            ww = float(getattr(w, "width_m", 0.0))
+            wd = float(getattr(w, "depth_m", 0.0))
+            wing_boxes.append(shapely_box(round(wx, 3), round(wy, 3), round(wx + ww, 3), round(wy + wd, 3)))
+
+        corridors_in = envelope.get("corridors") if isinstance(envelope, dict) else getattr(envelope, "corridors", None)
+        corr_boxes = []
+        if corridors_in:
+            for c in corridors_in:
+                cx = float(getattr(c, "x", 0.0)) - e_x
+                cy = float(getattr(c, "y", 0.0)) - e_y
+                cw = float(getattr(c, "width_m", 0.0))
+                cd = float(getattr(c, "depth_m", 0.0))
+                corr_boxes.append(shapely_box(round(cx, 3), round(cy, 3), round(cx + cw, 3), round(cy + cd, 3)))
+
+        union_poly = unary_union(wing_boxes + corr_boxes)
+        ext_coords = list(union_poly.exterior.coords) if hasattr(union_poly, "exterior") else []
+        for i in range(len(ext_coords) - 1):
+            p1 = ext_coords[i]
+            p2 = ext_coords[i + 1]
+            seg_dy = abs(p2[1] - p1[1])
+            orient = "horizontal" if seg_dy < 1e-4 else "vertical"
+            wall_key = f"WAL_EXT_{i+1}"
+
+            is_facade = False
+            facade_label = None
+            if abs(p1[1]) < 0.05 and abs(p2[1]) < 0.05 and orient == "horizontal":
+                is_facade = True
+                facade_label = "STREET FACADE"
+
+            walls[wall_key] = WallSegment(
+                wall_id=wall_key,
+                wall_type="W1",
+                thickness_m=W1_EXTERIOR_THICKNESS_M,
+                x1=round(p1[0], 3),
+                y1=round(p1[1], 3),
+                x2=round(p2[0], 3),
+                y2=round(p2[1], 3),
+                orientation=orient,
+                is_exterior=True,
+                is_load_bearing=True,
+                is_street_facade=is_facade,
+                label=facade_label,
+            )
+    else:
+        # Four Exterior Boundary Walls (W1 = 230mm) for single rectangular envelope
+        walls["WAL_EXT_N"] = WallSegment(
+            wall_id="WAL_EXT_N",
+            wall_type="W1",
+            thickness_m=W1_EXTERIOR_THICKNESS_M,
+            x1=0.0,
+            y1=0.0,
+            x2=env_w,
+            y2=0.0,
+            orientation="horizontal",
+            is_exterior=True,
+            is_load_bearing=True,
+            is_street_facade=True,
+            label="STREET FACADE",
+        )
+        walls["WAL_EXT_S"] = WallSegment(
+            wall_id="WAL_EXT_S",
+            wall_type="W1",
+            thickness_m=W1_EXTERIOR_THICKNESS_M,
+            x1=0.0,
+            y1=env_d,
+            x2=env_w,
+            y2=env_d,
+            orientation="horizontal",
+            is_exterior=True,
+            is_load_bearing=True,
+        )
+        walls["WAL_EXT_W"] = WallSegment(
+            wall_id="WAL_EXT_W",
+            wall_type="W1",
+            thickness_m=W1_EXTERIOR_THICKNESS_M,
+            x1=0.0,
+            y1=0.0,
+            x2=0.0,
+            y2=env_d,
+            orientation="vertical",
+            is_exterior=True,
+            is_load_bearing=True,
+        )
+        walls["WAL_EXT_E"] = WallSegment(
+            wall_id="WAL_EXT_E",
+            wall_type="W1",
+            thickness_m=W1_EXTERIOR_THICKNESS_M,
+            x1=env_w,
+            y1=0.0,
+            x2=env_w,
+            y2=env_d,
+            orientation="vertical",
+            is_exterior=True,
+            is_load_bearing=True,
+        )
 
     # (b) Internal Partition Walls (W2 = 115mm, W3 = 75mm)
     # Trace shared boundaries between adjacent rooms
@@ -1015,24 +1077,72 @@ def build_constructible_wall_graph(
     dim_chains_x: List[DimensionChain] = []
     dim_chains_y: List[DimensionChain] = []
 
-    # Overall Chain along X
-    overall_x_seg = DimensionSegment(
-        label=f"{int(round(env_w * 1000.0))}",
-        length_mm=int(round(env_w * 1000.0)),
-        length_m=env_w,
-        start_m=0.0,
-        end_m=env_w,
-    )
-    chain_x_overall = DimensionChain(
-        chain_id=f"DIM_X_OVERALL_F{floor_index}",
-        level="overall",
-        axis="X",
-        side="top",
-        segments=[overall_x_seg],
-        total_mm=int(round(env_w * 1000.0)),
-        total_m=env_w,
-        offset_distance_m=2.20,
-    )
+    # Overall Chain along X (Stepped for multi-wing footprints)
+    wings_in = envelope.get("wings") if isinstance(envelope, dict) else getattr(envelope, "wings", None)
+    if wings_in and len(wings_in) > 1:
+        w_a = wings_in[0]
+        w_b = wings_in[1]
+        e_x = float(envelope.get("x", 0.0) if isinstance(envelope, dict) else getattr(envelope, "x", 0.0))
+        w_a_rel_x = round(float(getattr(w_a, "x", 0.0)) - e_x, 3)
+        w_a_w = round(float(getattr(w_a, "width_m", 0.0)), 3)
+        w_b_rel_x = round(float(getattr(w_b, "x", 0.0)) - e_x, 3)
+        w_b_w = round(float(getattr(w_b, "width_m", 0.0)), 3)
+
+        x_segs: List[DimensionSegment] = []
+        pts_x = sorted(list(set([0.0, max(0.0, w_a_rel_x), min(env_w, w_a_rel_x + w_a_w), max(0.0, w_b_rel_x), min(env_w, w_b_rel_x + w_b_w), env_w])))
+        for i in range(len(pts_x) - 1):
+            p1 = pts_x[i]
+            p2 = pts_x[i + 1]
+            seg_len = round(p2 - p1, 3)
+            if seg_len > 0.005:
+                seg_mm = int(round(seg_len * 1000.0))
+                lbl = f"{seg_mm}"
+                if abs(p1 - w_a_rel_x) < 0.05 and abs(seg_len - w_a_w) < 0.05:
+                    lbl = f"WING A: {seg_mm}"
+                elif abs(p1 - w_b_rel_x) < 0.05 and abs(seg_len - w_b_w) < 0.05:
+                    lbl = f"WING B: {seg_mm}"
+                else:
+                    lbl = f"STEP: {seg_mm}"
+                x_segs.append(DimensionSegment(lbl, seg_mm, seg_len, p1, p2))
+
+        # Guarantee exact sum == env_w_mm
+        target_x_mm = int(round(env_w * 1000.0))
+        if x_segs:
+            diff_x = target_x_mm - sum(s.length_mm for s in x_segs)
+            if diff_x != 0:
+                x_segs[-1].length_mm += diff_x
+                x_segs[-1].length_m = round(x_segs[-1].length_mm / 1000.0, 3)
+        else:
+            x_segs = [DimensionSegment(f"{target_x_mm}", target_x_mm, env_w, 0.0, env_w)]
+
+        chain_x_overall = DimensionChain(
+            chain_id=f"DIM_X_STEPPED_F{floor_index}",
+            level="overall",
+            axis="X",
+            side="top",
+            segments=x_segs,
+            total_mm=target_x_mm,
+            total_m=env_w,
+            offset_distance_m=2.20,
+        )
+    else:
+        overall_x_seg = DimensionSegment(
+            label=f"{int(round(env_w * 1000.0))}",
+            length_mm=int(round(env_w * 1000.0)),
+            length_m=env_w,
+            start_m=0.0,
+            end_m=env_w,
+        )
+        chain_x_overall = DimensionChain(
+            chain_id=f"DIM_X_OVERALL_F{floor_index}",
+            level="overall",
+            axis="X",
+            side="top",
+            segments=[overall_x_seg],
+            total_mm=int(round(env_w * 1000.0)),
+            total_m=env_w,
+            offset_distance_m=2.20,
+        )
 
     # Clear Rooms & Walls Chain along X (middle line)
     # Trace sequence of (wall thickness, clear room, wall thickness...) along X axis
@@ -1162,24 +1272,71 @@ def build_constructible_wall_graph(
 
     dim_chains_x.extend([chain_x_openings, chain_x_clear, chain_x_overall])
 
-    # Overall Chain along Y
-    overall_y_seg = DimensionSegment(
-        label=f"{int(round(env_d * 1000.0))}",
-        length_mm=int(round(env_d * 1000.0)),
-        length_m=env_d,
-        start_m=0.0,
-        end_m=env_d,
-    )
-    chain_y_overall = DimensionChain(
-        chain_id=f"DIM_Y_OVERALL_F{floor_index}",
-        level="overall",
-        axis="Y",
-        side="left",
-        segments=[overall_y_seg],
-        total_mm=int(round(env_d * 1000.0)),
-        total_m=env_d,
-        offset_distance_m=2.20,
-    )
+    # Overall Chain along Y (Stepped for multi-wing footprints)
+    if wings_in and len(wings_in) > 1:
+        w_a = wings_in[0]
+        w_b = wings_in[1]
+        e_y = float(envelope.get("y", 0.0) if isinstance(envelope, dict) else getattr(envelope, "y", 0.0))
+        w_a_rel_y = round(float(getattr(w_a, "y", 0.0)) - e_y, 3)
+        w_a_d = round(float(getattr(w_a, "depth_m", 0.0)), 3)
+        w_b_rel_y = round(float(getattr(w_b, "y", 0.0)) - e_y, 3)
+        w_b_d = round(float(getattr(w_b, "depth_m", 0.0)), 3)
+
+        y_segs: List[DimensionSegment] = []
+        pts_y = sorted(list(set([0.0, max(0.0, w_a_rel_y), min(env_d, w_a_rel_y + w_a_d), max(0.0, w_b_rel_y), min(env_d, w_b_rel_y + w_b_d), env_d])))
+        for i in range(len(pts_y) - 1):
+            p1 = pts_y[i]
+            p2 = pts_y[i + 1]
+            seg_len = round(p2 - p1, 3)
+            if seg_len > 0.005:
+                seg_mm = int(round(seg_len * 1000.0))
+                lbl = f"{seg_mm}"
+                if abs(p1 - w_a_rel_y) < 0.05 and abs(seg_len - w_a_d) < 0.05:
+                    lbl = f"WING A: {seg_mm}"
+                elif abs(p1 - w_b_rel_y) < 0.05 and abs(seg_len - w_b_d) < 0.05:
+                    lbl = f"WING B: {seg_mm}"
+                else:
+                    lbl = f"STEP: {seg_mm}"
+                y_segs.append(DimensionSegment(lbl, seg_mm, seg_len, p1, p2))
+
+        # Guarantee exact sum == env_d_mm
+        target_y_mm = int(round(env_d * 1000.0))
+        if y_segs:
+            diff_y = target_y_mm - sum(s.length_mm for s in y_segs)
+            if diff_y != 0:
+                y_segs[-1].length_mm += diff_y
+                y_segs[-1].length_m = round(y_segs[-1].length_mm / 1000.0, 3)
+        else:
+            y_segs = [DimensionSegment(f"{target_y_mm}", target_y_mm, env_d, 0.0, env_d)]
+
+        chain_y_overall = DimensionChain(
+            chain_id=f"DIM_Y_STEPPED_F{floor_index}",
+            level="overall",
+            axis="Y",
+            side="left",
+            segments=y_segs,
+            total_mm=target_y_mm,
+            total_m=env_d,
+            offset_distance_m=2.20,
+        )
+    else:
+        overall_y_seg = DimensionSegment(
+            label=f"{int(round(env_d * 1000.0))}",
+            length_mm=int(round(env_d * 1000.0)),
+            length_m=env_d,
+            start_m=0.0,
+            end_m=env_d,
+        )
+        chain_y_overall = DimensionChain(
+            chain_id=f"DIM_Y_OVERALL_F{floor_index}",
+            level="overall",
+            axis="Y",
+            side="left",
+            segments=[overall_y_seg],
+            total_mm=int(round(env_d * 1000.0)),
+            total_m=env_d,
+            offset_distance_m=2.20,
+        )
 
     # Clear Rooms & Walls Chain along Y (middle line)
     clear_y_segs: List[DimensionSegment] = []

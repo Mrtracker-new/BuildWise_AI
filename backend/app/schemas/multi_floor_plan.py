@@ -114,7 +114,7 @@ class SingleFloorPlanModel(BaseModel):
     """
     floor_index: int
     floor_name: str  # "Ground Floor (G)", "First Floor (G+1)", etc.
-    envelope: Dict[str, float]  # x, y, width, depth, area_sqm
+    envelope: Dict[str, Any]  # x, y, width, depth, area_sqm, optional wings/corridors/topology_type
     rooms: List[MultiFloorRoomRectangle] = Field(default_factory=list)
     doors: List[MultiFloorDoorGeometry] = Field(default_factory=list)
     windows: List[MultiFloorWindowGeometry] = Field(default_factory=list)

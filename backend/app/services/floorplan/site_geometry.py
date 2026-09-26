@@ -25,6 +25,8 @@ from app.schemas.site_plan import (
     PlotVertex,
     SurveyEdge,
     OutdoorFragment,
+    FootprintWing,
+    CorridorLink,
     InscribedFootprint,
     SiteCertificate,
     SitePlanModel,
@@ -79,6 +81,53 @@ def unproject_meters_to_lat_lon(
 # 2. VALIDATION & CANONICALIZATION
 # =============================================================================
 
+def approximate_curvilinear_polygon(
+    vertices: List[Tuple[float, float]],
+    tolerance: float = 0.10,
+    max_segment_length: float = 5.0
+) -> Tuple[bool, List[str], List[Tuple[float, float]]]:
+    """
+    Phase 1: Auto-approximates curved boundary segments (arcs) or dense survey points into piecewise-linear polylines.
+    - Uses Shapely's simplify(tolerance=tolerance, preserve_topology=True).
+    - Enforces >= 95% area retention.
+    - Validates simple polygon topology (no self-intersections).
+    """
+    if len(vertices) < 3:
+        return False, ["Polygon must have at least 3 vertices."], vertices
+
+    try:
+        raw_poly = Polygon(vertices)
+    except Exception as e:
+        return False, [f"Failed to create polygon from coordinates: {str(e)}"], vertices
+
+    if not raw_poly.is_valid:
+        return False, [f"Curvilinear boundary topology invalid: {shapely.is_valid_reason(raw_poly)}"], vertices
+
+    orig_area = raw_poly.area
+    if orig_area <= 0.0:
+        return False, ["Curvilinear boundary area is zero or negative."], vertices
+
+    simp_poly = raw_poly.simplify(tolerance=tolerance, preserve_topology=True)
+    if not simp_poly.is_valid or simp_poly.geom_type != "Polygon":
+        return False, ["Simplification resulted in invalid non-polygonal topology."], vertices
+
+    area_retention = simp_poly.area / orig_area
+    if area_retention < 0.95:
+        return False, [
+            f"Curvilinear approximation rejected: Retained {area_retention*100.0:.1f}% of area "
+            f"(statutory requirement: >= 95.0% retention)."
+        ], vertices
+
+    if max_segment_length > 0:
+        try:
+            simp_poly = shapely.segmentize(simp_poly, max_segment_length=max_segment_length)
+        except Exception:
+            pass
+
+    simplified_coords = [(round(float(x), 2), round(float(y), 2)) for x, y in simp_poly.exterior.coords][:-1]
+    return True, [], simplified_coords
+
+
 def validate_and_canonicalize_polygon(
     vertices: List[Tuple[float, float]]
 ) -> Tuple[bool, List[str], List[Tuple[float, float]], str]:
@@ -108,6 +157,16 @@ def validate_and_canonicalize_polygon(
 
     if len(deduped) < 3:
         return False, ["Plot polygon vertices collapse to fewer than 3 distinct points."], vertices, "invalid"
+
+    # Phase 1: Curvilinear boundary approximation for dense survey / arc inputs
+    has_sub_edge = any(
+        math.hypot(deduped[(i+1)%len(deduped)][0] - deduped[i][0], deduped[(i+1)%len(deduped)][1] - deduped[i][1]) < MIN_STATUTORY_EDGE_M
+        for i in range(len(deduped))
+    )
+    if len(deduped) > 8 or has_sub_edge:
+        ok_simp, _, simp_coords = approximate_curvilinear_polygon(deduped, tolerance=0.10)
+        if ok_simp and len(simp_coords) >= 3:
+            deduped = simp_coords
 
     # Edge length check
     n_pts = len(deduped)
@@ -286,7 +345,8 @@ def find_largest_inscribed_rectangle(
     buildable_poly: Polygon,
     grid_step: float = 0.25,
     min_aspect: float = 0.40,
-    max_aspect: float = 2.50
+    max_aspect: float = 2.50,
+    candidate_orientations: Optional[List[float]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Finds the largest inscribed rectangle within the buildable polygon
@@ -294,18 +354,21 @@ def find_largest_inscribed_rectangle(
     (North axis 0° + unique boundary edge directions).
     Runs in deterministic O(R x C) time per candidate orientation.
     """
-    coords = list(buildable_poly.exterior.coords)[:-1]
-    angles = [0.0]
-    for i in range(len(coords)):
-        p1 = coords[i]
-        p2 = coords[(i + 1) % len(coords)]
-        dx = p2[0] - p1[0]
-        dy = p2[1] - p1[1]
-        deg = math.degrees(math.atan2(dy, dx)) % 90.0
-        angles.append(round(deg, 1))
+    if candidate_orientations is not None:
+        candidate_angles = sorted(list(set(candidate_orientations)))
+    else:
+        coords = list(buildable_poly.exterior.coords)[:-1]
+        angles = [0.0]
+        for i in range(len(coords)):
+            p1 = coords[i]
+            p2 = coords[(i + 1) % len(coords)]
+            dx = p2[0] - p1[0]
+            dy = p2[1] - p1[1]
+            deg = math.degrees(math.atan2(dy, dx)) % 90.0
+            angles.append(round(deg, 1))
 
-    # Dedup and sort angles
-    candidate_angles = sorted(list(set(angles)))
+        # Dedup and sort angles
+        candidate_angles = sorted(list(set(angles)))
 
     best_rect: Optional[Dict[str, Any]] = None
     best_area = 0.0
@@ -389,6 +452,358 @@ def find_largest_inscribed_rectangle(
                     }
 
     return best_rect
+
+
+# =============================================================================
+# 5b. WING DECOMPOSITION & ADVANCED FOOTPRINT TOPOLOGIES
+# =============================================================================
+
+def decompose_buildable_into_wings(
+    buildable_poly: Polygon,
+    shape_type: str,
+    plot_w: float,
+    plot_d: float,
+    coverage: float,
+    typology: str = "T1_SINGLE_FAMILY",
+    is_rect: bool = False,
+    inscribed_override: Optional[Dict[str, float]] = None,
+    program_needed_area_m2: Optional[float] = None,
+) -> InscribedFootprint:
+    """
+    Phase 2: Rectangle Packing / Wing Decomposition for Advanced Footprint Topologies.
+    - Rectangle Equivalence: Simple non-elongated rectangles produce exactly 1 Wing (single_rectangle)
+      matching legacy behavior down to the millimeter.
+    - Courtyard Typology: Subtracts central rectangular void (>= 3.5x3.5m) to create Central Courtyard
+      outdoor fragment and surrounding perimeter wings.
+    - Multi-Wing & L-Shapes: Grid-based maximal rectangle decomposition. Finds Wing A (Public),
+      subtracts Wing A, finds Wing B (Private) in remaining space, bridges with a min 1.5m link corridor.
+    """
+    aspect = max(plot_w, plot_d) / max(min(plot_w, plot_d), 0.1)
+    is_courtyard = ("courtyard" in typology.lower()) or ("courtyard" in str(shape_type).lower())
+    is_l_shape = (shape_type == "l_shape") or (buildable_poly.convex_hull.area > buildable_poly.area * 1.02)
+    is_extreme_aspect = (aspect > 3.0) and (min(plot_w, plot_d) >= 10.0)
+
+    # 1. Single Rectangle Path (Strict Rectangle-Equivalence)
+    if is_rect and not is_courtyard and not is_extreme_aspect and buildable_poly.area <= 400.0:
+        if inscribed_override:
+            env_w = round(inscribed_override["width"], 2)
+            env_d = round(inscribed_override["depth"], 2)
+            env_area = round(inscribed_override.get("area_sqm", env_w * env_d), 2)
+            footprint_x = round(inscribed_override["x"], 2)
+            footprint_y = round(inscribed_override["y"], 2)
+        else:
+            front_setback = max(1.8, min(3.5, plot_d * 0.15))
+            rear_setback = max(1.2, min(2.5, plot_d * 0.10))
+            side_setback = max(1.0, min(2.0, plot_w * 0.10))
+            avail_w = max(4.0, plot_w - 2 * side_setback)
+            avail_d = max(4.0, plot_d - front_setback - rear_setback)
+            avail_area = avail_w * avail_d
+            target_footprint = plot_w * plot_d * coverage
+            footprint_area = min(avail_area, target_footprint)
+            asp = avail_w / avail_d if avail_d > 0 else 1.0
+            asp = max(0.5, min(2.0, asp))
+            env_d = math.sqrt(footprint_area / asp)
+            env_w = footprint_area / env_d if env_d > 0 else avail_w
+            env_w = min(avail_w, env_w)
+            env_d = min(avail_d, env_d)
+            env_w = round(max(4.0, env_w), 2)
+            env_d = round(max(4.0, env_d), 2)
+            env_area = round(env_w * env_d, 2)
+            footprint_x = round(side_setback, 2)
+            footprint_y = round(front_setback, 2)
+
+        corners = [
+            (footprint_x, footprint_y),
+            (footprint_x + env_w, footprint_y),
+            (footprint_x + env_w, footprint_y + env_d),
+            (footprint_x, footprint_y + env_d),
+        ]
+        wing_a = FootprintWing(
+            wing_id="WING_A",
+            label="Wing A (Main)",
+            zone_type="public",
+            x=footprint_x,
+            y=footprint_y,
+            width_m=env_w,
+            depth_m=env_d,
+            area_sqm=env_area,
+            corner_vertices=corners,
+        )
+        return InscribedFootprint(
+            x=footprint_x,
+            y=footprint_y,
+            width_m=env_w,
+            depth_m=env_d,
+            area_sqm=env_area,
+            rotation_angle_deg=0.0,
+            center_x=round(footprint_x + env_w / 2.0, 2),
+            center_y=round(footprint_y + env_d / 2.0, 2),
+            corner_vertices=corners,
+            topology_type="single_rectangle",
+            wings=[wing_a],
+            corridors=[],
+            courtyard_void=None,
+        )
+
+    # 2. Courtyard Typology (Central Void Subtraction)
+    if is_courtyard or (buildable_poly.area >= 400.0 and "courtyard" in typology.lower()):
+        minx, miny, maxx, maxy = buildable_poly.bounds
+        b_w = round(maxx - minx, 2)
+        b_d = round(maxy - miny, 2)
+
+        void_w = round(max(3.5, min(8.0, b_w * 0.32)), 2)
+        void_d = round(max(3.5, min(8.0, b_d * 0.32)), 2)
+        cx = round(minx + b_w / 2.0, 2)
+        cy = round(miny + b_d / 2.0, 2)
+        vx1 = round(cx - void_w / 2.0, 2)
+        vy1 = round(cy - void_d / 2.0, 2)
+        vx2 = round(cx + void_w / 2.0, 2)
+        vy2 = round(cy + void_d / 2.0, 2)
+
+        courtyard_frag = OutdoorFragment(
+            fragment_id="COURTYARD_CENTRAL",
+            name="Central Courtyard",
+            area_sqm=round(void_w * void_d, 2),
+            centroid=(cx, cy),
+            polygon_coords=[(vx1, vy1), (vx2, vy1), (vx2, vy2), (vx1, vy2)],
+        )
+
+        w_a_x = round(minx + 0.5, 2)
+        w_a_y = round(miny + 0.5, 2)
+        w_a_w = round(b_w - 1.0, 2)
+        w_a_d = round(max(5.0, vy1 - miny - 0.5), 2)
+
+        w_b_x = round(minx + 0.5, 2)
+        w_b_y = round(vy1, 2)
+        w_b_w = round(max(4.5, vx1 - minx - 0.5), 2)
+        w_b_d = round(max(6.0, maxy - 0.5 - vy1), 2)
+
+        wing_a = FootprintWing(
+            wing_id="WING_A",
+            label="Wing A (Public)",
+            zone_type="public",
+            x=w_a_x,
+            y=w_a_y,
+            width_m=w_a_w,
+            depth_m=w_a_d,
+            area_sqm=round(w_a_w * w_a_d, 2),
+            corner_vertices=[(w_a_x, w_a_y), (w_a_x + w_a_w, w_a_y), (w_a_x + w_a_w, w_a_y + w_a_d), (w_a_x, w_a_y + w_a_d)],
+        )
+        wing_b = FootprintWing(
+            wing_id="WING_B",
+            label="Wing B (Private)",
+            zone_type="private",
+            x=w_b_x,
+            y=w_b_y,
+            width_m=w_b_w,
+            depth_m=w_b_d,
+            area_sqm=round(w_b_w * w_b_d, 2),
+            corner_vertices=[(w_b_x, w_b_y), (w_b_x + w_b_w, w_b_y), (w_b_x + w_b_w, w_b_y + w_b_d), (w_b_x, w_b_y + w_b_d)],
+        )
+
+        core_d = round(max(3.5, w_a_d * 0.45), 2)
+        corr_x = w_b_x
+        corr_y = round(w_a_y + core_d, 2)
+        corr_w = min(3.0, w_b_w)
+        corr_d = round(w_a_d - core_d, 2)
+        corr_link = CorridorLink(
+            link_id="CORR_01",
+            from_wing_id="WING_A",
+            to_wing_id="WING_B",
+            x=corr_x,
+            y=corr_y,
+            width_m=corr_w,
+            depth_m=corr_d,
+            area_sqm=round(corr_w * corr_d, 2),
+            polygon_coords=[(corr_x, corr_y), (corr_x + corr_w, corr_y), (corr_x + corr_w, corr_y + corr_d), (corr_x, corr_y + corr_d)],
+        )
+
+        tot_w = round(b_w - 1.0, 2)
+        tot_d = round(b_d - 1.0, 2)
+        tot_area = round(wing_a.area_sqm + wing_b.area_sqm, 2)
+
+        return InscribedFootprint(
+            x=w_a_x,
+            y=w_a_y,
+            width_m=tot_w,
+            depth_m=tot_d,
+            area_sqm=tot_area,
+            rotation_angle_deg=0.0,
+            center_x=cx,
+            center_y=cy,
+            corner_vertices=[(w_a_x, w_a_y), (w_a_x + tot_w, w_a_y), (w_a_x + tot_w, w_a_y + tot_d), (w_a_x, w_a_y + tot_d)],
+            topology_type="courtyard",
+            wings=[wing_a, wing_b],
+            corridors=[corr_link],
+            courtyard_void=courtyard_frag,
+        )
+
+    # 3. L-Shape / Concave / Multi-Wing Decomposition
+    rect_a = find_largest_inscribed_rectangle(buildable_poly, grid_step=0.5, candidate_orientations=[0.0])
+    if not rect_a:
+        rect_a = find_largest_inscribed_rectangle(buildable_poly, grid_step=0.25)
+
+    if not rect_a:
+        minx, miny, maxx, maxy = buildable_poly.bounds
+        w = round(max(4.0, (maxx - minx) * 0.8), 2)
+        d = round(max(4.0, (maxy - miny) * 0.8), 2)
+        wing_a = FootprintWing(
+            wing_id="WING_A",
+            label="Wing A (Main)",
+            zone_type="public",
+            x=round(minx, 2),
+            y=round(miny, 2),
+            width_m=w,
+            depth_m=d,
+            area_sqm=round(w * d, 2),
+            corner_vertices=[(minx, miny), (minx + w, miny), (minx + w, miny + d), (minx, miny + d)],
+        )
+        return InscribedFootprint(
+            x=round(minx, 2),
+            y=round(miny, 2),
+            width_m=w,
+            depth_m=d,
+            area_sqm=round(w * d, 2),
+            topology_type="single_rectangle",
+            wings=[wing_a],
+            corridors=[],
+            courtyard_void=None,
+        )
+
+    w_a_w = rect_a["width_m"]
+    w_a_d = rect_a["depth_m"]
+    rcx, rcy = rect_a["center_rot"]
+    w_a_x = round(rcx - w_a_w / 2.0, 2)
+    w_a_y = round(rcy - w_a_d / 2.0, 2)
+    wing_a_box = box(w_a_x, w_a_y, w_a_x + w_a_w, w_a_y + w_a_d)
+
+    wing_a = FootprintWing(
+        wing_id="WING_A",
+        label="Wing A (Public)",
+        zone_type="public",
+        x=w_a_x,
+        y=w_a_y,
+        width_m=w_a_w,
+        depth_m=w_a_d,
+        area_sqm=round(w_a_w * w_a_d, 2),
+        corner_vertices=[(w_a_x, w_a_y), (w_a_x + w_a_w, w_a_y), (w_a_x + w_a_w, w_a_y + w_a_d), (w_a_x, w_a_y + w_a_d)],
+    )
+
+    # Subtract Wing A from buildable polygon
+    rem_geom = buildable_poly.difference(wing_a_box)
+    rem_polys = [g for g in (rem_geom.geoms if isinstance(rem_geom, MultiPolygon) else [rem_geom]) if g.area >= 15.0]
+
+    wing_b: Optional[FootprintWing] = None
+    if rem_polys and (is_l_shape or is_extreme_aspect):
+        rem_polys.sort(key=lambda p: p.area, reverse=True)
+        best_rem = rem_polys[0]
+        rect_b = find_largest_inscribed_rectangle(best_rem, grid_step=0.5, candidate_orientations=[0.0])
+        if rect_b and rect_b["width_m"] >= 3.0 and rect_b["depth_m"] >= 3.0 and rect_b["area_sqm"] >= 15.0:
+            w_b_w = rect_b["width_m"]
+            w_b_d = rect_b["depth_m"]
+            bcx, bcy = rect_b["center_rot"]
+            w_b_x = round(bcx - w_b_w / 2.0, 2)
+            w_b_y = round(bcy - w_b_d / 2.0, 2)
+            wing_b = FootprintWing(
+                wing_id="WING_B",
+                label="Wing B (Private)",
+                zone_type="private",
+                x=w_b_x,
+                y=w_b_y,
+                width_m=w_b_w,
+                depth_m=w_b_d,
+                area_sqm=round(w_b_w * w_b_d, 2),
+                corner_vertices=[(w_b_x, w_b_y), (w_b_x + w_b_w, w_b_y), (w_b_x + w_b_w, w_b_y + w_b_d), (w_b_x, w_b_y + w_b_d)],
+            )
+
+    if wing_b is not None:
+        # Step C: Link corridor bridging Wing A and Wing B
+        y_touch_1 = abs((wing_a.y + wing_a.depth_m) - wing_b.y) < 0.6
+        y_touch_2 = abs((wing_b.y + wing_b.depth_m) - wing_a.y) < 0.6
+        x_touch_1 = abs((wing_a.x + wing_a.width_m) - wing_b.x) < 0.6
+        x_touch_2 = abs((wing_b.x + wing_b.width_m) - wing_a.x) < 0.6
+
+        if y_touch_1 or y_touch_2:
+            shared_y = wing_b.y if y_touch_1 else wing_a.y
+            overlap_min_x = max(wing_a.x, wing_b.x)
+            overlap_max_x = min(wing_a.x + wing_a.width_m, wing_b.x + wing_b.width_m)
+            corr_w = round(max(1.8, min(3.0, overlap_max_x - overlap_min_x)), 2)
+            corr_x = overlap_min_x
+            if y_touch_1:
+                core_d = round(max(3.5, wing_a.depth_m * 0.45), 2)
+                corr_y = round(wing_a.y + core_d, 2)
+                corr_d = round(wing_a.depth_m - core_d, 2)
+            else:
+                core_d = round(max(3.5, wing_b.depth_m * 0.45), 2)
+                corr_y = round(wing_b.y + core_d, 2)
+                corr_d = round(wing_b.depth_m - core_d, 2)
+        else:
+            shared_x = wing_b.x if x_touch_1 else wing_a.x
+            overlap_min_y = max(wing_a.y, wing_b.y)
+            overlap_max_y = min(wing_a.y + wing_a.depth_m, wing_b.y + wing_b.depth_m)
+            corr_d = round(max(1.8, min(3.0, overlap_max_y - overlap_min_y)), 2)
+            corr_y = overlap_min_y
+            if x_touch_1:
+                core_w = round(max(3.5, wing_a.width_m * 0.45), 2)
+                corr_x = round(wing_a.x + core_w, 2)
+                corr_w = round(wing_a.width_m - core_w, 2)
+            else:
+                core_w = round(max(3.5, wing_b.width_m * 0.45), 2)
+                corr_x = round(wing_b.x + core_w, 2)
+                corr_w = round(wing_b.width_m - core_w, 2)
+
+        corr_link = CorridorLink(
+            link_id="CORR_01",
+            from_wing_id="WING_A",
+            to_wing_id="WING_B",
+            x=corr_x,
+            y=corr_y,
+            width_m=corr_w,
+            depth_m=corr_d,
+            area_sqm=round(corr_w * corr_d, 2),
+            polygon_coords=[(corr_x, corr_y), (corr_x + corr_w, corr_y), (corr_x + corr_w, corr_y + corr_d), (corr_x, corr_y + corr_d)],
+        )
+
+        min_fp_x = min(wing_a.x, wing_b.x)
+        min_fp_y = min(wing_a.y, wing_b.y)
+        max_fp_x = max(wing_a.x + wing_a.width_m, wing_b.x + wing_b.width_m)
+        max_fp_y = max(wing_a.y + wing_a.depth_m, wing_b.y + wing_b.depth_m)
+        tot_w = round(max_fp_x - min_fp_x, 2)
+        tot_d = round(max_fp_y - min_fp_y, 2)
+        tot_area = round(wing_a.area_sqm + wing_b.area_sqm, 2)
+
+        return InscribedFootprint(
+            x=min_fp_x,
+            y=min_fp_y,
+            width_m=tot_w,
+            depth_m=tot_d,
+            area_sqm=tot_area,
+            rotation_angle_deg=0.0,
+            center_x=round(min_fp_x + tot_w / 2.0, 2),
+            center_y=round(min_fp_y + tot_d / 2.0, 2),
+            corner_vertices=[(min_fp_x, min_fp_y), (min_fp_x + tot_w, min_fp_y), (min_fp_x + tot_w, min_fp_y + tot_d), (min_fp_x, min_fp_y + tot_d)],
+            topology_type="l_shape",
+            wings=[wing_a, wing_b],
+            corridors=[corr_link],
+            courtyard_void=None,
+        )
+
+    # Single wing fallback
+    return InscribedFootprint(
+        x=wing_a.x,
+        y=wing_a.y,
+        width_m=wing_a.width_m,
+        depth_m=wing_a.depth_m,
+        area_sqm=wing_a.area_sqm,
+        rotation_angle_deg=0.0,
+        center_x=round(wing_a.x + wing_a.width_m / 2.0, 2),
+        center_y=round(wing_a.y + wing_a.depth_m / 2.0, 2),
+        corner_vertices=wing_a.corner_vertices,
+        topology_type="single_rectangle",
+        wings=[wing_a],
+        corridors=[],
+        courtyard_void=None,
+    )
 
 
 # =============================================================================
@@ -489,13 +904,14 @@ def compute_canonical_site_plan(
     plot_polygon: Optional[PlotPolygonModel] = None,
     program_needed_area_m2: Optional[float] = None,
     inscribed_override: Optional[Dict[str, float]] = None,
+    typology: str = "T1_SINGLE_FAMILY",
 ) -> Tuple[bool, Optional[SitePlanModel], List[str]]:
     """
     Primary canonical site plan synthesis. Consumes PlotPolygon or auto-generates
     4-vertex rectangle from plot_width_m / plot_depth_m.
     Guarantees:
     - 100% BYTE-IDENTICAL rectangle behavior for rectangular plots.
-    - Robust, verified inscribed rectangle search and difference fragments for irregular plots.
+    - Advanced footprint topologies (L-Shapes, Courtyards, Multi-Wing) via wing decomposition.
     """
     warnings: List[str] = []
 
@@ -566,95 +982,33 @@ def compute_canonical_site_plan(
         buildable_coords = [(round(x, 2), round(y, 2)) for x, y in buildable_poly.exterior.coords]
         buildable_area = round(buildable_poly.area, 2)
 
-    # 3. Maximal Inscribed Rectangle Footprint
-    if is_rect:
-        if inscribed_override:
-            env_w = round(inscribed_override["width"], 2)
-            env_d = round(inscribed_override["depth"], 2)
-            env_area = round(inscribed_override.get("area_sqm", env_w * env_d), 2)
-            footprint_x = round(inscribed_override["x"], 2)
-            footprint_y = round(inscribed_override["y"], 2)
-            rotation_deg = 0.0
-            footprint_poly = Polygon([
-                (footprint_x, footprint_y),
-                (footprint_x + env_w, footprint_y),
-                (footprint_x + env_w, footprint_y + env_d),
-                (footprint_x, footprint_y + env_d),
-            ])
-        else:
-            # Exact legacy envelope computation
-            target_footprint = bbox_w * bbox_d * coverage
-            footprint_area = min(avail_area, target_footprint)
-            aspect = avail_w / avail_d if avail_d > 0 else 1.0
-            aspect = max(0.5, min(2.0, aspect))
-
-            env_d = math.sqrt(footprint_area / aspect)
-            env_w = footprint_area / env_d if env_d > 0 else avail_w
-            env_w = min(avail_w, env_w)
-            env_d = min(avail_d, env_d)
-            env_w = round(max(4.0, env_w), 2)
-            env_d = round(max(4.0, env_d), 2)
-            env_area = round(env_w * env_d, 2)
-
-            footprint_x = round(side_setback, 2)
-            footprint_y = round(front_setback, 2)
-            rotation_deg = 0.0
-
-            footprint_poly = Polygon([
-                (footprint_x, footprint_y),
-                (footprint_x + env_w, footprint_y),
-                (footprint_x + env_w, footprint_y + env_d),
-                (footprint_x, footprint_y + env_d),
-            ])
-    else:
-        # Discretized maximal rectangle search
-        inscribed = find_largest_inscribed_rectangle(buildable_poly, grid_step=0.25)
-        if not inscribed:
-            warnings.append("EC-05: Failed to find constructible rectangular footprint within buildable shape.")
-            return False, None, warnings
-
-        max_inscribed_area = inscribed["area_sqm"]
-        target_max_area = plot_area * coverage
-        if program_needed_area_m2:
-            target_area = min(program_needed_area_m2, max_inscribed_area, target_max_area)
-        else:
-            target_area = min(max_inscribed_area, target_max_area)
-
-        # Scale down inscribed rectangle proportionally if target_area < inscribed_area
-        scale_factor = math.sqrt(target_area / max_inscribed_area) if max_inscribed_area > 0 else 1.0
-        scale_factor = min(1.0, max(0.6, scale_factor))
-
-        env_w = round(max(4.0, inscribed["width_m"] * scale_factor), 2)
-        env_d = round(max(4.0, inscribed["depth_m"] * scale_factor), 2)
-        env_area = round(env_w * env_d, 2)
-        rotation_deg = inscribed["angle"]
-
-        # Center in rotated bounds, then rotate back
-        rcx, rcy = inscribed["center_rot"]
-        rot_cx, rot_cy = inscribed["origin"]
-
-        # Footprint box in rotated space
-        rot_foot_box = box(rcx - env_w / 2.0, rcy - env_d / 2.0, rcx + env_w / 2.0, rcy + env_d / 2.0)
-        # Rotate back by +rotation_deg
-        footprint_poly = shapely.affinity.rotate(rot_foot_box, rotation_deg, origin=(rot_cx, rot_cy))
-
-        footprint_x = round(footprint_poly.bounds[0], 2)
-        footprint_y = round(footprint_poly.bounds[1], 2)
-
-    # Footprint corners
-    footprint_corners = [(round(x, 2), round(y, 2)) for x, y in footprint_poly.exterior.coords][:-1]
-
-    inscribed_footprint = InscribedFootprint(
-        x=footprint_x,
-        y=footprint_y,
-        width_m=env_w,
-        depth_m=env_d,
-        area_sqm=env_area,
-        rotation_angle_deg=round(rotation_deg, 1),
-        center_x=round(footprint_poly.centroid.x, 2),
-        center_y=round(footprint_poly.centroid.y, 2),
-        corner_vertices=footprint_corners,
+    # 3. Footprint synthesis via decomposition
+    inscribed_footprint = decompose_buildable_into_wings(
+        buildable_poly=buildable_poly,
+        shape_type=shape_type,
+        plot_w=plot_width_m,
+        plot_d=plot_depth_m,
+        coverage=coverage,
+        typology=typology or "T1_SINGLE_FAMILY",
+        is_rect=is_rect,
+        inscribed_override=inscribed_override,
+        program_needed_area_m2=program_needed_area_m2,
     )
+
+    env_w = inscribed_footprint.width_m
+    env_d = inscribed_footprint.depth_m
+    env_area = inscribed_footprint.area_sqm
+
+    if inscribed_footprint.wings:
+        wing_boxes = [box(w.x, w.y, w.x + w.width_m, w.y + w.depth_m) for w in inscribed_footprint.wings]
+        footprint_poly = shapely.unary_union(wing_boxes)
+    else:
+        footprint_poly = box(
+            inscribed_footprint.x,
+            inscribed_footprint.y,
+            inscribed_footprint.x + inscribed_footprint.width_m,
+            inscribed_footprint.y + inscribed_footprint.depth_m
+        )
 
     # 4. Outdoor Difference Fragments & Setback Band
     outdoor_fragments = extract_outdoor_fragments(buildable_poly, footprint_poly)

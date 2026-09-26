@@ -269,6 +269,9 @@ class FloorDrawingIR:
     door_schedule: List[Dict[str, Any]] = field(default_factory=list)
     window_schedule: List[Dict[str, Any]] = field(default_factory=list)
     room_schedule: List[Dict[str, Any]] = field(default_factory=list)
+    has_stepped_envelope: bool = False
+    vertex_table: List[Dict[str, Any]] = field(default_factory=list)
+    edge_schedule: List[Dict[str, Any]] = field(default_factory=list)
 
     def primitives_by_layer(self, layer: LayerTag) -> List[DrawingPrimitive]:
         return [p for p in self.primitives if p.layer == layer]
@@ -531,6 +534,11 @@ def build_drawing_ir(
     elif raw_max_y > env_d + 0.05 and raw_min_y > 0.05:
         offset_y = raw_min_y
 
+    env_wings = _get(env_obj, "wings", []) or []
+    corridors = _get(env_obj, "corridors", []) or []
+    courtyard_void = _get(env_obj, "courtyard_void", None)
+    is_multi_wing = len(env_wings) > 1 or bool(_get(floor_data, "is_multi_wing", False))
+
     # Build normalized rooms in local envelope coordinates [0.0, env_w] × [0.0, env_d]
     norm_rooms: List[Dict[str, Any]] = []
     for r in rooms_list:
@@ -631,12 +639,16 @@ def build_drawing_ir(
         is_core = r["is_vertical_core"]
 
         # Map to IR SW corner (Y-up convention)
-        rx_ir = round(rx, 3)
-        if abs(rx_ir) < 1e-4:
-            rx_ir = 0.0
-        ry_ir = round(env_d - (ry + rd), 3)
-        if abs(ry_ir) < 1e-4:
-            ry_ir = 0.0
+        if is_multi_wing:
+            rx_ir = round(rx, 3)
+            ry_ir = round(ry, 3)
+        else:
+            rx_ir = round(rx, 3)
+            if abs(rx_ir) < 1e-4:
+                rx_ir = 0.0
+            ry_ir = round(env_d - (ry + rd), 3)
+            if abs(ry_ir) < 1e-4:
+                ry_ir = 0.0
 
         base_rid = rid
         for u in ("_u1", "_u2", "_u3", "_u4"):
@@ -699,10 +711,16 @@ def build_drawing_ir(
             is_lb = bool(_get(w, "is_load_bearing", wt == "W1"))
 
             # Convert to Y-up
-            wx1_ir = wx1
-            wy1_ir = env_d - wy1
-            wx2_ir = wx2
-            wy2_ir = env_d - wy2
+            if is_multi_wing:
+                wx1_ir = wx1
+                wy1_ir = wy1
+                wx2_ir = wx2
+                wy2_ir = wy2
+            else:
+                wx1_ir = wx1
+                wy1_ir = env_d - wy1
+                wx2_ir = wx2
+                wy2_ir = env_d - wy2
 
             primitives.append(WallPrimitive(
                 layer="walls",
@@ -744,9 +762,9 @@ def build_drawing_ir(
                                 wall_id=f"W_INT_V_{len(seen_fallback_walls)}",
                                 wall_type="W2",
                                 x1=x_b,
-                                y1=env_d - y_min,
+                                y1=y_min if is_multi_wing else (env_d - y_min),
                                 x2=x_b,
-                                y2=env_d - y_max,
+                                y2=y_max if is_multi_wing else (env_d - y_max),
                                 thickness_m=0.115,
                                 is_exterior=False,
                                 is_load_bearing=False
@@ -765,9 +783,9 @@ def build_drawing_ir(
                                 wall_id=f"W_INT_H_{len(seen_fallback_walls)}",
                                 wall_type="W2",
                                 x1=x_min,
-                                y1=env_d - y_b,
+                                y1=y_b if is_multi_wing else (env_d - y_b),
                                 x2=x_max,
-                                y2=env_d - y_b,
+                                y2=y_b if is_multi_wing else (env_d - y_b),
                                 thickness_m=0.115,
                                 is_exterior=False,
                                 is_load_bearing=False
@@ -788,54 +806,106 @@ def build_drawing_ir(
         mhx = _safe_float(_get(d, "hinge_x", mx1), mx1)
         mhy = _safe_float(_get(d, "hinge_y", my1), my1)
 
-        hx_ir = mhx
-        hy_ir = env_d - mhy
+        if is_multi_wing:
+            hx_ir = mhx
+            hy_ir = mhy
+            if abs(mx1 - mhx) < 0.02 and abs(my1 - mhy) < 0.02:
+                mcx, mcy = mx2, my2
+            else:
+                mcx, mcy = mx1, my1
+            cx_ir = mcx
+            cy_ir = mcy
 
-        if abs(mx1 - mhx) < 0.02 and abs(my1 - mhy) < 0.02:
-            mcx, mcy = mx2, my2
+            if wedge in ("vertical", "east", "west"):
+                mlx = mhx - dw if "left" in swing else mhx + dw
+                mly = mhy
+            elif wedge == "south":
+                mlx = mhx
+                mly = mhy + dw
+            elif wedge == "north":
+                mlx = mhx
+                mly = mhy - dw
+            else:
+                mlx = mhx
+                mly = mhy + dw
+
+            lx_ir = mlx
+            ly_ir = mly
+
+            ang_closed = round(math.degrees(math.atan2(cy_ir - hy_ir, cx_ir - hx_ir))) % 360
+            ang_open = round(math.degrees(math.atan2(ly_ir - hy_ir, lx_ir - hx_ir))) % 360
+
+            diff = (ang_open - ang_closed) % 360
+            if diff in (90, 270):
+                start_deg = min(ang_closed, ang_open)
+                end_deg = start_deg + 90
+            else:
+                start_deg = min(ang_closed, ang_open)
+                end_deg = start_deg + 90
+
+            v1_x = mcx - mhx
+            v1_y_svg = -(mcy - mhy)
+            v2_x = mlx - mhx
+            v2_y_svg = -(mly - mhy)
+            cp = (v1_x * v2_y_svg) - (v1_y_svg * v2_x)
+            svg_swp = 1 if cp > 0 else 0
+
+            jambs = []
+            if wedge in ("vertical", "east", "west"):
+                jambs.append(((hx_ir - 0.08, hy_ir), (hx_ir + 0.08, hy_ir)))
+                jambs.append(((cx_ir - 0.08, cy_ir), (cx_ir + 0.08, cy_ir)))
+            else:
+                jambs.append(((hx_ir, hy_ir - 0.08), (hx_ir, hy_ir + 0.08)))
+                jambs.append(((cx_ir, cy_ir - 0.08), (cx_ir, cy_ir + 0.08)))
         else:
-            mcx, mcy = mx1, my1
-        cx_ir = mcx
-        cy_ir = env_d - mcy
+            hx_ir = mhx
+            hy_ir = env_d - mhy
 
-        if wedge in ("vertical", "east", "west"):
-            mlx = mhx - dw if "left" in swing else mhx + dw
-            mly = mhy
-        else:
-            mlx = mhx
-            mly = mhy - dw if "left" in swing else mhy + dw
+            if abs(mx1 - mhx) < 0.02 and abs(my1 - mhy) < 0.02:
+                mcx, mcy = mx2, my2
+            else:
+                mcx, mcy = mx1, my1
+            cx_ir = mcx
+            cy_ir = env_d - mcy
 
-        lx_ir = mlx
-        ly_ir = env_d - mly
+            if wedge in ("vertical", "east", "west"):
+                mlx = mhx - dw if "left" in swing else mhx + dw
+                mly = mhy
+            else:
+                mlx = mhx
+                mly = mhy - dw if "left" in swing else mhy + dw
 
-        ang_closed = round(math.degrees(math.atan2(cy_ir - hy_ir, cx_ir - hx_ir))) % 360
-        ang_open = round(math.degrees(math.atan2(ly_ir - hy_ir, lx_ir - hx_ir))) % 360
+            lx_ir = mlx
+            ly_ir = env_d - mly
 
-        diff = (ang_open - ang_closed) % 360
-        if diff == 90:
-            start_deg = ang_closed
-            end_deg = ang_closed + 90
-        elif diff == 270:
-            start_deg = ang_open
-            end_deg = ang_open + 90
-        else:
-            start_deg = min(ang_closed, ang_open)
-            end_deg = start_deg + 90
+            ang_closed = round(math.degrees(math.atan2(cy_ir - hy_ir, cx_ir - hx_ir))) % 360
+            ang_open = round(math.degrees(math.atan2(ly_ir - hy_ir, lx_ir - hx_ir))) % 360
 
-        v1_x = mcx - mhx
-        v1_y = mcy - mhy
-        v2_x = mlx - mhx
-        v2_y = mly - mhy
-        cp = (v1_x * v2_y) - (v1_y * v2_x)
-        svg_swp = 1 if cp > 0 else 0
+            diff = (ang_open - ang_closed) % 360
+            if diff == 90:
+                start_deg = ang_closed
+                end_deg = ang_closed + 90
+            elif diff == 270:
+                start_deg = ang_open
+                end_deg = ang_open + 90
+            else:
+                start_deg = min(ang_closed, ang_open)
+                end_deg = start_deg + 90
 
-        jambs = []
-        if wedge in ("vertical", "east", "west"):
-            jambs.append(((hx_ir - 0.08, hy_ir), (hx_ir + 0.08, hy_ir)))
-            jambs.append(((cx_ir - 0.08, cy_ir), (cx_ir + 0.08, cy_ir)))
-        else:
-            jambs.append(((hx_ir, hy_ir - 0.08), (hx_ir, hy_ir + 0.08)))
-            jambs.append(((cx_ir, cy_ir - 0.08), (cx_ir, cy_ir + 0.08)))
+            v1_x = mcx - mhx
+            v1_y = mcy - mhy
+            v2_x = mlx - mhx
+            v2_y = mly - mhy
+            cp = (v1_x * v2_y) - (v1_y * v2_x)
+            svg_swp = 1 if cp > 0 else 0
+
+            jambs = []
+            if wedge in ("vertical", "east", "west"):
+                jambs.append(((hx_ir - 0.08, hy_ir), (hx_ir + 0.08, hy_ir)))
+                jambs.append(((cx_ir - 0.08, cy_ir), (cx_ir + 0.08, cy_ir)))
+            else:
+                jambs.append(((hx_ir, hy_ir - 0.08), (hx_ir, hy_ir + 0.08)))
+                jambs.append(((cx_ir, cy_ir - 0.08), (cx_ir, cy_ir + 0.08)))
 
         d_tag = f"D{d_counter}"
         d_counter += 1
@@ -901,10 +971,16 @@ def build_drawing_ir(
         mx2 = _safe_float(_get(win, "x2", 0.0), 0.0)
         my2 = _safe_float(_get(win, "y2", 0.0), 0.0)
 
-        x1_ir = mx1
-        y1_ir = env_d - my1
-        x2_ir = mx2
-        y2_ir = env_d - my2
+        if is_multi_wing:
+            x1_ir = mx1
+            y1_ir = my1
+            x2_ir = mx2
+            y2_ir = my2
+        else:
+            x1_ir = mx1
+            y1_ir = env_d - my1
+            x2_ir = mx2
+            y2_ir = env_d - my2
 
         length = math.hypot(x2_ir - x1_ir, y2_ir - y1_ir)
         if length > 0.01:
@@ -1010,13 +1086,37 @@ def build_drawing_ir(
         d_shafts = _get(building_model, "duct_shafts", []) or []
         ghost_core_rects = []
         ghost_tread_lines = []
+
+        footprint_poly = None
+        if is_multi_wing and env_wings:
+            from shapely.geometry import box as shp_box
+            from shapely.ops import unary_union
+            wing_geoms = [
+                shp_box(
+                    _safe_float(_get(w, "x", 0.0), 0.0) - offset_x,
+                    _safe_float(_get(w, "y", 0.0), 0.0) - offset_y,
+                    _safe_float(_get(w, "x", 0.0), 0.0) - offset_x + _safe_float(_get(w, "width_m", 0.0), 0.0),
+                    _safe_float(_get(w, "y", 0.0), 0.0) - offset_y + _safe_float(_get(w, "depth_m", 0.0), 0.0)
+                )
+                for w in env_wings
+            ]
+            footprint_poly = unary_union(wing_geoms) if wing_geoms else None
+
         for gc in v_cores:
             gc_x = _safe_float(_get(gc, "x", 0.0), 0.0)
             gc_y = _safe_float(_get(gc, "y", 0.0), 0.0)
             gc_w = _safe_float(_get(gc, "width_m", _get(gc, "width", 0.0)), 0.0)
             gc_d = _safe_float(_get(gc, "depth_m", _get(gc, "depth", _get(gc, "height", 0.0))), 0.0)
-            gc_x_ir = gc_x
-            gc_y_ir = env_d - (gc_y + gc_d)
+            if footprint_poly:
+                core_b = shp_box(gc_x, gc_y, gc_x + gc_w, gc_y + gc_d)
+                if not footprint_poly.intersects(core_b) or footprint_poly.intersection(core_b).area < 0.01:
+                    continue
+            if is_multi_wing:
+                gc_x_ir = gc_x
+                gc_y_ir = gc_y
+            else:
+                gc_x_ir = gc_x
+                gc_y_ir = env_d - (gc_y + gc_d)
             ghost_core_rects.append((gc_x_ir, gc_y_ir, gc_w, gc_d))
 
             has_matching_stair = any(
@@ -1034,7 +1134,14 @@ def build_drawing_ir(
             ds_y = _safe_float(_get(ds, "y", 0.0), 0.0)
             ds_w = _safe_float(_get(ds, "width_m", _get(ds, "width", 0.0)), 0.0)
             ds_d = _safe_float(_get(ds, "depth_m", _get(ds, "depth", _get(ds, "height", 0.0))), 0.0)
-            ghost_shaft_rects.append((ds_x, env_d - (ds_y + ds_d), ds_w, ds_d))
+            if footprint_poly:
+                shaft_b = shp_box(ds_x, ds_y, ds_x + ds_w, ds_y + ds_d)
+                if not footprint_poly.intersects(shaft_b) or footprint_poly.intersection(shaft_b).area < 0.01:
+                    continue
+            if is_multi_wing:
+                ghost_shaft_rects.append((ds_x, ds_y, ds_w, ds_d))
+            else:
+                ghost_shaft_rects.append((ds_x, env_d - (ds_y + ds_d), ds_w, ds_d))
 
         badge_dict = None
         if ghost_core_rects:
@@ -1159,13 +1266,23 @@ def build_drawing_ir(
             if mx1 > 0.0 or mx2 > 0.0:
                 door_x_m = (mx1 + mx2) / 2.0
         door_x = col_px(door_x_m)
-        arr_y1 = col_my - 8.5
-        arr_y2 = col_my - 1.0
-        cap_y = col_my - 66.0
-        cap_w = 72.0
-        cap_x = min(door_x, compass_cx - 22.0 - cap_w / 2.0)
-        fixed_obstacles.append(("main_entrance_cap", BBox(cap_x - cap_w / 2.0, cap_y - 8.0, cap_x + cap_w / 2.0, cap_y + 2.0)))
-        fixed_obstacles.append(("main_entrance_arrow", BBox(door_x - 5.0, arr_y1, door_x + 5.0, arr_y2)))
+        if is_multi_wing:
+            # Main entrance is at South (bottom in screen space)
+            arr_y1 = col_py(0.0) + 1.0
+            arr_y2 = col_py(0.0) + 8.5
+            cap_y = col_py(0.0) + 40.0
+            cap_w = 72.0
+            cap_x = door_x
+            fixed_obstacles.append(("main_entrance_cap", BBox(cap_x - cap_w / 2.0, cap_y - 8.0, cap_x + cap_w / 2.0, cap_y + 2.0)))
+            fixed_obstacles.append(("main_entrance_arrow", BBox(door_x - 5.0, arr_y1, door_x + 5.0, arr_y2)))
+        else:
+            arr_y1 = col_my - 8.5
+            arr_y2 = col_my - 1.0
+            cap_y = col_my - 66.0
+            cap_w = 72.0
+            cap_x = min(door_x, compass_cx - 22.0 - cap_w / 2.0)
+            fixed_obstacles.append(("main_entrance_cap", BBox(cap_x - cap_w / 2.0, cap_y - 8.0, cap_x + cap_w / 2.0, cap_y + 2.0)))
+            fixed_obstacles.append(("main_entrance_arrow", BBox(door_x - 5.0, arr_y1, door_x + 5.0, arr_y2)))
 
     # Obstacle 3: Structural Tags
     if "T1" in bldg_typ or "SINGLE" in bldg_typ:
@@ -1297,6 +1414,7 @@ def build_drawing_ir(
             "radius": 7.5,
             "cx": cx_px, "cy": cy_px,
             "rx": rx_px, "ry": ry_px, "rw": rw_px, "rh": rh_px,
+            "centroid_m": (rx_ir + rw_m / 2.0, ry_ir + rd_m / 2.0),
         })
 
         room_options.append((r_data, opts))
@@ -1469,7 +1587,8 @@ def build_drawing_ir(
                     "room_idx": tag_num,
                     "radius_px": rad_px,
                     "radius_m": rad_px / col_scale,
-                    "radius_pt": 7.5
+                    "radius_pt": 7.5,
+                    "centroid_m": cand.get("centroid_m", (cx_ir, cy_ir)),
                 }
             ))
 
@@ -1587,15 +1706,20 @@ def build_drawing_ir(
             seg_list = []
             for s in segs:
                 s_end_m = _safe_float(_get(s, "end_m", 0.0), 0.0)
-                ticks.append(env_d - s_end_m)
+                if is_multi_wing:
+                    ticks.append(s_end_m)
+                    c_y = (_safe_float(_get(s, "start_m", 0.0), 0.0) + s_end_m) / 2.0
+                else:
+                    ticks.append(env_d - s_end_m)
+                    c_y = env_d - (_safe_float(_get(s, "start_m", 0.0), 0.0) + s_end_m) / 2.0
                 len_m = _safe_float(_get(s, "length_m", 0.0), 0.0)
                 if len_m >= 0.75:
                     seg_list.append({
                         "label": f"{len_m:.2f}",
                         "length_m": len_m,
                         "center_x": dim_offsets_x[1] - 0.08,
-                        "center_y": env_d - (_safe_float(_get(s, "start_m", 0.0), 0.0) + s_end_m) / 2.0,
-                        "font_size_pt": 6.5,
+                        "center_y": c_y,
+                        "font_size_pt": 7.0,
                         "is_vertical": True
                     })
             primitives.append(DimensionChainPrimitive(
@@ -1614,15 +1738,20 @@ def build_drawing_ir(
             seg_list = []
             for s in segs:
                 s_end_m = _safe_float(_get(s, "end_m", 0.0), 0.0)
-                ticks.append(env_d - s_end_m)
+                if is_multi_wing:
+                    ticks.append(s_end_m)
+                    c_y = (_safe_float(_get(s, "start_m", 0.0), 0.0) + s_end_m) / 2.0
+                else:
+                    ticks.append(env_d - s_end_m)
+                    c_y = env_d - (_safe_float(_get(s, "start_m", 0.0), 0.0) + s_end_m) / 2.0
                 len_m = _safe_float(_get(s, "length_m", 0.0), 0.0)
                 if len_m >= 0.85:
                     seg_list.append({
                         "label": f"{len_m:.2f}",
                         "length_m": len_m,
                         "center_x": dim_offsets_x[0] - 0.08,
-                        "center_y": env_d - (_safe_float(_get(s, "start_m", 0.0), 0.0) + s_end_m) / 2.0,
-                        "font_size_pt": 6.0,
+                        "center_y": c_y,
+                        "font_size_pt": 7.0,
                         "is_vertical": True
                     })
             primitives.append(DimensionChainPrimitive(
@@ -1681,12 +1810,21 @@ def build_drawing_ir(
                 door_x_m = (mx1 + mx2) / 2.0
         cap_w_m = 72.0 / 36.0
         cap_x_m = min(door_x_m, env_w + 20.0 / 36.0 - 22.0 / 36.0 - cap_w_m / 2.0)
-        entrance_dict = {
-            "p1": (door_x_m, env_d + 8.5 / 36.0),
-            "p2": (door_x_m, env_d + 1.0 / 36.0),
-            "label": "MAIN ENTRY",
-            "label_pos": (cap_x_m, env_d + 66.0 / 36.0)
-        }
+        if is_multi_wing:
+            # Main entrance is on South wall (y = 0.0) facing street frontage
+            entrance_dict = {
+                "p1": (door_x_m, -0.60),
+                "p2": (door_x_m, -0.05),
+                "label": "MAIN ENTRY",
+                "label_pos": (door_x_m, -1.20)
+            }
+        else:
+            entrance_dict = {
+                "p1": (door_x_m, env_d + 8.5 / 36.0),
+                "p2": (door_x_m, env_d + 1.0 / 36.0),
+                "label": "MAIN ENTRY",
+                "label_pos": (cap_x_m, env_d + 66.0 / 36.0)
+            }
 
     annot_prim = AnnotationPrimitive(
         layer="annotations",
@@ -1756,7 +1894,8 @@ def build_drawing_ir(
         primitives=primitives,
         door_schedule=door_sched if isinstance(door_sched, list) else [],
         window_schedule=win_sched if isinstance(win_sched, list) else [],
-        room_schedule=room_sched if isinstance(room_sched, list) else []
+        room_schedule=room_sched if isinstance(room_sched, list) else [],
+        has_stepped_envelope=is_multi_wing
     )
 
 
@@ -1780,6 +1919,8 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
     content_h = ir.envelope_d * scale
     svg_w = int(content_w + 2.0 * margin_x)
     svg_h = int(content_h + 2.0 * margin_y + title_block_h + schedules_panel_h)
+    banner_y = margin_y + content_h + 24.0
+    schedules_y = banner_y + 48.0
 
     bg_color = "#0B132B" if is_cad else "#F8FAFC"
     grid_line = "#1E293B" if is_cad else "#E2E8F0"
@@ -1808,7 +1949,7 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
           <path d="M {scale/2} 0 L {scale/2} {scale} M 0 {scale/2} L {scale} {scale/2}" fill="none" stroke="{grid_line}" stroke-width="0.25" stroke-dasharray="2 2" />
         </pattern>
         <pattern id="mf-hatch-setback" width="10" height="10" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
-          <line x1="0" y1="0" x2="0" y2="10" stroke="{text_dim}" stroke-width="1.2" opacity="0.4" />
+          <line x1="0" y1="0" x2="0" y2="10" stroke="{text_dim}" stroke-width="0.6" opacity="0.10" />
         </pattern>
         <marker id="entry-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
           <path d="M 0 1 L 9 5 L 0 9 z" fill="#10B981" />
@@ -1829,7 +1970,10 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
 
     svg.append(f'  <rect width="{svg_w}" height="{svg_h}" fill="{bg_color}" />')
     svg.append(f'  <rect x="{margin_x}" y="{margin_y}" width="{content_w}" height="{content_h}" fill="url(#mf-grid-{theme})" />')
-    svg.append(f'  <rect x="{margin_x}" y="{margin_y}" width="{content_w}" height="{content_h}" fill="none" stroke="{ext_wall_stroke}" stroke-width="4.5" stroke-linecap="square" />')
+    if getattr(ir, "has_stepped_envelope", False):
+        svg.append(f'  <rect x="{margin_x}" y="{margin_y}" width="{content_w}" height="{content_h}" fill="none" stroke="{text_dim}" stroke-width="0.8" stroke-dasharray="4 4" />')
+    else:
+        svg.append(f'  <rect x="{margin_x}" y="{margin_y}" width="{content_w}" height="{content_h}" fill="none" stroke="{ext_wall_stroke}" stroke-width="4.5" stroke-linecap="square" />')
 
     # 0. Site & Irregular Polygon Layer (If present)
     for p in [prim for prim in ir.primitives if isinstance(prim, (PolygonPrimitive, PathPrimitive))]:
@@ -1980,6 +2124,13 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                 b_txt = "#F8FAFC" if is_cad else "#0F172A"
                 tag_num = t.room_tag_circle["room_idx"]
                 rad = t.room_tag_circle.get("radius_px", 7.5)
+                cent = t.room_tag_circle.get("centroid_m")
+                if cent:
+                    cx_s, cy_s = px(cent[0]), py(cent[1])
+                    dist_to_cent = math.hypot(tx_s - cx_s, ty_s - cy_s)
+                    if dist_to_cent > rad + 2.0:
+                        svg.append(f'  <line x1="{cx_s:.1f}" y1="{cy_s:.1f}" x2="{tx_s:.1f}" y2="{ty_s:.1f}" stroke="{b_strk}" stroke-width="1.0" stroke-dasharray="2 2" />')
+                        svg.append(f'  <circle cx="{cx_s:.1f}" cy="{cy_s:.1f}" r="2.0" fill="{b_strk}" />')
                 svg.append(f'  <circle id="room-tag-{tag_num}" class="room-tag-badge" cx="{tx_s:.1f}" cy="{ty_s:.1f}" r="{rad:.1f}" fill="{b_fill}" stroke="{b_strk}" stroke-width="1.2" />')
                 svg.append(f'  <text x="{tx_s:.1f}" y="{ty_s + 2.5:.1f}" font-size="7.5" font-weight="700" fill="{b_txt}" text-anchor="middle">{tag_num}</text>')
             else:
@@ -1990,8 +2141,12 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                 line_step = fs * 1.25
 
                 if t.halo:
-                    hw = t.halo_w_m * scale
-                    hh = t.halo_h_m * scale
+                    lines_to_measure = lines.copy()
+                    if t.subtext:
+                        lines_to_measure.append(t.subtext)
+                    max_text_w_px = max((_approx_text_width(l, fs) for l in lines_to_measure), default=0.0)
+                    hw = max(t.halo_w_m * scale, max_text_w_px + 14.0)
+                    hh = max(t.halo_h_m * scale, (len(lines_to_measure) * fs * 1.3) + 8.0)
                     halo_fill = "rgba(11,19,43,0.85)" if is_cad else "rgba(255,255,255,0.92)"
                     svg.append(f'  <rect x="{tx_s - hw/2.0:.1f}" y="{ty_s - hh/2.0:.1f}" width="{hw:.1f}" height="{hh:.1f}" rx="3" fill="{halo_fill}" stroke="rgba(0,0,0,0.08)" stroke-width="0.5" />')
 
@@ -2015,14 +2170,20 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                 draw_slash_tick_svg(px(tk[0]), py(tk[1]))
             for wp1, wp2 in dc.witness_lines:
                 svg.append(f'  <line x1="{px(wp1[0]):.1f}" y1="{py(wp1[1]):.1f}" x2="{px(wp2[0]):.1f}" y2="{py(wp2[1]):.1f}" stroke="{text_dim}" stroke-width="0.5" stroke-dasharray="2 2" />')
-            for seg in dc.segments:
+            for s_idx, seg in enumerate(dc.segments):
                 lbl_x = px(seg["center_x"])
                 lbl_y = py(seg["center_y"])
                 lbl_txt = seg["label"]
-                fs = seg.get("font_size_pt", 7.0)
+                fs = max(7.0, seg.get("font_size_pt", 7.0))
+                seg_len = _safe_float(seg.get("length_m", 2.0), 2.0)
+                offset = 0.0
+                if seg_len < 1.8:
+                    offset = -7.0 if (s_idx % 2 == 0) else 7.0
                 if seg.get("is_vertical"):
+                    lbl_x += offset
                     svg.append(f'  <text x="{lbl_x:.1f}" y="{lbl_y:.1f}" font-size="{fs:.1f}" font-weight="700" fill="{text_primary}" text-anchor="middle" transform="rotate(-90 {lbl_x:.1f} {lbl_y:.1f})">{lbl_txt}</text>')
                 else:
+                    lbl_y += offset
                     svg.append(f'  <text x="{lbl_x:.1f}" y="{lbl_y:.1f}" font-size="{fs:.1f}" font-weight="700" fill="{text_primary}" text-anchor="middle">{lbl_txt}</text>')
 
     # 8. Annotations Layer
@@ -2038,7 +2199,7 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                 svg.append(f'    <text x="0" y="-15" font-size="8.5" font-weight="800" fill="{text_primary}" text-anchor="middle">N</text>')
                 svg.append('  </g>')
 
-            scale_y = svg_h - 20.0
+            scale_y = (schedules_y + 140.0) if ir.header.floor_index < 0 else (svg_h - 20.0)
             svg.append(f'  <g transform="translate({margin_x}, {scale_y})">')
             svg.append(f'    <text x="0" y="-12" font-size="7.0" font-weight="700" fill="{text_secondary}">GRAPHIC SCALE (METRIC)</text>')
             svg.append(f'    <rect x="0" y="0" width="{scale}" height="3" fill="{text_secondary}" />')
@@ -2064,116 +2225,165 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                 lbl_pos = ep["label_pos"]
                 svg.append(f'  <text x="{px(lbl_pos[0]):.1f}" y="{py(lbl_pos[1]):.1f}" font-size="8.5" font-weight="800" stroke="{bg_color}" stroke-width="3.2" stroke-linejoin="round" fill="#047857" paint-order="stroke fill" text-anchor="middle" letter-spacing="0.8">{ep["label"]}</text>')
 
-    banner_y = margin_y + content_h + 24.0
     typology_tag = f"TYPOLOGY: {ir.header.typology} | {ir.header.freshness_token}"
     svg.append(f'  <g transform="translate({margin_x}, {banner_y})">')
-    svg.append(f'    <text x="0" y="11.0" font-size="11.0" font-weight="700" fill="{text_primary}">{html.escape(ir.header.floor_name.upper())} (+{ir.header.elevation_m:.2f}m LVL)</text>')
-    svg.append(f'    <text x="0" y="26.0" font-size="8.5" font-weight="500" fill="{text_secondary}">{html.escape(typology_tag)}</text>')
-    if ir.header.floor_index == 0:
-        svg.append(f'    <text x="0" y="39.0" font-size="8.5" font-weight="600" fill="#10B981">MAIN ENTRANCE: NORTH | MAIN ENTRY | NBC 2016 COMPLIANT</text>')
+    if ir.header.floor_index >= 0:
+        svg.append(f'    <text x="0" y="11.0" font-size="11.0" font-weight="700" fill="{text_primary}">{html.escape(ir.header.floor_name.upper())} (+{ir.header.elevation_m:.2f}m LVL)</text>')
+        svg.append(f'    <text x="0" y="26.0" font-size="8.5" font-weight="500" fill="{text_secondary}">{html.escape(typology_tag)}</text>')
+        if ir.header.floor_index == 0:
+            entrance_dir = "SOUTH" if (getattr(ir, "has_stepped_envelope", False)) else "NORTH"
+            svg.append(f'    <text x="0" y="39.0" font-size="8.5" font-weight="600" fill="#10B981">MAIN ENTRANCE: {entrance_dir} | MAIN ENTRY | NBC 2016 COMPLIANT</text>')
+    else:
+        svg.append(f'    <text x="0" y="11.0" font-size="11.0" font-weight="700" fill="{text_primary}">{html.escape(ir.header.floor_name.upper())}</text>')
+        svg.append(f'    <text x="0" y="26.0" font-size="8.5" font-weight="500" fill="{text_secondary}">{html.escape(typology_tag)}</text>')
+        svg.append(f'    <text x="0" y="39.0" font-size="8.5" font-weight="600" fill="#10B981">NBC 2016 SETBACK COMPLIANT | SURVEY COORD SYSTEM (EASTING, NORTHING)</text>')
     svg.append('  </g>')
 
-    schedules_y = banner_y + 48.0
     svg.append(f'  <g transform="translate({margin_x}, {schedules_y})">')
-    svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}" letter-spacing="0.4">WALL TYPE SPECIFICATION (NBC 2016 COMPLIANT)</text>')
-    svg.append(f'    <line x1="0" y1="18.0" x2="16.0" y2="18.0" stroke="{ext_wall_stroke}" stroke-width="4.0" />')
-    svg.append(f'    <text x="22.0" y="20.0" font-size="6.5" font-weight="600" fill="{text_secondary}">W1: 230mm Exterior Structural Wall (Masonry/RCC) - NBC 2016 Pt 3 Cl 3.4.1</text>')
-    svg.append(f'    <line x1="0" y1="29.0" x2="16.0" y2="29.0" stroke="{int_wall_stroke}" stroke-width="2.5" />')
-    svg.append(f'    <text x="22.0" y="31.0" font-size="6.5" font-weight="600" fill="{text_secondary}">W2: 115mm Interior Partition Wall (Half-Brick Masonry)</text>')
-    svg.append(f'    <line x1="0" y1="40.0" x2="16.0" y2="40.0" stroke="{int_wall_stroke}" stroke-width="1.8" stroke-dasharray="3 2" />')
-    svg.append(f'    <text x="22.0" y="42.0" font-size="6.5" font-weight="600" fill="{text_secondary}">W3: 75mm Toilet / Shaft Lightweight Enclosure</text>')
+    if ir.header.floor_index >= 0:
+        svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}" letter-spacing="0.4">WALL TYPE SPECIFICATION (NBC 2016 COMPLIANT)</text>')
+        svg.append(f'    <line x1="0" y1="18.0" x2="16.0" y2="18.0" stroke="{ext_wall_stroke}" stroke-width="4.0" />')
+        svg.append(f'    <text x="22.0" y="20.0" font-size="6.5" font-weight="600" fill="{text_secondary}">W1: 230mm Exterior Structural Wall (Masonry/RCC) - NBC 2016 Pt 3 Cl 3.4.1</text>')
+        svg.append(f'    <line x1="0" y1="29.0" x2="16.0" y2="29.0" stroke="{int_wall_stroke}" stroke-width="2.5" />')
+        svg.append(f'    <text x="22.0" y="31.0" font-size="6.5" font-weight="600" fill="{text_secondary}">W2: 115mm Interior Partition Wall (Half-Brick Masonry)</text>')
+        svg.append(f'    <line x1="0" y1="40.0" x2="16.0" y2="40.0" stroke="{int_wall_stroke}" stroke-width="1.8" stroke-dasharray="3 2" />')
+        svg.append(f'    <text x="22.0" y="42.0" font-size="6.5" font-weight="600" fill="{text_secondary}">W3: 75mm Toilet / Shaft Lightweight Enclosure</text>')
+    else:
+        svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}" letter-spacing="0.4">SITE PLAN SPECIFICATION &amp; LEGEND</text>')
+        svg.append(f'    <line x1="0" y1="18.0" x2="16.0" y2="18.0" stroke="{ext_wall_stroke}" stroke-width="3.5" />')
+        svg.append(f'    <text x="22.0" y="20.0" font-size="6.5" font-weight="600" fill="{text_secondary}">Plot Boundary &amp; Cadastral Survey Perimeters</text>')
+        svg.append(f'    <line x1="0" y1="29.0" x2="16.0" y2="29.0" stroke="#0284C7" stroke-width="2.0" stroke-dasharray="4 3" />')
+        svg.append(f'    <text x="22.0" y="31.0" font-size="6.5" font-weight="600" fill="{text_secondary}">Statutory Buildable Envelope (Setbacks Deducted)</text>')
+        svg.append(f'    <line x1="0" y1="40.0" x2="16.0" y2="40.0" stroke="#D97706" stroke-width="3.5" />')
+        svg.append(f'    <text x="22.0" y="42.0" font-size="6.5" font-weight="600" fill="{text_secondary}">Proposed Building Footprint (Wing A + Wing B + Link)</text>')
     svg.append('  </g>')
 
-    door_tbl_y = schedules_y + 54.0
-    svg.append(f'  <g transform="translate({margin_x}, {door_tbl_y})">')
-    svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">DOOR SCHEDULE</text>')
-    d_cols = [24.0, 52.0, 56.0, 36.0]
-    d_heads = ["TAG", "W x H (m)", "TYPE", "LEVEL"]
-    cx = 0.0
-    for h_txt, cw in zip(d_heads, d_cols):
-        svg.append(f'    <text x="{cx:.1f}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">{h_txt}</text>')
-        cx += cw
+    if ir.header.floor_index >= 0:
+        door_tbl_y = schedules_y + 54.0
+        svg.append(f'  <g transform="translate({margin_x}, {door_tbl_y})">')
+        svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">DOOR SCHEDULE</text>')
+        d_cols = [24.0, 52.0, 56.0, 36.0]
+        d_heads = ["TAG", "W x H (m)", "TYPE", "LEVEL"]
+        cx = 0.0
+        for h_txt, cw in zip(d_heads, d_cols):
+            svg.append(f'    <text x="{cx:.1f}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">{h_txt}</text>')
+            cx += cw
 
-    for r_idx, d_row in enumerate(ir.door_schedule[:5]):
-        ry_pos = 29.0 + (r_idx * 10.5)
-        d_tag = str(d_row.get("tag", f"D{r_idx+1}"))
-        if "dimension" in d_row:
-            d_wh = str(d_row["dimension"])
-        elif "width_mm" in d_row and "height_mm" in d_row:
-            d_wh = f"{d_row['width_mm']/1000.0:.2f}x{d_row['height_mm']/1000.0:.2f}"
-        else:
-            d_wh = f"{_safe_float(d_row.get('width_m', 0.9), 0.9):.2f}x{_safe_float(d_row.get('height_m', 2.1), 2.1):.2f}"
-        d_tp = str(d_row.get("door_type", d_row.get("type", "Standard")))[:11]
-        d_lvl = f"L{d_row.get('level', ir.header.floor_index)}"
-        rcx = 0.0
-        for val_txt, cw in zip([d_tag, d_wh, d_tp, d_lvl], d_cols):
-            svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(val_txt)}</text>')
-            rcx += cw
-    svg.append('  </g>')
+        for r_idx, d_row in enumerate(ir.door_schedule[:5]):
+            ry_pos = 29.0 + (r_idx * 10.5)
+            d_tag = str(d_row.get("tag", f"D{r_idx+1}"))
+            if "dimension" in d_row:
+                d_wh = str(d_row["dimension"])
+            elif "width_mm" in d_row and "height_mm" in d_row:
+                d_wh = f"{d_row['width_mm']/1000.0:.2f}x{d_row['height_mm']/1000.0:.2f}"
+            else:
+                d_wh = f"{_safe_float(d_row.get('width_m', 0.9), 0.9):.2f}x{_safe_float(d_row.get('height_m', 2.1), 2.1):.2f}"
+            d_tp = str(d_row.get("door_type", d_row.get("type", "Standard")))[:11]
+            d_lvl = f"L{d_row.get('level', ir.header.floor_index)}"
+            rcx = 0.0
+            for val_txt, cw in zip([d_tag, d_wh, d_tp, d_lvl], d_cols):
+                svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(val_txt)}</text>')
+                rcx += cw
+        svg.append('  </g>')
 
-    win_tbl_x = margin_x + max(180.0, (content_w - 20.0) / 2.0) + 10.0
-    svg.append(f'  <g transform="translate({win_tbl_x}, {door_tbl_y})">')
-    svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">WINDOW SCHEDULE</text>')
-    w_cols = [24.0, 52.0, 46.0, 46.0]
-    w_heads = ["TAG", "W x H (m)", "SILL", "LINTEL"]
-    cx = 0.0
-    for h_txt, cw in zip(w_heads, w_cols):
-        svg.append(f'    <text x="{cx:.1f}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">{h_txt}</text>')
-        cx += cw
+        win_tbl_x = margin_x + max(180.0, (content_w - 20.0) / 2.0) + 10.0
+        svg.append(f'  <g transform="translate({win_tbl_x}, {door_tbl_y})">')
+        svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">WINDOW SCHEDULE</text>')
+        w_cols = [24.0, 52.0, 46.0, 46.0]
+        w_heads = ["TAG", "W x H (m)", "SILL", "LINTEL"]
+        cx = 0.0
+        for h_txt, cw in zip(w_heads, w_cols):
+            svg.append(f'    <text x="{cx:.1f}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">{h_txt}</text>')
+            cx += cw
 
-    for r_idx, w_row in enumerate(ir.window_schedule[:5]):
-        ry_pos = 29.0 + (r_idx * 10.5)
-        w_tag = str(w_row.get("tag", f"W{r_idx+1}"))
-        if "dimension" in w_row:
-            w_wh = str(w_row["dimension"])
-        elif "width_mm" in w_row and "height_mm" in w_row:
-            w_wh = f"{w_row['width_mm']/1000.0:.2f}x{w_row['height_mm']/1000.0:.2f}"
-        else:
-            w_wh = f"{_safe_float(w_row.get('width_m', 1.2), 1.2):.2f}x{_safe_float(w_row.get('height_m', 1.2), 1.2):.2f}"
-        sill_v = w_row.get("sill_height_m", w_row.get("sill_m"))
-        if sill_v is not None:
-            w_sill = f"+{_safe_float(sill_v, 0.9):.2f}m"
-        elif "sill_mm" in w_row:
-            w_sill = f"+{w_row['sill_mm']/1000.0:.2f}m"
-        else:
-            w_sill = "+0.90m"
-        lint_v = w_row.get("lintel_height_m", w_row.get("lintel_m"))
-        if lint_v is not None:
-            w_lint = f"+{_safe_float(lint_v, 2.1):.2f}m"
-        elif "lintel_mm" in w_row:
-            w_lint = f"+{w_row['lintel_mm']/1000.0:.2f}m"
-        else:
-            w_lint = "+2.10m"
-        rcx = 0.0
-        for val_txt, cw in zip([w_tag, w_wh, w_sill, w_lint], w_cols):
-            svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(val_txt)}</text>')
-            rcx += cw
-    svg.append('  </g>')
+        for r_idx, w_row in enumerate(ir.window_schedule[:5]):
+            ry_pos = 29.0 + (r_idx * 10.5)
+            w_tag = str(w_row.get("tag", f"W{r_idx+1}"))
+            if "dimension" in w_row:
+                w_wh = str(w_row["dimension"])
+            elif "width_mm" in w_row and "height_mm" in w_row:
+                w_wh = f"{w_row['width_mm']/1000.0:.2f}x{w_row['height_mm']/1000.0:.2f}"
+            else:
+                w_wh = f"{_safe_float(w_row.get('width_m', 1.2), 1.2):.2f}x{_safe_float(w_row.get('height_m', 1.2), 1.2):.2f}"
+            sill_v = w_row.get("sill_height_m", w_row.get("sill_m"))
+            if sill_v is not None:
+                w_sill = f"+{_safe_float(sill_v, 0.9):.2f}m"
+            elif "sill_mm" in w_row:
+                w_sill = f"+{w_row['sill_mm']/1000.0:.2f}m"
+            else:
+                w_sill = "+0.90m"
+            lint_v = w_row.get("lintel_height_m", w_row.get("lintel_m"))
+            if lint_v is not None:
+                w_lint = f"+{_safe_float(lint_v, 2.1):.2f}m"
+            elif "lintel_mm" in w_row:
+                w_lint = f"+{w_row['lintel_mm']/1000.0:.2f}m"
+            else:
+                w_lint = "+2.10m"
+            rcx = 0.0
+            for val_txt, cw in zip([w_tag, w_wh, w_sill, w_lint], w_cols):
+                svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(val_txt)}</text>')
+                rcx += cw
+        svg.append('  </g>')
 
-    room_tbl_y = door_tbl_y + 82.0
-    svg.append(f'  <g transform="translate({margin_x}, {room_tbl_y})">')
-    svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">ROOM SCHEDULE</text>')
-    r_cols = [24.0, 80.0, 40.0, 56.0]
-    r_heads = ["NO", "ROOM NAME", "AREA", "CLEAR W x D"]
-    cx = 0.0
-    for h_txt, cw in zip(r_heads, r_cols):
-        svg.append(f'    <text x="{cx:.1f}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">{h_txt}</text>')
-        cx += cw
+        room_tbl_y = door_tbl_y + 82.0
+        svg.append(f'  <g transform="translate({margin_x}, {room_tbl_y})">')
+        svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">ROOM SCHEDULE</text>')
+        r_cols = [24.0, 80.0, 40.0, 56.0]
+        r_heads = ["NO", "ROOM NAME", "AREA", "CLEAR W x D"]
+        cx = 0.0
+        for h_txt, cw in zip(r_heads, r_cols):
+            svg.append(f'    <text x="{cx:.1f}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">{h_txt}</text>')
+            cx += cw
 
-    for r_idx, r_row in enumerate(ir.room_schedule[:6]):
-        ry_pos = 29.0 + (r_idx * 10.5)
-        r_num = str(r_row.get("room_number", r_row.get("room_no", r_row.get("no", r_idx + 1))))
-        r_name = str(r_row.get("room_name", "Room"))[:18]
-        area_val = r_row.get("clear_area_sqm", r_row.get("clear_area_m2", r_row.get("area_sqm", r_row.get("area", 0.0))))
-        r_area = f"{_safe_float(area_val, 0.0):.1f}m²"
-        r_dims = r_row.get("clear_dimensions", r_row.get("clear_dims"))
-        if not r_dims:
-            r_dims = f"{_safe_float(r_row.get('width_m', 0.0), 0.0):.2f}x{_safe_float(r_row.get('depth_m', 0.0), 0.0):.2f}"
-        rcx = 0.0
-        for val_txt, cw in zip([r_num, r_name, r_area, r_dims], r_cols):
-            svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(val_txt)}</text>')
-            rcx += cw
-    svg.append('  </g>')
+        for r_idx, r_row in enumerate(ir.room_schedule[:6]):
+            ry_pos = 29.0 + (r_idx * 10.5)
+            r_num = str(r_row.get("room_number", r_row.get("room_no", r_row.get("no", r_idx + 1))))
+            r_name = str(r_row.get("room_name", "Room"))[:18]
+            area_val = r_row.get("clear_area_sqm", r_row.get("clear_area_m2", r_row.get("area_sqm", r_row.get("area", 0.0))))
+            r_area = f"{_safe_float(area_val, 0.0):.1f}m²"
+            r_dims = r_row.get("clear_dimensions", r_row.get("clear_dims"))
+            if not r_dims:
+                r_dims = f"{_safe_float(r_row.get('width_m', 0.0), 0.0):.2f}x{_safe_float(r_row.get('depth_m', 0.0), 0.0):.2f}"
+            rcx = 0.0
+            for val_txt, cw in zip([r_num, r_name, r_area, r_dims], r_cols):
+                svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(val_txt)}</text>')
+                rcx += cw
+        svg.append('  </g>')
+    else:
+        # Site sheet: Vertex Coordinates Table and Survey Edge Bearings Table
+        tbl_y = schedules_y + 54.0
+        svg.append(f'  <g transform="translate({margin_x}, {tbl_y})">')
+        svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">PLOT BOUNDARY VERTICES (SURVEY COORD SYSTEM)</text>')
+        v_cols = [32.0, 56.0, 56.0]
+        v_heads = ["VERTEX", "EASTING (X)", "NORTHING (Y)"]
+        cx = 0.0
+        for h_txt, cw in zip(v_heads, v_cols):
+            svg.append(f'    <text x="{cx:.1f}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">{h_txt}</text>')
+            cx += cw
+        for r_idx, v_row in enumerate(getattr(ir, "vertex_table", [])[:8]):
+            ry_pos = 29.0 + (r_idx * 10.5)
+            rcx = 0.0
+            for val_txt, cw in zip([v_row.get("id", ""), v_row.get("x", ""), v_row.get("y", "")], v_cols):
+                svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(str(val_txt))}</text>')
+                rcx += cw
+        svg.append('  </g>')
+
+        edge_tbl_x = margin_x + max(180.0, (content_w - 20.0) / 2.0) + 10.0
+        svg.append(f'  <g transform="translate({edge_tbl_x}, {tbl_y})">')
+        svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">BOUNDARY SURVEY EDGES &amp; BEARINGS</text>')
+        e_cols = [48.0, 48.0, 76.0]
+        e_heads = ["EDGE", "LENGTH", "BEARING"]
+        cx = 0.0
+        for h_txt, cw in zip(e_heads, e_cols):
+            svg.append(f'    <text x="{cx:.1f}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">{h_txt}</text>')
+            cx += cw
+        for r_idx, e_row in enumerate(getattr(ir, "edge_schedule", [])[:8]):
+            ry_pos = 29.0 + (r_idx * 10.5)
+            rcx = 0.0
+            for val_txt, cw in zip([e_row.get("edge", ""), e_row.get("length", ""), e_row.get("bearing", "")], e_cols):
+                svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(str(val_txt))}</text>')
+                rcx += cw
+        svg.append('  </g>')
 
     wm_x = svg_w - 14.0
     wm_y = svg_h - 8.0
@@ -2540,26 +2750,89 @@ def build_site_drawing_ir(
                 layer="fills"
             ))
 
-    corner_verts = _get(footprint, "corner_vertices", [])
-    if not corner_verts and footprint:
-        fx = float(_get(footprint, "x", 0.0))
-        fy = float(_get(footprint, "y", 0.0))
-        fw = float(_get(footprint, "width_m", 10.0))
-        fd = float(_get(footprint, "depth_m", 10.0))
-        corner_verts = [(fx, fy), (fx + fw, fy), (fx + fw, fy + fd), (fx, fy + fd)]
+    wings = _get(footprint, "wings", []) or []
+    corridors = _get(footprint, "corridors", []) or []
+    courtyard_void = _get(footprint, "courtyard_void", None)
 
-    if corner_verts:
-        primitives.append(PolygonPrimitive(
-            points=[(float(pt[0]), float(pt[1])) for pt in corner_verts],
-            fill_color="#FEF3C7",
-            fill_opacity=0.60,
-            stroke_color="#D97706",
-            stroke_width_m=0.35,
-            is_footprint=True,
-            layer="fills"
-        ))
+    if len(wings) > 1:
+        # Multi-wing / L-shape rendering
+        for w_idx, wing in enumerate(wings, start=1):
+            w_pts = _get(wing, "corner_vertices", [])
+            if w_pts:
+                primitives.append(PolygonPrimitive(
+                    points=[(float(pt[0]), float(pt[1])) for pt in w_pts],
+                    fill_color="#FEF3C7",
+                    fill_opacity=0.65,
+                    stroke_color="#D97706",
+                    stroke_width_m=0.35,
+                    hatch_pattern="mf-hatch-footprint",
+                    is_footprint=True,
+                    layer="fills"
+                ))
+                nw_c = len(w_pts)
+                for k in range(nw_c):
+                    c1 = w_pts[k]
+                    c2 = w_pts[(k + 1) % nw_c]
+                    primitives.append(WallPrimitive(
+                        wall_id=f"{_get(wing, 'wing_id', f'W{w_idx}')}_W_{k + 1}",
+                        wall_type="W1",
+                        x1=float(c1[0]),
+                        y1=float(c1[1]),
+                        x2=float(c2[0]),
+                        y2=float(c2[1]),
+                        thickness_m=0.30,
+                        is_exterior=True,
+                        layer="walls"
+                    ))
+        for c_idx, corr in enumerate(corridors, start=1):
+            c_pts = _get(corr, "polygon_coords", [])
+            if c_pts:
+                primitives.append(PolygonPrimitive(
+                    points=[(float(pt[0]), float(pt[1])) for pt in c_pts],
+                    fill_color="#FEF3C7",
+                    fill_opacity=0.45,
+                    stroke_color="#D97706",
+                    stroke_width_m=0.25,
+                    is_footprint=True,
+                    layer="fills"
+                ))
+    else:
+        # Legacy single rectangle path
+        corner_verts = _get(footprint, "corner_vertices", [])
+        if not corner_verts and footprint:
+            fx = float(_get(footprint, "x", 0.0))
+            fy = float(_get(footprint, "y", 0.0))
+            fw = float(_get(footprint, "width_m", 10.0))
+            fd = float(_get(footprint, "depth_m", 10.0))
+            corner_verts = [(fx, fy), (fx + fw, fy), (fx + fw, fy + fd), (fx, fy + fd)]
 
-    # 2. Walls: Boundary survey edges & footprint walls
+        if corner_verts:
+            primitives.append(PolygonPrimitive(
+                points=[(float(pt[0]), float(pt[1])) for pt in corner_verts],
+                fill_color="#FEF3C7",
+                fill_opacity=0.60,
+                stroke_color="#D97706",
+                stroke_width_m=0.35,
+                is_footprint=True,
+                layer="fills"
+            ))
+            n_c = len(corner_verts)
+            for k in range(n_c):
+                c1 = corner_verts[k]
+                c2 = corner_verts[(k + 1) % n_c]
+                primitives.append(WallPrimitive(
+                    wall_id=f"FP_W_{k + 1}",
+                    wall_type="W1",
+                    x1=float(c1[0]),
+                    y1=float(c1[1]),
+                    x2=float(c2[0]),
+                    y2=float(c2[1]),
+                    thickness_m=0.30,
+                    is_exterior=True,
+                    layer="walls"
+                ))
+
+    # 2. Walls: Boundary survey edges
     n_v = len(vertices)
     for e in edges:
         idx = int(_get(e, "edge_index", 1)) - 1
@@ -2573,22 +2846,6 @@ def build_site_drawing_ir(
             x2=float(p2[0]),
             y2=float(p2[1]),
             thickness_m=0.25,
-            is_exterior=True,
-            layer="walls"
-        ))
-
-    n_c = len(corner_verts)
-    for k in range(n_c):
-        c1 = corner_verts[k]
-        c2 = corner_verts[(k + 1) % n_c]
-        primitives.append(WallPrimitive(
-            wall_id=f"FP_W_{k + 1}",
-            wall_type="W1",
-            x1=float(c1[0]),
-            y1=float(c1[1]),
-            x2=float(c2[0]),
-            y2=float(c2[1]),
-            thickness_m=0.30,
             is_exterior=True,
             layer="walls"
         ))
@@ -2633,34 +2890,82 @@ def build_site_drawing_ir(
             layer="text"
         ))
 
-    # Footprint central label
-    fcx = float(_get(footprint, "center_x", bbox_w / 2.0))
-    fcy = float(_get(footprint, "center_y", bbox_d / 2.0))
-    fw = float(_get(footprint, "width_m", 10.0))
-    fd = float(_get(footprint, "depth_m", 10.0))
-    fa = float(_get(footprint, "area_sqm", fw * fd))
-    rot = float(_get(footprint, "rotation_angle_deg", 0.0))
+    # Footprint labels
+    if len(wings) > 1:
+        for wing in wings:
+            wid = str(_get(wing, "wing_id", ""))
+            w_label = "WING A (PUBLIC)" if wid == "WING_A" else ("WING B (PRIVATE)" if wid == "WING_B" else str(_get(wing, "label", "WING")).upper())
+            wx = float(_get(wing, "x", 0.0))
+            wy = float(_get(wing, "y", 0.0))
+            ww = float(_get(wing, "width_m", 0.0))
+            wd = float(_get(wing, "depth_m", 0.0))
+            wa = float(_get(wing, "area_sqm", ww * wd))
+            primitives.append(TextPrimitive(
+                x=round(wx + ww / 2.0, 2),
+                y=round(wy + wd / 2.0, 2),
+                text=w_label,
+                subtext=f"{ww:.1f}m × {wd:.1f}m ({wa:.1f} m²)",
+                font_size_pt=8.0,
+                font_weight="bold",
+                halo=True,
+                layer="text"
+            ))
+        for corr in corridors:
+            cx = float(_get(corr, "x", 0.0))
+            cy = float(_get(corr, "y", 0.0))
+            cw = float(_get(corr, "width_m", 0.0))
+            cd = float(_get(corr, "depth_m", 0.0))
+            primitives.append(TextPrimitive(
+                x=round(cx + cw / 2.0, 2),
+                y=round(cy + cd / 2.0, 2),
+                text="LINK CORRIDOR",
+                subtext=f"{cw:.1f}m × {cd:.1f}m",
+                font_size_pt=6.5,
+                font_weight="semibold",
+                halo=True,
+                layer="text"
+            ))
+        if courtyard_void:
+            cv_cent = _get(courtyard_void, "centroid", (0.0, 0.0))
+            cv_area = float(_get(courtyard_void, "area_sqm", 0.0))
+            primitives.append(TextPrimitive(
+                x=round(float(cv_cent[0]), 2),
+                y=round(float(cv_cent[1]), 2),
+                text="CENTRAL COURTYARD",
+                subtext=f"{cv_area:.1f} m²",
+                font_size_pt=8.0,
+                font_weight="bold",
+                halo=True,
+                layer="text"
+            ))
+    else:
+        fcx = float(_get(footprint, "center_x", bbox_w / 2.0))
+        fcy = float(_get(footprint, "center_y", bbox_d / 2.0))
+        fw = float(_get(footprint, "width_m", 10.0))
+        fd = float(_get(footprint, "depth_m", 10.0))
+        fa = float(_get(footprint, "area_sqm", fw * fd))
+        rot = float(_get(footprint, "rotation_angle_deg", 0.0))
 
-    primitives.append(TextPrimitive(
-        x=round(fcx, 2),
-        y=round(fcy + 0.35, 2),
-        text="BUILDING FOOTPRINT",
-        subtext=f"{fw:.1f}m × {fd:.1f}m ({fa:.1f} m²)",
-        font_size_pt=8.0,
-        font_weight="bold",
-        halo=True,
-        layer="text"
-    ))
-    if abs(rot) > 0.05:
         primitives.append(TextPrimitive(
             x=round(fcx, 2),
-            y=round(fcy - 0.50, 2),
-            text=f"Rotation: {rot:.1f}° from North",
-            font_size_pt=6.5,
-            font_weight="normal",
+            y=round(fcy + 0.35, 2),
+            text="BUILDING FOOTPRINT",
+            subtext=f"{fw:.1f}m × {fd:.1f}m ({fa:.1f} m²)",
+            font_size_pt=8.0,
+            font_weight="bold",
             halo=True,
             layer="text"
         ))
+        if abs(rot) > 0.05:
+            primitives.append(TextPrimitive(
+                x=round(fcx, 2),
+                y=round(fcy - 0.50, 2),
+                text=f"Rotation: {rot:.1f}° from North",
+                font_size_pt=6.5,
+                font_weight="normal",
+                halo=True,
+                layer="text"
+            ))
 
     for frag in outdoor_zones:
         fname = str(_get(frag, "name", "Outdoor Yard"))
@@ -2671,9 +2976,11 @@ def build_site_drawing_ir(
             y=round(float(cent[1]), 2),
             text=fname,
             subtext=f"{farea:.1f} m²",
-            font_size_pt=6.5,
-            font_weight="semibold",
+            font_size_pt=7.5,
+            font_weight="bold",
             halo=True,
+            halo_w_m=2.6,
+            halo_h_m=0.7,
             layer="text"
         ))
 
@@ -2709,6 +3016,21 @@ def build_site_drawing_ir(
         typology=typology
     )
 
+    v_rows = []
+    for vt in vertex_table:
+        vid = str(_get(vt, "id", "P"))
+        vx = float(_get(vt, "x_m", 0.0))
+        vy = float(_get(vt, "y_m", 0.0))
+        v_rows.append({"id": vid, "x": f"{vx:.2f}m", "y": f"{vy:.2f}m"})
+
+    e_rows = []
+    for e in edges:
+        f_v = str(_get(e, "from_vertex", ""))
+        t_v = str(_get(e, "to_vertex", ""))
+        l_m = float(_get(e, "length_m", 0.0))
+        b_dms = str(_get(e, "bearing_dms", ""))
+        e_rows.append({"edge": f"{f_v}-{t_v}", "length": f"{l_m:.2f}m", "bearing": b_dms})
+
     return FloorDrawingIR(
         envelope_w=round(bbox_w, 2),
         envelope_d=round(bbox_d, 2),
@@ -2716,5 +3038,8 @@ def build_site_drawing_ir(
         primitives=primitives,
         door_schedule=[],
         window_schedule=[],
-        room_schedule=[]
+        room_schedule=[],
+        has_stepped_envelope=False,
+        vertex_table=v_rows,
+        edge_schedule=e_rows,
     )

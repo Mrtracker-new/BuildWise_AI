@@ -46,3 +46,7 @@ yarn-error.log*
 Thumbs.db
 *.swp
 *.swo
+
+# Scratch files
+scratch/
+backend/scratch/

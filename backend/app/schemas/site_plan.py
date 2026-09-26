@@ -59,8 +59,34 @@ class OutdoorFragment(BaseModel):
     polygon_coords: List[Tuple[float, float]] = Field(default_factory=list)
 
 
+class FootprintWing(BaseModel):
+    """Individual rectangular wing within an articulated footprint."""
+    wing_id: str
+    label: str
+    zone_type: Literal["public", "private", "service", "circulation"] = "public"
+    x: float
+    y: float
+    width_m: float
+    depth_m: float
+    area_sqm: float
+    corner_vertices: List[Tuple[float, float]] = Field(default_factory=list)
+
+
+class CorridorLink(BaseModel):
+    """Circulation corridor bridging two wings."""
+    link_id: str
+    from_wing_id: str
+    to_wing_id: str
+    x: float
+    y: float
+    width_m: float
+    depth_m: float
+    area_sqm: float
+    polygon_coords: List[Tuple[float, float]] = Field(default_factory=list)
+
+
 class InscribedFootprint(BaseModel):
-    """Footprint rectangle fitted inside buildable polygon."""
+    """Footprint geometry fitted inside buildable polygon."""
     x: float          # SW origin X (meters)
     y: float          # SW origin Y (meters)
     width_m: float    # Footprint width in meters
@@ -70,6 +96,10 @@ class InscribedFootprint(BaseModel):
     center_x: float = 0.0
     center_y: float = 0.0
     corner_vertices: List[Tuple[float, float]] = Field(default_factory=list)
+    topology_type: Literal["single_rectangle", "l_shape", "courtyard", "multi_wing"] = "single_rectangle"
+    wings: List[FootprintWing] = Field(default_factory=list)
+    corridors: List[CorridorLink] = Field(default_factory=list)
+    courtyard_void: Optional[OutdoorFragment] = None
 
 
 class SiteCertificate(BaseModel):

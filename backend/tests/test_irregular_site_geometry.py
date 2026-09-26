@@ -12,6 +12,7 @@ from app.services.floorplan.site_geometry import (
     find_largest_inscribed_rectangle,
     extract_outdoor_fragments,
     compute_survey_edges,
+    approximate_curvilinear_polygon,
 )
 from app.services.floorplan.drawing_ir import (
     build_site_drawing_ir,
@@ -181,20 +182,38 @@ def test_golden_irregular_cases(shape_name: str, vertices, expected_min_area: fl
     # 1. Shapely contains check: Footprint polygon must be strictly within buildable polygon
     buildable_poly = ShapelyPolygon(sp.buildable_polygon_coords)
     footprint = sp.footprint
-    fp_poly = ShapelyPolygon([
-        (footprint.x, footprint.y),
-        (footprint.x + footprint.width_m, footprint.y),
-        (footprint.x + footprint.width_m, footprint.y + footprint.depth_m),
-        (footprint.x, footprint.y + footprint.depth_m),
-    ])
-    # Check within / contains (with 1e-3 epsilon for floating point boundary contact)
-    assert buildable_poly.buffer(1e-3).contains(fp_poly), (
-        f"Footprint {fp_poly.bounds} not contained in buildable polygon for {shape_name}"
-    )
+    site_poly = ShapelyPolygon(sp.plot_polygon.vertices)
+
+    if footprint.topology_type == "single_rectangle":
+        fp_poly = ShapelyPolygon([
+            (footprint.x, footprint.y),
+            (footprint.x + footprint.width_m, footprint.y),
+            (footprint.x + footprint.width_m, footprint.y + footprint.depth_m),
+            (footprint.x, footprint.y + footprint.depth_m),
+        ])
+        assert buildable_poly.buffer(1e-3).contains(fp_poly), (
+            f"Footprint {fp_poly.bounds} not contained in buildable polygon for {shape_name}"
+        )
+        dist_to_boundary = site_poly.boundary.distance(fp_poly)
+        fp_area = footprint.width_m * footprint.depth_m
+    else:
+        for wing in footprint.wings:
+            w_poly = ShapelyPolygon(wing.corner_vertices)
+            assert buildable_poly.buffer(1e-3).contains(w_poly), (
+                f"Wing {wing.wing_id} {w_poly.bounds} not contained in buildable polygon for {shape_name}"
+            )
+        for corr in footprint.corridors:
+            c_poly = ShapelyPolygon(corr.polygon_coords)
+            assert buildable_poly.buffer(1e-3).contains(c_poly), (
+                f"Corridor {corr.link_id} not contained in buildable polygon for {shape_name}"
+            )
+        dist_to_boundary = min(
+            site_poly.boundary.distance(ShapelyPolygon(wing.corner_vertices))
+            for wing in footprint.wings
+        )
+        fp_area = sum(w.area_sqm for w in footprint.wings)
 
     # 2. Setback check: Distance from footprint to plot boundary >= nominal setback
-    site_poly = ShapelyPolygon(sp.plot_polygon.vertices)
-    dist_to_boundary = site_poly.boundary.distance(fp_poly)
     # Distance must be at least the statutory setback (accounting for mitre/collapse adjustments)
     assert dist_to_boundary >= sp.nominal_setback_m - 0.25, (
         f"Setback margin {dist_to_boundary:.2f}m < code minimum for {shape_name}"
@@ -202,7 +221,6 @@ def test_golden_irregular_cases(shape_name: str, vertices, expected_min_area: fl
 
     # 3. Coverage and FAR check vs canonical polygon area
     plot_area = sp.plot_polygon.area_sqm
-    fp_area = footprint.width_m * footprint.depth_m
     coverage_ratio = fp_area / plot_area
     assert coverage_ratio * 100.0 <= sp.certificate.ground_coverage_limit_pct + 5.0
     total_built_up = fp_area * bldg.total_storeys
@@ -418,3 +436,184 @@ def test_site_sheet_drawing_ir_and_pdf_parity():
     all_text = "".join(p.extract_text() for p in reader.pages)
     assert "10.SP" in all_text
     assert "CADASTRAL" in all_text
+
+
+# ==============================================================================
+# 6. PHASE 5 PROOFS: CURVES, L-SHAPE MULTI-WING, COURTYARD TOPOLOGY
+# ==============================================================================
+
+def test_curvilinear_boundary_approximation():
+    """
+    Phase 1 Proof:
+    - Input dense curved arc vertices.
+    - Shapely simplify approximates to piecewise-linear polyline.
+    - Area retained >= 95% of original shoelace area.
+    - Simplified polygon is valid and simple.
+    - Self-intersecting broken topology is rejected.
+    """
+    import math
+    from shapely.geometry import box as shapely_box
+
+    # Generate a 20x20 plot with a dense circular curved fillet on the NE corner (50 points)
+    straight_pts = [(0.0, 0.0), (20.0, 0.0), (20.0, 12.0)]
+    # Circular arc around (12, 12) from angle 0 to pi/2: (20, 12) -> (12, 20)
+    arc_pts = []
+    for step in range(1, 50):
+        angle = (math.pi / 2.0) * (step / 49.0)
+        ax = round(12.0 + 8.0 * math.cos(angle), 3)
+        ay = round(12.0 + 8.0 * math.sin(angle), 3)
+        arc_pts.append((ax, ay))
+    curved_verts = straight_pts + arc_pts + [(0.0, 20.0)]
+
+    orig_poly = ShapelyPolygon(curved_verts)
+    assert orig_poly.is_valid
+
+    is_ok, diags, approx_coords = approximate_curvilinear_polygon(curved_verts, tolerance=0.10)
+    assert is_ok is True
+    approx_poly = ShapelyPolygon(approx_coords)
+    assert approx_poly.is_valid
+    assert approx_poly.geom_type == "Polygon"
+
+    # Must retain >= 95% of original area
+    area_ratio = approx_poly.area / orig_poly.area
+    assert area_ratio >= 0.95, f"Retained area {area_ratio:.3f} < 95% threshold"
+
+    # Polyline vertex count must be significantly simplified from 50+ vertices
+    assert len(approx_coords) < len(curved_verts)
+
+    # Topology break rejection check
+    broken_verts = [(0.0, 0.0), (10.0, 10.0), (10.0, 0.0), (0.0, 10.0)]
+    is_ok_broken, diags_broken, _ = approximate_curvilinear_polygon(broken_verts)
+    assert is_ok_broken is False
+
+
+def test_golden_l_shape_multi_wing():
+    """
+    Phase 5 Proof 2: Golden L-Shape Test
+    - Input 20x20 L-shaped buildable polygon.
+    - Assert solver generates TWO distinct wings connected by a corridor.
+    - Rooms placed inside respective wings (Public in Wing A, Private in Wing B).
+    - ZERO rooms span across the 'missing' corner of the L.
+    - Circulation graph is fully connected.
+    - Stepped dimensions follow the stepped perimeter.
+    - Street facade label applies to exterior walls facing frontage.
+    """
+    from shapely.geometry import box as shapely_box
+
+    poly_model = PlotPolygonModel(
+        vertices=L_SHAPE_VERTICES,
+        shape_type="l_shape",
+        is_regular_rectangle=False,
+    )
+    req = FloorPlanRequest(
+        plot_width_m=20.0,
+        plot_depth_m=20.0,
+        floors=2,
+        building_typology="T1_SINGLE_FAMILY",
+        plot_polygon=poly_model,
+        required_rooms=["living", "kitchen", "master_bed", "bath_1", "stairs"],
+    )
+
+    res = generate_floor_plan(req)
+    assert res.multi_storey is not None
+    bldg = res.multi_storey
+    sp = SitePlanModel.model_validate(bldg.site_plan)
+
+    # 1. Two distinct wings and linking corridor
+    assert sp.footprint.topology_type == "l_shape"
+    assert len(sp.footprint.wings) == 2
+    assert len(sp.footprint.corridors) >= 1
+    wing_a = sp.footprint.wings[0]
+    wing_b = sp.footprint.wings[1]
+    assert wing_a.area_sqm >= 50.0
+    assert wing_b.area_sqm >= 20.0
+
+    # 2. Rooms placed in respective wings
+    f0 = bldg.floors[0]
+    room_ids = {r.room_id.split("_F")[0] for r in f0.rooms}
+    assert "living" in room_ids
+    assert "kitchen" in room_ids
+    assert "dining" in room_ids
+    assert "link_corridor" in room_ids
+    assert "master_bed" in room_ids
+    assert "bath_1" in room_ids
+    assert "bed_2" in room_ids
+    assert "bath_2" in room_ids
+
+    # 3. ZERO rooms in the missing corner of the L
+    # Missing corner is at x in (12.0, 20.0), y in (14.0, 20.0)
+    missing_corner_box = shapely_box(12.0, 14.0, 20.0, 20.0)
+    env_x = sp.footprint.x
+    env_y = sp.footprint.y
+    for rm in f0.rooms:
+        rm_site_box = shapely_box(rm.x + env_x, rm.y + env_y, rm.x + env_x + rm.width_m, rm.y + env_y + rm.depth_m)
+        intersection_area = rm_site_box.intersection(missing_corner_box).area
+        assert intersection_area == pytest.approx(0.0, abs=1e-3), (
+            f"Room {rm.room_id} intrudes into missing corner of L by {intersection_area:.2f} sqm"
+        )
+
+    # 4. Circulation fully connected
+    assert f0.circulation_status == "connected"
+
+    # 5. Wall graph has stepped dimension chains and street facade
+    wg = f0.wall_graph
+    assert wg is not None
+    dim_chains = wg.get("dim_chains_x", []) + wg.get("dim_chains_y", [])
+    assert any("STEPPED" in c.get("chain_id", "") for c in dim_chains)
+
+    # Street facade label check
+    assert any(w.get("is_street_facade") is True and w.get("label") == "STREET FACADE" for w in wg.get("walls", []))
+
+    # 6. Site plan Drawing IR renders both wings with labels
+    ir = build_site_drawing_ir(sp, str(bldg.seed), bldg.building_typology)
+    text_labels = [p.text for p in ir.primitives if hasattr(p, "text")]
+    assert any("WING A (PUBLIC)" in t for t in text_labels)
+    assert any("WING B (PRIVATE)" in t for t in text_labels)
+
+
+def test_golden_courtyard_topology():
+    """
+    Phase 5 Proof 3: Golden Courtyard Test
+    - Input 25x25 square buildable polygon with 'Courtyard' typology.
+    - Assert solver generates an O-shape/U-shape configuration with central void.
+    - Central void labeled as 'Central Courtyard' with >= 9 sqm (min 3x3m).
+    """
+    from shapely.geometry import box as shapely_box
+
+    plot_box = shapely_box(0.0, 0.0, 25.0, 25.0)
+    poly_model = PlotPolygonModel(
+        vertices=list(plot_box.exterior.coords[:-1]),
+        shape_type="irregular",
+        is_regular_rectangle=False,
+    )
+
+    req = FloorPlanRequest(
+        plot_width_m=25.0,
+        plot_depth_m=25.0,
+        floors=2,
+        building_typology="T1_SINGLE_FAMILY",
+        client_notes="Courtyard typology villa with central outdoor court",
+        plot_polygon=poly_model,
+        required_rooms=["living", "kitchen", "master_bed", "bath_1", "stairs"],
+    )
+
+    res = generate_floor_plan(req)
+    assert res.multi_storey is not None
+    bldg = res.multi_storey
+    sp = SitePlanModel.model_validate(bldg.site_plan)
+
+    # Assert courtyard topology
+    assert sp.footprint.topology_type == "courtyard"
+    assert sp.footprint.courtyard_void is not None
+    assert sp.footprint.courtyard_void.name == "Central Courtyard"
+    assert sp.footprint.courtyard_void.area_sqm >= 9.0  # Min 3x3m void
+
+    # Assert multiple wings wrapping the courtyard
+    assert len(sp.footprint.wings) >= 2
+    assert len(sp.footprint.corridors) >= 1
+
+    # Drawing IR includes Central Courtyard label
+    ir = build_site_drawing_ir(sp, str(bldg.seed), bldg.building_typology)
+    text_labels = [p.text for p in ir.primitives if hasattr(p, "text")]
+    assert any("CENTRAL COURTYARD" in t for t in text_labels)
+
