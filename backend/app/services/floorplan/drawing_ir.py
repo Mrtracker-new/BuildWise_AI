@@ -272,6 +272,8 @@ class FloorDrawingIR:
     has_stepped_envelope: bool = False
     vertex_table: List[Dict[str, Any]] = field(default_factory=list)
     edge_schedule: List[Dict[str, Any]] = field(default_factory=list)
+    design_policy: Optional[str] = None
+    design_policy_rationale: Optional[str] = None
 
     def primitives_by_layer(self, layer: LayerTag) -> List[DrawingPrimitive]:
         return [p for p in self.primitives if p.layer == layer]
@@ -660,6 +662,25 @@ def build_drawing_ir(
         if is_core:
             fc = "#FAF5FF"
 
+        is_terrace = str(_get(r["raw"], "zone_category", "")).lower() == "terrace" or "terrace" in rid.lower()
+        if is_terrace:
+            fc = "#F8FAFC"
+            poly_pts = [
+                (rx_ir, ry_ir),
+                (rx_ir + rw, ry_ir),
+                (rx_ir + rw, ry_ir + rd),
+                (rx_ir, ry_ir + rd)
+            ]
+            primitives.append(PolygonPrimitive(
+                layer="fills",
+                points=poly_pts,
+                fill_color=fc,
+                stroke_color="#94A3B8",
+                stroke_width_m=0.115,
+                hatch_pattern="mf-hatch-terrace",
+                dash_array=None
+            ))
+
         fill_prim = FillPrimitive(
             layer="fills",
             x=rx_ir,
@@ -674,6 +695,44 @@ def build_drawing_ir(
         )
         primitives.append(fill_prim)
         parsed_rooms.append((r["raw"], rx_ir, ry_ir, rw, rd, rid, rname, area, zone, is_core))
+
+    # 2b. Interior-side Functional Wedge Zones (Ground floor sheet edge absorption)
+    if f_idx == 0:
+        sp_obj = _get(building_model, "site_plan", _get(floor_data, "site_plan", None))
+        if sp_obj:
+            w_zones = _get(sp_obj, "wedge_zones", []) or []
+            fp_obj = _get(sp_obj, "footprint", {}) or {}
+            fp_x = _safe_float(_get(fp_obj, "x", env_x), env_x)
+            fp_y = _safe_float(_get(fp_obj, "y", env_y), env_y)
+            for wz in w_zones:
+                if _get(wz, "is_interior_side", False):
+                    w_coords = _get(wz, "polygon_coords", [])
+                    if w_coords:
+                        w_pts_ir = [(float(pt[0]) - fp_x, float(pt[1]) - fp_y) for pt in w_coords]
+                        primitives.append(PolygonPrimitive(
+                            layer="fills",
+                            points=w_pts_ir,
+                            fill_color="#FEF3C7",
+                            fill_opacity=0.60,
+                            stroke_color="#D97706",
+                            stroke_width_m=0.15,
+                            dash_array=[3, 2],
+                            hatch_pattern="mf-hatch-wedge",
+                            is_boundary=False
+                        ))
+                        w_cent = _get(wz, "centroid", (0.0, 0.0))
+                        w_name = str(_get(wz, "name", "Storage Wedge"))
+                        w_area = float(_get(wz, "area_sqm", 0.0))
+                        primitives.append(TextPrimitive(
+                            layer="text",
+                            x=round(float(w_cent[0]) - fp_x, 2),
+                            y=round(float(w_cent[1]) - fp_y, 2),
+                            text=w_name.upper(),
+                            subtext=f"{w_area:.1f} m² | NON-CARPET",
+                            font_size_pt=6.5,
+                            font_weight="bold",
+                            halo=True
+                        ))
 
     # 3. Wall Graph & Walls Layer
     wg_dict = _get(floor_data, "wall_graph")
@@ -1352,11 +1411,18 @@ def build_drawing_ir(
         avail_w = max(4.0, rw_px - 6.0)
         avail_h = max(4.0, rh_px - 6.0)
 
-        full_name = rname.upper()
-        abbrev_name = _get_abbrev(rname)
-        zone_info = f" [{zone_str}]" if zone_str else ""
-        dims_full = f"{rw_m:.1f}m × {rd_m:.1f}m ({area_m2:.1f}m²){zone_info}"
-        dims_short = f"{rw_m:.1f}m × {rd_m:.1f}m"
+        is_terrace = "terrace" in rid.lower() or str(_get(r_raw, "zone_category", "")).lower() == "terrace"
+        if is_terrace:
+            full_name = "OPEN TO SKY / TERRACE"
+            abbrev_name = "TERRACE"
+            dims_full = f"{area_m2:.1f} SQ.M (NON-CARPET) | DRAINAGE SLOPE 1:100 TO RWO"
+            dims_short = f"{area_m2:.1f} SQ.M (TERRACE)"
+        else:
+            full_name = rname.upper()
+            abbrev_name = _get_abbrev(rname)
+            zone_info = f" [{zone_str}]" if zone_str else ""
+            dims_full = f"{rw_m:.1f}m × {rd_m:.1f}m ({area_m2:.1f}m²){zone_info}"
+            dims_short = f"{rw_m:.1f}m × {rd_m:.1f}m"
 
         opts: List[Dict[str, Any]] = []
 
@@ -1571,6 +1637,19 @@ def build_drawing_ir(
                 dims_fs=dims_fs,
                 total_h_m=total_h / col_scale
             ))
+            if "terrace" in r_data[5].lower() or str(_get(r_data[0], "zone_category", "")).lower() == "terrace":
+                primitives.append(TextPrimitive(
+                    layer="text",
+                    x=cx_ir,
+                    y=cy_ir - 0.45,
+                    text="DRAINAGE SLOPE 1:100 TO RWO",
+                    font_size_pt=6.5,
+                    font_weight="normal",
+                    color="#64748B",
+                    halo=True,
+                    halo_w_m=2.8,
+                    halo_h_m=0.3,
+                ))
         else:
             rad_px = cand["radius"]
             tag_num = cand["room_idx"]
@@ -1951,6 +2030,15 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
         <pattern id="mf-hatch-setback" width="10" height="10" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
           <line x1="0" y1="0" x2="0" y2="10" stroke="{text_dim}" stroke-width="0.6" opacity="0.10" />
         </pattern>
+        <pattern id="mf-hatch-terrace" width="12" height="12" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
+          <line x1="0" y1="0" x2="0" y2="12" stroke="{text_dim}" stroke-width="0.8" opacity="0.25" stroke-dasharray="2 2" />
+        </pattern>
+        <pattern id="mf-hatch-wedge" width="10" height="10" patternTransform="rotate(135 0 0)" patternUnits="userSpaceOnUse">
+          <line x1="0" y1="0" x2="0" y2="10" stroke="#F59E0B" stroke-width="0.9" opacity="0.45" />
+        </pattern>
+        <pattern id="mf-hatch-footprint" width="12" height="12" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
+          <line x1="0" y1="0" x2="0" y2="12" stroke="#D97706" stroke-width="0.8" opacity="0.20" />
+        </pattern>
         <marker id="entry-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
           <path d="M 0 1 L 9 5 L 0 9 z" fill="#10B981" />
         </marker>
@@ -2038,6 +2126,21 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                 w_strk = int_wall_stroke
                 w_w = max(1.8, w.thickness_m * scale)
                 dash = 'stroke-dasharray="3 2"'
+            elif w.wall_type == "W_PARAPET":
+                # Double line for parapet
+                w_strk = ext_wall_stroke
+                dx = x2_s - x1_s
+                dy = y2_s - y1_s
+                length = math.hypot(dx, dy)
+                if length > 0.1:
+                    nx = -dy / length * 2.0
+                    ny = dx / length * 2.0
+                    svg.append(f'  <line x1="{x1_s + nx:.1f}" y1="{y1_s + ny:.1f}" x2="{x2_s + nx:.1f}" y2="{y2_s + ny:.1f}" stroke="{w_strk}" stroke-width="1.2" stroke-linecap="square" />')
+                    svg.append(f'  <line x1="{x1_s - nx:.1f}" y1="{y1_s - ny:.1f}" x2="{x2_s - nx:.1f}" y2="{y2_s - ny:.1f}" stroke="{w_strk}" stroke-width="1.2" stroke-linecap="square" />')
+                    continue
+                else:
+                    w_w = max(2.0, w.thickness_m * scale)
+                    dash = ""
             else:
                 w_strk = int_wall_stroke
                 w_w = max(2.4, w.thickness_m * scale)
@@ -2237,6 +2340,10 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
         svg.append(f'    <text x="0" y="11.0" font-size="11.0" font-weight="700" fill="{text_primary}">{html.escape(ir.header.floor_name.upper())}</text>')
         svg.append(f'    <text x="0" y="26.0" font-size="8.5" font-weight="500" fill="{text_secondary}">{html.escape(typology_tag)}</text>')
         svg.append(f'    <text x="0" y="39.0" font-size="8.5" font-weight="600" fill="#10B981">NBC 2016 SETBACK COMPLIANT | SURVEY COORD SYSTEM (EASTING, NORTHING)</text>')
+        if getattr(ir, "design_policy", None):
+            svg.append(f'    <text x="0" y="51.0" font-size="7.5" font-weight="600" fill="#D97706">POLICY: {html.escape(str(ir.design_policy))}</text>')
+            if getattr(ir, "design_policy_rationale", None):
+                svg.append(f'    <text x="0" y="62.0" font-size="6.5" font-weight="500" fill="{text_secondary}">Rationale: {html.escape(str(ir.design_policy_rationale))}</text>')
     svg.append('  </g>')
 
     svg.append(f'  <g transform="translate({margin_x}, {schedules_y})">')
@@ -2256,6 +2363,8 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
         svg.append(f'    <text x="22.0" y="31.0" font-size="6.5" font-weight="600" fill="{text_secondary}">Statutory Buildable Envelope (Setbacks Deducted)</text>')
         svg.append(f'    <line x1="0" y1="40.0" x2="16.0" y2="40.0" stroke="#D97706" stroke-width="3.5" />')
         svg.append(f'    <text x="22.0" y="42.0" font-size="6.5" font-weight="600" fill="{text_secondary}">Proposed Building Footprint (Wing A + Wing B + Link)</text>')
+        svg.append(f'    <line x1="0" y1="51.0" x2="16.0" y2="51.0" stroke="#F59E0B" stroke-width="2.5" stroke-dasharray="3 2" />')
+        svg.append(f'    <text x="22.0" y="53.0" font-size="6.5" font-weight="600" fill="{text_secondary}">Functional Wedge Zone (Non-Habitable Absorption)</text>')
     svg.append('  </g>')
 
     if ir.header.floor_index >= 0:
@@ -2449,7 +2558,10 @@ def render_reportlab_from_ir(
                 pts.extend([x_pt(x), y_pt(y)])
             col = None
             if p.hatch_pattern:
-                col = colors.HexColor("#F1F5F9")
+                if p.hatch_pattern in ("mf-hatch-wedge", "mf-hatch-footprint"):
+                    col = colors.HexColor("#FEF3C7")
+                else:
+                    col = colors.HexColor("#F1F5F9")
             elif p.fill_color:
                 col = colors.HexColor(p.fill_color) if p.fill_color.startswith("#") else colors.HexColor("#E0F2FE")
             strk = colors.HexColor(p.stroke_color) if p.stroke_color and p.stroke_color.startswith("#") else None
@@ -2503,6 +2615,18 @@ def render_reportlab_from_ir(
                 drawing.add(Line(wx1, wy1, wx2, wy2, strokeColor=colors.HexColor("#0F172A"), strokeWidth=2.4))
             elif w.wall_type == "W3":
                 drawing.add(Line(wx1, wy1, wx2, wy2, strokeColor=colors.HexColor("#64748B"), strokeWidth=1.0, strokeDashArray=[2, 2]))
+            elif w.wall_type == "W_PARAPET":
+                # Double line for parapet
+                dx = wx2 - wx1
+                dy = wy2 - wy1
+                length = math.hypot(dx, dy)
+                if length > 0.1:
+                    nx = -dy / length * 1.5
+                    ny = dx / length * 1.5
+                    drawing.add(Line(wx1 + nx, wy1 + ny, wx2 + nx, wy2 + ny, strokeColor=colors.HexColor("#334155"), strokeWidth=0.9))
+                    drawing.add(Line(wx1 - nx, wy1 - ny, wx2 - nx, wy2 - ny, strokeColor=colors.HexColor("#334155"), strokeWidth=0.9))
+                else:
+                    drawing.add(Line(wx1, wy1, wx2, wy2, strokeColor=colors.HexColor("#334155"), strokeWidth=1.5))
             else:
                 drawing.add(Line(wx1, wy1, wx2, wy2, strokeColor=colors.HexColor("#475569"), strokeWidth=1.4))
 
@@ -2704,6 +2828,7 @@ def build_site_drawing_ir(
     buildable_coords = _get(site_plan, "buildable_polygon_coords", []) or []
     footprint = _get(site_plan, "footprint", {}) or {}
     outdoor_zones = _get(site_plan, "outdoor_zones", []) or []
+    wedge_zones = _get(site_plan, "wedge_zones", []) or []
     edges = _get(site_plan, "edges", []) or []
     vertex_table = _get(site_plan, "vertex_table", []) or []
 
@@ -2714,7 +2839,7 @@ def build_site_drawing_ir(
 
     primitives: List[DrawingPrimitive] = []
 
-    # 1. Fills: Setback band, buildable polygon, outdoor fragments, and footprint
+    # 1. Fills: Setback band, buildable polygon, outdoor fragments, wedge zones, and footprint
     if vertices:
         primitives.append(PolygonPrimitive(
             points=[(float(pt[0]), float(pt[1])) for pt in vertices],
@@ -2747,6 +2872,20 @@ def build_site_drawing_ir(
                 fill_opacity=0.45,
                 stroke_color="#38BDF8",
                 stroke_width_m=0.15,
+                layer="fills"
+            ))
+
+    for wz in wedge_zones:
+        wcoords = _get(wz, "polygon_coords", [])
+        if wcoords:
+            primitives.append(PolygonPrimitive(
+                points=[(float(pt[0]), float(pt[1])) for pt in wcoords],
+                fill_color="#FEF3C7",
+                fill_opacity=0.70,
+                stroke_color="#D97706",
+                stroke_width_m=0.22,
+                dash_array=[3, 2],
+                hatch_pattern="mf-hatch-wedge",
                 layer="fills"
             ))
 
@@ -2984,6 +3123,43 @@ def build_site_drawing_ir(
             layer="text"
         ))
 
+    for wz in wedge_zones:
+        wname = str(_get(wz, "name", "Wedge Zone"))
+        warea = float(_get(wz, "area_sqm", 0.0))
+        wclass = str(_get(wz, "classification", "wedge")).replace("_", " ").upper()
+        cent = _get(wz, "centroid", (0.0, 0.0))
+        is_enc = bool(_get(wz, "is_enclosed_storage", False))
+        enc_tag = " [ENCLOSED BUILT-UP]" if is_enc else " [NON-CARPET]"
+        primitives.append(TextPrimitive(
+            x=round(float(cent[0]), 2),
+            y=round(float(cent[1]), 2),
+            text=wname.upper(),
+            subtext=f"{warea:.1f} m² | {wclass}{enc_tag}",
+            font_size_pt=6.5,
+            font_weight="bold",
+            halo=True,
+            halo_w_m=2.8,
+            halo_h_m=0.65,
+            layer="text"
+        ))
+
+    # Declared Design Policy & Rationale Text
+    design_policy = _get(site_plan, "design_policy", None)
+    design_policy_rationale = _get(site_plan, "design_policy_rationale", None)
+    if design_policy:
+        primitives.append(TextPrimitive(
+            x=1.0,
+            y=round(bbox_d - 1.2, 2),
+            text=f"POLICY: {design_policy}",
+            subtext=f"Rationale: {design_policy_rationale}" if design_policy_rationale else "",
+            font_size_pt=6.5,
+            font_weight="bold",
+            halo=True,
+            halo_w_m=8.0,
+            halo_h_m=0.8,
+            layer="text"
+        ))
+
     # 4. Annotations: Compass, scale bar, and title block
     shape_label = str(_get(plot_poly, "shape_type", "SITE")).replace("_", "-").upper()
     primitives.append(AnnotationPrimitive(
@@ -2992,7 +3168,9 @@ def build_site_drawing_ir(
         title_block={
             "sheet_title": f"SITE SURVEY & SETBACK LAYOUT ({shape_label})" if shape_label != "RECTANGLE" else "SITE SURVEY & SETBACK LAYOUT",
             "freshness": f"{gen_id} | {bbox_w:.1f}x{bbox_d:.1f}m | SITE | {shape_label}",
-            "typology": typology
+            "typology": typology,
+            "policy": design_policy,
+            "rationale": design_policy_rationale,
         },
         layer="annotations"
     ))
@@ -3042,4 +3220,6 @@ def build_site_drawing_ir(
         has_stepped_envelope=False,
         vertex_table=v_rows,
         edge_schedule=e_rows,
+        design_policy=design_policy,
+        design_policy_rationale=design_policy_rationale,
     )

@@ -717,7 +717,23 @@ def make_site_plan_sheet_flowables(
         f"({sp_model.footprint.area_sqm:.1f} m²{rot_str}). All subsequent upper storeys derive their spatial anchoring strictly from this rectangular footprint."
     )
     flowables.append(make_callout(brief_text, width=width))
-    flowables.append(Spacer(1, 5))
+    flowables.append(Spacer(1, 4))
+
+    if getattr(sp_model, "design_policy", None):
+        policy_box = (
+            f"<b>Declared Design Policy:</b> {sp_model.design_policy}<br/>"
+            f"<b>Rationale:</b> {getattr(sp_model, 'design_policy_rationale', 'Structural grid, construction cost, NBC regularity')}"
+        )
+        flowables.append(make_callout(policy_box, width=width))
+        flowables.append(Spacer(1, 4))
+
+    if getattr(sp_model, "waste_warning_triggered", False):
+        waste_warn = (
+            f"<b>Waste Warning:</b> Best orthogonal footprint wastes {sp_model.waste_pct:.1f}% (> 25%) of buildable area. "
+            f"Evaluated rotations showed no viable improvement without compromising structural regularity. Functional wedge absorption recommended."
+        )
+        flowables.append(make_callout(waste_warn, width=width))
+        flowables.append(Spacer(1, 4))
 
     # 2. 4-Tile Stat Strip
     tile_w = width / 4.0
@@ -821,6 +837,48 @@ def make_site_plan_sheet_flowables(
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ]))
         flowables.append(t_oz)
+
+    # 6. Functional Wedge Zones Breakdown (if wedge zones exist)
+    if getattr(sp_model, "wedge_zones", None):
+        flowables.append(Spacer(1, 5))
+        flowables.append(Paragraph("<b>Absorbed Functional Wedge Zones (Non-Habitable Residue)</b>", p_title))
+        flowables.append(Spacer(1, 2))
+        wdg_data: List[List[Any]] = [[
+            Paragraph("<b>Wedge ID</b>", p_th),
+            Paragraph("<b>Classification &amp; Name</b>", p_th),
+            Paragraph("<b>Absorbed Area</b>", p_th),
+            Paragraph("<b>Enclosed Built-Up</b>", p_th),
+            Paragraph("<b>Adjacency / Placement</b>", p_th),
+        ]]
+        for wz in sp_model.wedge_zones:
+            wid = getattr(wz, "wedge_id", "WDG")
+            wname = getattr(wz, "name", "Wedge Zone")
+            wclass = getattr(wz, "classification", "wedge").replace("_", " ").title()
+            warea = getattr(wz, "area_sqm", 0.0)
+            is_enc = getattr(wz, "is_enclosed_storage", False)
+            enc_str = "Yes (Counted in BUA)" if is_enc else "No (Non-Carpet / Outdoor)"
+            is_int = getattr(wz, "is_interior_side", False)
+            pos_str = "Interior Sheet Edge" if is_int else "Boundary Setback Buffer"
+            wdg_data.append([
+                Paragraph(f"<b>{wid}</b>", p_td),
+                Paragraph(f"{wname} ({wclass})", p_td),
+                Paragraph(f"{warea:.2f} m²", p_td_num),
+                Paragraph(enc_str, p_td),
+                Paragraph(pos_str, p_td),
+            ])
+        wdg_cols = [55.0, 160.0, 75.0, 110.0, width - 400.0]
+        t_wdg = Table(wdg_data, colWidths=wdg_cols)
+        t_wdg.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
+            ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+            ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+            ('TOPPADDING', (0, 0), (-1, -1), 2.5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        flowables.append(t_wdg)
 
     return flowables
 
@@ -1741,6 +1799,10 @@ def generate_pdf_report(
                 ("4. Dimension Chains Sum (&le;1mm)", "PASS" if cert.get("chain_sums_match", True) else "FAIL", "DIM-01 / NBC-TOLERANCE"),
                 ("5. NBC Egress Travel Distance", "PASS" if cert.get("egress_distances_satisfied", True) else "FAIL", "NBC-03 / EGRESS-30M"),
                 ("6. Vertical Stack Alignment", "PASS" if cert.get("vertical_stack_valid", True) else "FAIL", "VERT-01..05 / CORE-STACK"),
+                ("7. Core Continuity (All Levels)", "PASS" if cert.get("core_continuity_valid", True) else "FAIL", "RULE-FP-01 / NBC-CORE"),
+                ("8. No Wet Room Over Terrace", "PASS" if cert.get("no_wet_over_terrace_valid", True) else "FAIL", "RULE-FP-03 / PLUMB-STACK"),
+                ("9. Terrace FAR Statutory Exemption", "PASS" if cert.get("terrace_far_exempt", True) else "FAIL", "RULE-FP-06 / FAR-EXEMPT"),
+                ("10. Cores Stack-Aligned", "PASS" if cert.get("cores_stack_aligned", True) else "FAIL", "RULE-FP-01 / VERT-STACK"),
             ]
 
             cert_rows = [
