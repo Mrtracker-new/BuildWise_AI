@@ -52,7 +52,7 @@ class MultiFloorRoomRectangle(BaseModel):
     depth_m: float
     area_sqm: float
     zone: str  # N, NE, E, SE, S, SW, W, NW, CENTER
-    zone_category: Literal["public", "private", "service", "circulation", "industrial_bay"] = "public"
+    zone_category: Literal["public", "private", "service", "circulation", "industrial_bay", "terrace"] = "public"
     vastu_compliant: bool = True
     is_vertical_core: bool = False
     requires_exterior_wall: bool = True
@@ -134,6 +134,14 @@ class SingleFloorPlanModel(BaseModel):
     mathematical_certificate: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Mathematical validity certificate for this floor plate"
+    )
+    floor_plate_mask: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Per-wing presence mask for this floor: wing_id -> present|terrace|void"
+    )
+    plate_composition: str = Field(
+        default="",
+        description="Human-readable plate composition summary e.g. Wing A + Terrace"
     )
 
 

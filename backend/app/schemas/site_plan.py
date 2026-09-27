@@ -42,6 +42,10 @@ class PlotPolygonModel(BaseModel):
         default=False,
         description="True if shape is a regular 4-vertex rectangle"
     )
+    has_curved_edges: bool = Field(
+        default=False,
+        description="True if polygon was approximated from curvilinear boundary"
+    )
     area_sqm: float = Field(default=0.0, description="Shoelace area in square meters")
     perimeter_m: float = Field(default=0.0, description="Perimeter in meters")
     bounding_box: Tuple[float, float, float, float] = Field(
@@ -57,6 +61,30 @@ class OutdoorFragment(BaseModel):
     area_sqm: float
     centroid: Tuple[float, float]
     polygon_coords: List[Tuple[float, float]] = Field(default_factory=list)
+
+
+class WedgeZone(BaseModel):
+    """
+    Functional non-habitable wedge zone absorbing residual slivers between
+    the orthogonal footprint and angled/curvilinear boundary.
+    """
+    wedge_id: str = Field(..., description="Wedge identifier, e.g. WDG-01")
+    classification: Literal[
+        "storage_closet",
+        "duct_shaft",
+        "planter",
+        "stair_wedge",
+        "parking_apron"
+    ] = Field(..., description="Functional non-habitable classification")
+    name: str = Field(..., description="Display name, e.g. Boundary Planter Wedge, Outdoor Storage Closet")
+    area_sqm: float = Field(..., description="Area in square meters")
+    centroid: Tuple[float, float] = Field(..., description="(x, y) centroid coordinates")
+    polygon_coords: List[Tuple[float, float]] = Field(default_factory=list, description="Boundary polygon coordinates")
+    is_enclosed_storage: bool = Field(default=False, description="True if enclosed storage (counted in built-up)")
+    is_interior_side: bool = Field(default=False, description="True if adjacent to building footprint wall")
+    adjacent_wing_id: Optional[str] = Field(default=None, description="Adjacent wing ID if applicable")
+    width_m: float = Field(default=0.0, description="Approximate minimum width")
+    length_m: float = Field(default=0.0, description="Approximate length")
 
 
 class FootprintWing(BaseModel):
@@ -127,6 +155,21 @@ class SitePlanModel(BaseModel):
     reduced_setback_applied: bool = False
     footprint: InscribedFootprint
     outdoor_zones: List[OutdoorFragment] = Field(default_factory=list)
+    wedge_zones: List[WedgeZone] = Field(default_factory=list, description="Absorbed functional non-habitable wedge zones")
+    design_policy: Optional[str] = Field(
+        default=None,
+        description="Declared design policy for non-orthogonal plots"
+    )
+    design_policy_rationale: Optional[str] = Field(
+        default=None,
+        description="Rationale for orthogonal squaring-off"
+    )
+    waste_pct: float = Field(default=0.0, description="Percentage of buildable area not inscribed by footprint")
+    rotation_alternatives: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Evaluated rotation angles and waste metrics for QA"
+    )
+    waste_warning_triggered: bool = Field(default=False, description="True if waste_pct > 25.0%")
     setback_band_area_sqm: float = 0.0
     edges: List[SurveyEdge] = Field(default_factory=list)
     vertex_table: List[PlotVertex] = Field(default_factory=list)

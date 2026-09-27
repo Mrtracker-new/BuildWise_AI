@@ -40,6 +40,10 @@ class FloorPlanRequest(BaseModel):
         default=None,
         description="Optional pre-generated multi-storey building model for direct PDF export or re-rendering"
     )
+    floor_plate_masks: Optional[Dict[str, Dict[str, Literal["present", "terrace", "void"]]] | Dict[int, Dict[str, Literal["present", "terrace", "void"]]]] = Field(
+        default=None,
+        description="Per-floor wing presence mask: floor_index -> wing_id -> present|terrace|void"
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -47,6 +51,8 @@ class FloorPlanRequest(BaseModel):
         if isinstance(data, dict):
             if "multiStorey" in data and "multi_storey" not in data:
                 data["multi_storey"] = data["multiStorey"]
+            if "floorPlateMasks" in data and "floor_plate_masks" not in data:
+                data["floor_plate_masks"] = data["floorPlateMasks"]
             if "groundCoverageRatio" in data and "ground_coverage_ratio" not in data:
                 data["ground_coverage_ratio"] = data["groundCoverageRatio"]
             if "builtUpAreaSqft" in data and "built_up_area_sqft" not in data:

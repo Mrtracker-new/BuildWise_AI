@@ -433,7 +433,7 @@ export interface MultiFloorRoomRectangle {
   depth_m: number;
   area_sqm: number;
   zone: string;
-  zone_category: 'public' | 'private' | 'service' | 'circulation' | 'industrial_bay';
+  zone_category: 'public' | 'private' | 'service' | 'circulation' | 'industrial_bay' | 'terrace';
   vastu_compliant: boolean;
   is_vertical_core?: boolean;
   requires_exterior_wall?: boolean;
@@ -505,6 +505,8 @@ export interface SingleFloorPlanModel {
   window_schedule?: Array<Record<string, any>>;
   room_schedule?: Array<Record<string, any>>;
   mathematical_certificate?: MathematicalValidityCertificate;
+  floor_plate_mask?: Record<string, string>;
+  plate_composition?: string;
 }
 
 export interface MathematicalValidityCertificate {
@@ -520,6 +522,10 @@ export interface MathematicalValidityCertificate {
   must_adjacency_satisfied: boolean;
   prefer_adjacency_score?: number;
   vertical_stack_valid?: boolean;
+  core_continuity_valid?: boolean;
+  no_wet_over_terrace_valid?: boolean;
+  terrace_far_exempt?: boolean;
+  cores_stack_aligned?: boolean;
   sanitation_wc_count_satisfied?: boolean;
   parking_count_satisfied?: boolean;
   certificate_id?: string;
@@ -592,6 +598,19 @@ export interface SiteCertificate {
   diagnostics: string[];
 }
 
+export interface WedgeZone {
+  wedge_id: string;
+  classification: 'storage_closet' | 'duct_shaft' | 'planter' | 'stair_wedge' | 'parking_apron' | string;
+  name: string;
+  area_sqm: number;
+  centroid: [number, number];
+  polygon_coords: [number, number][];
+  is_enclosed_storage: boolean;
+  is_interior_side: boolean;
+  width_m: number;
+  length_m: number;
+}
+
 export interface SitePlanModel {
   plot_polygon: PlotPolygon;
   buildable_polygon_coords: [number, number][];
@@ -600,12 +619,24 @@ export interface SitePlanModel {
   reduced_setback_applied: boolean;
   footprint: InscribedFootprint;
   outdoor_zones: OutdoorFragment[];
+  wedge_zones?: WedgeZone[];
   setback_band_area_sqm: number;
   edges: SurveyEdge[];
   vertex_table: PlotVertex[];
   site_vastu_zones?: Record<string, [number, number, number, number]>;
   certificate: SiteCertificate;
   svg_site_plan?: string;
+  design_policy?: string;
+  design_policy_rationale?: string;
+  waste_pct?: number;
+  rotation_alternatives?: Array<{
+    angle_deg: number;
+    footprint_area_sqm: number;
+    waste_pct: number;
+    width_m: number;
+    depth_m: number;
+  }>;
+  waste_warning_triggered?: boolean;
 }
 
 export interface MultiStoreyBuildingModel {
@@ -672,6 +703,7 @@ export interface FloorPlanRequest {
   bypass_cache?: boolean;
   extracted_constraints?: ExtractedClientConstraints;
   plot_polygon?: PlotPolygon;
+  floor_plate_masks?: Record<number | string, Record<string, 'present' | 'terrace' | 'void'>>;
 }
 
 export interface RoomPlacement {
