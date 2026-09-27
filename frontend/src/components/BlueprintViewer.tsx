@@ -32,6 +32,8 @@ const ROOM_METADATA: Record<string, { dotColor: string; label: string; zone: str
   balcony: { dotColor: '#10B981', label: 'Balcony', zone: 'N/E' },
   study: { dotColor: '#6366F1', label: 'Study / Office', zone: 'NE' },
   utility: { dotColor: '#EC4899', label: 'Utility / Store', zone: 'SE' },
+  terrace_wing_b: { dotColor: '#0EA5E9', label: 'Open Terrace / Setback Deck', zone: 'TERRACE' },
+  terrace: { dotColor: '#0EA5E9', label: 'Open Terrace / Setback Deck', zone: 'TERRACE' },
 
   // T2 Apartment
   staircase_core: { dotColor: '#8B5CF6', label: 'Common Stair Core', zone: 'CORE', isCore: true },
@@ -380,6 +382,10 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
           const isActive = viewTab === 'floor' && safeFloorIndex === idx;
           const elevation = (fl.floor_index * 3.0).toFixed(1);
           const isGround = fl.floor_index === 0;
+          const plateComp = (fl as any).plate_composition || '';
+          const tabLabel = plateComp
+            ? `${fl.floor_name || `Floor ${fl.floor_index}`}: ${plateComp}`
+            : (fl.floor_name || `Floor ${fl.floor_index}`);
           return (
             <button
               key={fl.floor_index}
@@ -395,7 +401,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                   : 'bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--fill-hover)] font-medium'
               }`}
             >
-              <span>{fl.floor_name || `Floor ${fl.floor_index}`}</span>
+              <span>{tabLabel}</span>
               <span
                 className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
                   isActive ? 'bg-white/20 text-white' : 'bg-black/5 dark:bg-white/10 text-[var(--text-3)]'
@@ -648,8 +654,55 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
         </div>
       </div>
 
-      {/* 5. Per-Floor Room Legend */}
-      {currentPlacements.length > 0 && (
+      {/* 5. Per-Floor Room Legend & Site Policy / Wedge Legend */}
+      {viewTab === 'site' && effectiveSitePlan ? (
+        <div className="flex flex-col gap-2.5 p-3 border-t border-[var(--hairline)] bg-[var(--card-bg-subtle)]/30">
+          {effectiveSitePlan.design_policy && (
+            <div className="flex flex-col gap-1 p-2.5 rounded-[10px] bg-amber-500/10 border border-amber-500/20 text-[12px]">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider bg-amber-500/25 text-amber-800 dark:text-amber-200">
+                  Declared Policy
+                </span>
+                <span className="font-semibold text-[var(--text-1)]">
+                  {effectiveSitePlan.design_policy}
+                </span>
+              </div>
+              {effectiveSitePlan.design_policy_rationale && (
+                <span className="text-[11px] text-[var(--text-2)] pl-1">
+                  Rationale: {effectiveSitePlan.design_policy_rationale}
+                </span>
+              )}
+              {effectiveSitePlan.waste_warning_triggered && (
+                <span className="text-[11px] font-medium text-amber-700 dark:text-amber-300 pl-1 flex items-center gap-1 mt-0.5">
+                  <Icon name="alert-triangle" size={12} className="shrink-0 text-amber-600" />
+                  Best orthogonal footprint wastes {effectiveSitePlan.waste_pct?.toFixed(1)}% of buildable area (&gt;25%). Plot rotation alternatives evaluated; functional wedge absorption active.
+                </span>
+              )}
+            </div>
+          )}
+          {effectiveSitePlan.wedge_zones && effectiveSitePlan.wedge_zones.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-semibold text-[var(--text-3)] uppercase tracking-wider">
+                Functional Wedges ({effectiveSitePlan.wedge_zones.length}):
+              </span>
+              {effectiveSitePlan.wedge_zones.map((wz) => (
+                <div
+                  key={wz.wedge_id}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium whitespace-nowrap select-none border border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200"
+                >
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0 bg-amber-500" />
+                  <span className="text-[11px] font-mono font-semibold opacity-75">{wz.wedge_id}</span>
+                  <span className="text-[12px] font-medium">{wz.name}</span>
+                  <span className="text-[11px] font-mono opacity-80">{wz.area_sqm.toFixed(1)}m²</span>
+                  <span className="text-[9px] px-1 py-0.2 rounded font-bold uppercase tracking-wider bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                    {wz.is_enclosed_storage ? 'Enclosed Storage' : 'Non-Carpet'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : currentPlacements.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 p-3 border-t border-[var(--hairline)] bg-[var(--card-bg-subtle)]/30">
           <div className="flex items-center gap-1.5 mr-1 shrink-0">
             <span className="text-[11px] font-semibold text-[var(--text-3)] uppercase tracking-wider">
@@ -691,9 +744,28 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                     Core
                   </span>
                 )}
+                {((p as any).zone_category === 'terrace' || p.room_id.toLowerCase().includes('terrace')) && (
+                  <span className="text-[9px] px-1.5 py-0.2 rounded font-bold uppercase bg-sky-500/20 text-sky-700 dark:text-sky-300 tracking-wider">
+                    Non-Carpet
+                  </span>
+                )}
               </div>
             );
           })}
+          {safeFloorIndex === 0 && effectiveSitePlan?.wedge_zones?.filter(w => w.is_interior_side).map((wz) => (
+            <div
+              key={`interior-wedge-${wz.wedge_id}`}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium whitespace-nowrap select-none border border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200"
+            >
+              <span className="w-2.5 h-2.5 rounded-full shrink-0 bg-amber-500" />
+              <span className="text-[11px] font-mono font-semibold opacity-75">[{wz.wedge_id}]</span>
+              <span className="text-[12px] font-medium">{wz.name}</span>
+              <span className="text-[11px] font-mono opacity-80">{wz.area_sqm.toFixed(1)}m²</span>
+              <span className="text-[9px] px-1 py-0.2 rounded font-bold uppercase tracking-wider bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                {wz.is_enclosed_storage ? 'Enclosed BUA' : 'Non-Carpet Wedge'}
+              </span>
+            </div>
+          ))}
         </div>
       )}
 
@@ -964,6 +1036,11 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                         {p.is_core && (
                           <span className="text-[9px] px-1 py-0.2 rounded font-bold uppercase bg-purple-500/20 text-purple-600 dark:text-purple-300 tracking-wider">
                             Core
+                          </span>
+                        )}
+                        {((p as any).zone_category === 'terrace' || p.room_id.toLowerCase().includes('terrace')) && (
+                          <span className="text-[9px] px-1.5 py-0.2 rounded font-bold uppercase bg-sky-500/20 text-sky-700 dark:text-sky-300 tracking-wider">
+                            Non-Carpet
                           </span>
                         )}
                       </div>

@@ -275,6 +275,29 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   }, [canonicalTypology, activeFloors, availableRooms, selectedRooms]);
 
   const [strictness, setStrictness] = useState<'high' | 'medium' | 'low'>('high');
+  const [floorPlateMasks, setFloorPlateMasks] = useState<Record<number, Record<string, 'present' | 'terrace' | 'void'>>>({});
+
+  // Initialize floorPlateMasks when activeFloors or activeTypology changes
+  useEffect(() => {
+    setFloorPlateMasks((prev) => {
+      const next: Record<number, Record<string, 'present' | 'terrace' | 'void'>> = {};
+      for (let z = 0; z < activeFloors; z++) {
+        next[z] = {
+          wing_a: 'present',
+          wing_b: prev[z]?.wing_b || 'present',
+        };
+      }
+      // Typology default proposal (e.g. T1 G+2 top level terraces Wing B)
+      const typUpper = activeTypology.toUpperCase();
+      if ((typUpper.includes('T1') || typUpper.includes('SINGLE')) && activeFloors >= 3) {
+        if (!prev[activeFloors - 1]?.wing_b) {
+          next[activeFloors - 1].wing_b = 'terrace';
+        }
+      }
+      return next;
+    });
+  }, [activeFloors, activeTypology]);
+
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [localFloorPlan, setLocalFloorPlan] = useState<FloorPlanResponse | null>(null);
   // Canonical single source of truth: parent-managed activeFloorPlan if provided, falling back to local state
@@ -364,6 +387,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       extracted_constraints: activeConstraints,
       bypass_cache: true,
       plot_polygon: plotPoly,
+      floor_plate_masks: floorPlateMasks,
     };
 
     try {
@@ -911,6 +935,79 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
           })}
         </div>
       </div>
+
+      {/* Per-Level Floorplate Variations & Wings (RULE-FP-01..06) */}
+      {activeFloors > 1 && (
+        <div className="space-y-2 p-3 rounded-[12px] bg-[var(--fill)] border border-[var(--hairline)]">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Icon name="layers" size={14} className="text-[var(--accent)]" />
+              <span className="text-[12px] font-semibold text-[var(--text-1)]">
+                Per-Floor Floorplate Variations
+              </span>
+            </div>
+            <span className="text-[10px] text-[var(--text-3)] font-mono">
+              RULE-FP-01..06
+            </span>
+          </div>
+          <div className="space-y-2">
+            {Array.from({ length: activeFloors }).map((_, z) => {
+              const lvlTitle = z === 0 ? 'G (Ground)' : `G+${z} (Level ${z})`;
+              const mask = floorPlateMasks[z] || { wing_a: 'present', wing_b: 'present' };
+              const prevMask = z > 0 ? (floorPlateMasks[z - 1] || { wing_a: 'present', wing_b: 'present' }) : null;
+              const isPrevVoid = prevMask?.wing_b === 'void';
+
+              return (
+                <div key={z} className="flex items-center justify-between text-[11px] p-2 rounded-[8px] bg-[var(--card-bg-subtle)] border border-[var(--hairline)]">
+                  <span className="font-semibold text-[var(--text-1)] min-w-[80px]">{lvlTitle}</span>
+                  <div className="flex items-center gap-3">
+                    {/* Wing A: Core Wing (Always Present per RULE-FP-01) */}
+                    <label
+                      className="flex items-center gap-1 text-[var(--text-2)] cursor-not-allowed opacity-75"
+                      title="Contains vertical core & egress stairs (RULE-FP-01)"
+                    >
+                      <input type="checkbox" checked={true} disabled={true} className="rounded text-[var(--accent)]" />
+                      <span>Wing A (Core)</span>
+                    </label>
+
+                    {/* Wing B: Setback / Terrace Toggle */}
+                    {z === 0 ? (
+                      <label
+                        className="flex items-center gap-1 text-[var(--text-2)] cursor-not-allowed opacity-75"
+                        title="Ground floor footprint must be occupied (RULE-FP-01)"
+                      >
+                        <input type="checkbox" checked={true} disabled={true} className="rounded text-[var(--accent)]" />
+                        <span>Wing B (Ground)</span>
+                      </label>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[var(--text-3)]">Wing B:</span>
+                        <select
+                          value={mask.wing_b}
+                          disabled={isPrevVoid}
+                          title={isPrevVoid ? "Cannot add wing above absent level without support (RULE-FP-02)" : "Select floorplate status for Wing B"}
+                          onChange={(e) => {
+                            const val = e.target.value as 'present' | 'terrace' | 'void';
+                            setFloorPlateMasks((prev) => ({
+                              ...prev,
+                              [z]: { ...prev[z], wing_b: val },
+                            }));
+                          }}
+                          className="px-2 py-0.5 rounded-[6px] text-[11px] bg-[var(--fill)] text-[var(--text-1)] border border-[var(--hairline)] cursor-pointer"
+                        >
+                          <option value="present">Enclosed</option>
+                          <option value="terrace">Terrace (Open-to-Sky)</option>
+                          <option value="void">Void (Dropped)</option>
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Action Button: Primary Accent Button */}
       <button
