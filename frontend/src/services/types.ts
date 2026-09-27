@@ -507,6 +507,12 @@ export interface SingleFloorPlanModel {
   mathematical_certificate?: MathematicalValidityCertificate;
   floor_plate_mask?: Record<string, string>;
   plate_composition?: string;
+  terrace_band?: TerraceBandSpec;
+}
+
+export interface TerraceBandSpec {
+  edge: 'N' | 'S' | 'E' | 'W';
+  depth_m: number;
 }
 
 export interface MathematicalValidityCertificate {
@@ -704,6 +710,7 @@ export interface FloorPlanRequest {
   extracted_constraints?: ExtractedClientConstraints;
   plot_polygon?: PlotPolygon;
   floor_plate_masks?: Record<number | string, Record<string, 'present' | 'terrace' | 'void'>>;
+  terrace_bands?: Record<number | string, TerraceBandSpec>;
 }
 
 export interface RoomPlacement {
@@ -745,6 +752,11 @@ export interface FloorPlanParamsSnapshot {
   ai_provider?: string;
   shape_type?: string;
   plot_polygon?: PlotPolygon;
+  quality_grade?: string;
+  solar_axis_degrees?: number;
+  prevailing_wind_direction_degrees?: number;
+  terrace_bands?: Record<number | string, TerraceBandSpec>;
+  floor_plate_masks?: Record<number | string, Record<string, 'present' | 'terrace' | 'void'>>;
 }
 
 export interface FloorPlanResponse {

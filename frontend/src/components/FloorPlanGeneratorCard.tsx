@@ -276,6 +276,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
 
   const [strictness, setStrictness] = useState<'high' | 'medium' | 'low'>('high');
   const [floorPlateMasks, setFloorPlateMasks] = useState<Record<number, Record<string, 'present' | 'terrace' | 'void'>>>({});
+  const [terraceBands, setTerraceBands] = useState<Record<number, { edge: 'none' | 'N' | 'S' | 'E' | 'W'; depth_m: number }>>({});
 
   // Initialize floorPlateMasks when activeFloors or activeTypology changes
   useEffect(() => {
@@ -298,6 +299,20 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
     });
   }, [activeFloors, activeTypology]);
 
+  // Initialize terraceBands when activeFloors changes
+  useEffect(() => {
+    setTerraceBands((prev) => {
+      const next: Record<number, { edge: 'none' | 'N' | 'S' | 'E' | 'W'; depth_m: number }> = {};
+      for (let z = 0; z < activeFloors; z++) {
+        next[z] = prev[z] || {
+          edge: 'none',
+          depth_m: 3.0,
+        };
+      }
+      return next;
+    });
+  }, [activeFloors]);
+
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [localFloorPlan, setLocalFloorPlan] = useState<FloorPlanResponse | null>(null);
   // Canonical single source of truth: parent-managed activeFloorPlan if provided, falling back to local state
@@ -310,6 +325,21 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       setLocalFloorPlan(activeFloorPlan);
     }
   }, [activeFloorPlan]);
+
+  const activeBandsPayload = (() => {
+    if (siteMode !== 'rectangle') return undefined;
+    const activeBands: Record<number, { edge: 'N' | 'S' | 'E' | 'W'; depth_m: number }> = {};
+    Object.entries(terraceBands).forEach(([k, v]) => {
+      const lvl = parseInt(k, 10);
+      if (lvl > 0 && v.edge !== 'none') {
+        activeBands[lvl] = {
+          edge: v.edge,
+          depth_m: v.depth_m,
+        };
+      }
+    });
+    return Object.keys(activeBands).length > 0 ? activeBands : undefined;
+  })();
 
   // STALE-PLAN GUARD: Check if active parameters differ from snapshot in current plan
   const isPlanStale = Boolean(
@@ -325,6 +355,19 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
           vastu_strictness: strictness,
           built_up_area_sqft: activeAreaSqft,
           client_notes: activeNotes,
+          quality_grade: activeGrade,
+          ai_provider: activeProvider,
+          shape_type: siteMode === 'irregular' ? polyMetrics.shapeType : 'rectangle',
+          plot_polygon: siteMode === 'irregular' ? {
+            vertices: irregularVertices,
+            shape_type: polyMetrics.shapeType as any,
+            area_sqm: polyMetrics.area,
+            perimeter_m: polyMetrics.perimeter,
+            bounding_box: polyMetrics.bbox,
+            is_regular_rectangle: false,
+          } : undefined,
+          terrace_bands: activeBandsPayload,
+          floor_plate_masks: siteMode === 'irregular' ? floorPlateMasks : undefined,
         })
       : (
         (floorPlan.multi_storey && floorPlan.multi_storey.total_storeys !== activeFloors) ||
@@ -387,7 +430,8 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       extracted_constraints: activeConstraints,
       bypass_cache: true,
       plot_polygon: plotPoly,
-      floor_plate_masks: floorPlateMasks,
+      floor_plate_masks: siteMode === 'irregular' ? floorPlateMasks : undefined,
+      terrace_bands: activeBandsPayload,
     };
 
     try {
@@ -406,6 +450,11 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         ai_provider: activeProvider,
         shape_type: siteMode === 'irregular' ? polyMetrics.shapeType : 'rectangle',
         plot_polygon: plotPoly,
+        quality_grade: activeGrade,
+        solar_axis_degrees: solarAxisDegrees,
+        prevailing_wind_direction_degrees: prevailingWindDirectionDegrees,
+        terrace_bands: req.terrace_bands,
+        floor_plate_masks: req.floor_plate_masks,
       };
       const freshPlan: FloorPlanResponse = {
         ...resp,
@@ -937,7 +986,8 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       </div>
 
       {/* Per-Level Floorplate Variations & Wings (RULE-FP-01..06) */}
-      {activeFloors > 1 && (
+      {/* Winged Plot Variations (Irregular / Winged Plots) */}
+      {activeFloors > 1 && siteMode === 'irregular' && (
         <div className="space-y-2 p-3 rounded-[12px] bg-[var(--fill)] border border-[var(--hairline)]">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
@@ -1002,6 +1052,112 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                       </div>
                     )}
                   </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Axis-Aligned Terrace Bands (Simple Rectangular Plots) */}
+      {activeFloors > 1 && siteMode === 'rectangle' && (
+        <div className="space-y-2 p-3 rounded-[12px] bg-[var(--fill)] border border-[var(--hairline)]">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Icon name="layers" size={14} className="text-[var(--accent)]" />
+              <span className="text-[12px] font-semibold text-[var(--text-1)]">
+                Per-Floor Terrace Bands (Rectangular)
+              </span>
+            </div>
+            <span className="text-[10px] text-[var(--text-3)] font-mono">
+              RULE-FP-01..07
+            </span>
+          </div>
+          <div className="space-y-2">
+            {Array.from({ length: activeFloors }).map((_, z) => {
+              const lvlTitle = z === 0 ? 'G (Ground)' : `G+${z} (Level ${z})`;
+              const band = terraceBands[z] || { edge: 'none', depth_m: 3.0 };
+              const envW = Math.max(4.0, (Number(plotWidth) || 12.0) - 2.4);
+              const envD = Math.max(4.0, (Number(plotDepth) || 15.0) - 3.75);
+              const dimAlongEdge = (band.edge === 'E' || band.edge === 'W') ? envW : envD;
+              const maxDepth = Math.round(0.40 * dimAlongEdge * 10) / 10;
+
+              return (
+                <div key={z} className="p-2 rounded-[8px] bg-[var(--card-bg-subtle)] border border-[var(--hairline)] space-y-1.5 text-[11px]">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-[var(--text-1)] min-w-[80px]">{lvlTitle}</span>
+                    {z === 0 ? (
+                      <span
+                        className="text-[var(--text-3)] italic cursor-not-allowed"
+                        title="Ground floor keeps full plate for entry/parking (RULE-FP-01)"
+                      >
+                        Full Plate Only (Entry/Parking - RULE-FP-01)
+                      </span>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span className="text-[var(--text-3)]">Terrace Edge:</span>
+                        <select
+                          data-testid={`terrace-edge-f${z}`}
+                          value={band.edge}
+                          onChange={(e) => {
+                            const edge = e.target.value as 'none' | 'N' | 'S' | 'E' | 'W';
+                            const newDim = (edge === 'E' || edge === 'W') ? envW : envD;
+                            const newMax = Math.round(0.40 * newDim * 10) / 10;
+                            const clampedDepth = Math.min(band.depth_m || 3.0, newMax);
+                            setTerraceBands((prev) => ({
+                              ...prev,
+                              [z]: { edge, depth_m: clampedDepth },
+                            }));
+                          }}
+                          className="px-2 py-0.5 rounded-[6px] text-[11px] bg-[var(--fill)] text-[var(--text-1)] border border-[var(--hairline)] cursor-pointer"
+                        >
+                          <option value="none">None (Full Plate)</option>
+                          <option value="N">North Edge (Front Terrace)</option>
+                          <option value="S">South Edge (Rear Terrace)</option>
+                          <option value="E">East Edge (Side Terrace)</option>
+                          <option
+                            value="W"
+                            disabled={true}
+                            title="Disabled: West edge contains vertical stair core & egress (RULE-FP-01)"
+                            className="text-[var(--text-3)] bg-[var(--fill)] opacity-50"
+                          >
+                            West Edge (Disabled: Stair Core)
+                          </option>
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
+                  {z > 0 && band.edge !== 'none' && (
+                    <div className="flex items-center justify-between pt-1 border-t border-[var(--hairline)]/50 gap-3">
+                      <div className="flex items-center gap-1.5 text-[var(--text-2)]">
+                        <span>Depth:</span>
+                        <span className="font-mono font-semibold text-[var(--accent)]">
+                          {band.depth_m.toFixed(1)}m
+                        </span>
+                        <span className="text-[10px] text-[var(--text-3)]">
+                          (max {maxDepth.toFixed(1)}m / 40%)
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        data-testid={`terrace-depth-f${z}`}
+                        min="1.5"
+                        max={maxDepth}
+                        step="0.1"
+                        value={Math.min(band.depth_m, maxDepth)}
+                        title="Band depth <= 40% of plate dimension per RULE-FP-07"
+                        onChange={(e) => {
+                          const depth_m = parseFloat(e.target.value);
+                          setTerraceBands((prev) => ({
+                            ...prev,
+                            [z]: { ...prev[z], depth_m },
+                          }));
+                        }}
+                        className="w-36 h-1.5 accent-[var(--accent)] cursor-pointer"
+                      />
+                    </div>
+                  )}
                 </div>
               );
             })}

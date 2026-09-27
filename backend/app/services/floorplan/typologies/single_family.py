@@ -138,7 +138,7 @@ T1_CATALOG: Dict[str, Dict[str, Any]] = {
         "category": "service",
     },
     "balcony": {
-        "name": "Covered Balcony / Terrace",
+        "name": "Covered Balcony",
         "min_area_sqm": 3.5,
         "min_width_m": 1.20,
         "max_aspect_ratio": 2.50,

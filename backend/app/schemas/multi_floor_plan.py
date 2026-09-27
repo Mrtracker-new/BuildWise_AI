@@ -143,6 +143,10 @@ class SingleFloorPlanModel(BaseModel):
         default="",
         description="Human-readable plate composition summary e.g. Wing A + Terrace"
     )
+    terrace_band: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Active terrace band on this floor if applicable: {edge: N|S|E|W, depth_m}"
+    )
 
 
 class MultiStoreyBuildingModel(BaseModel):

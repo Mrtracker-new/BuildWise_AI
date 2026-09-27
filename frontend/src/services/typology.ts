@@ -212,6 +212,31 @@ export function formatCoverageChip(coverage?: number): string {
   return `${pct}% COVERAGE`;
 }
 
+function normalizeTerraceBands(bands?: Record<number | string, any>): string {
+  if (!bands) return '';
+  const entries: string[] = [];
+  Object.entries(bands).forEach(([lvl, b]) => {
+    const l = parseInt(lvl, 10);
+    if (l > 0 && b && b.edge && b.edge !== 'none') {
+      entries.push(`${l}:${b.edge}:${Number(b.depth_m || 0).toFixed(1)}`);
+    }
+  });
+  return entries.sort().join(';');
+}
+
+function normalizeFloorPlateMasks(masks?: Record<number | string, Record<string, string>>): string {
+  if (!masks) return '';
+  const entries: string[] = [];
+  Object.entries(masks).forEach(([lvl, m]) => {
+    Object.entries(m || {}).forEach(([wing, state]) => {
+      if (state && state !== 'present') {
+        entries.push(`${lvl}:${wing}:${state}`);
+      }
+    });
+  });
+  return entries.sort().join(';');
+}
+
 /**
  * Pure comparison function: evaluates whether active sidebar/card parameters differ
  * from the parameters snapshot captured at generation time.
@@ -228,6 +253,12 @@ export function isFloorPlanStale(
     vastu_strictness?: string;
     built_up_area_sqft?: number;
     client_notes?: string;
+    quality_grade?: string;
+    ai_provider?: string;
+    shape_type?: string;
+    plot_polygon?: any;
+    terrace_bands?: Record<number | string, any>;
+    floor_plate_masks?: Record<number | string, Record<string, any>>;
   }
 ): boolean {
   if (!snapshot) return false;
@@ -291,6 +322,26 @@ export function isFloorPlanStale(
     if (snapNotes !== currNotes) {
       return true;
     }
+  }
+
+  // Terrace bands comparison
+  if (normalizeTerraceBands(snapshot.terrace_bands) !== normalizeTerraceBands(current.terrace_bands)) {
+    return true;
+  }
+
+  // Floor plate masks comparison
+  if (normalizeFloorPlateMasks(snapshot.floor_plate_masks) !== normalizeFloorPlateMasks(current.floor_plate_masks)) {
+    return true;
+  }
+
+  // Quality grade comparison
+  if (current.quality_grade && snapshot.quality_grade && snapshot.quality_grade !== current.quality_grade) {
+    return true;
+  }
+
+  // Shape type comparison
+  if (current.shape_type && snapshot.shape_type && snapshot.shape_type !== current.shape_type) {
+    return true;
   }
 
   return false;

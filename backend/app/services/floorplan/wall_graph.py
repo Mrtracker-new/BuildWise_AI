@@ -21,7 +21,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Any, Literal
-from shapely.geometry import box as shapely_box
+from shapely.geometry import box as shapely_box, Point
 from shapely.ops import unary_union
 
 
@@ -797,7 +797,6 @@ def build_constructible_wall_graph(
                 )
 
             # Outer boundary of terrace box (wing_boxes[1]) receives W_PARAPET walls (115mm)
-            from shapely.geometry import Point
             t_box = wing_boxes[1]
             t_coords = list(t_box.exterior.coords)
             p_idx = 1
@@ -858,57 +857,125 @@ def build_constructible_wall_graph(
                     label=facade_label,
                 )
     else:
-        # Four Exterior Boundary Walls (W1 = 230mm) for single rectangular envelope
-        walls["WAL_EXT_N"] = WallSegment(
-            wall_id="WAL_EXT_N",
-            wall_type="W1",
-            thickness_m=W1_EXTERIOR_THICKNESS_M,
-            x1=0.0,
-            y1=0.0,
-            x2=env_w,
-            y2=0.0,
-            orientation="horizontal",
-            is_exterior=True,
-            is_load_bearing=True,
-            is_street_facade=True,
-            label="STREET FACADE",
-        )
-        walls["WAL_EXT_S"] = WallSegment(
-            wall_id="WAL_EXT_S",
-            wall_type="W1",
-            thickness_m=W1_EXTERIOR_THICKNESS_M,
-            x1=0.0,
-            y1=env_d,
-            x2=env_w,
-            y2=env_d,
-            orientation="horizontal",
-            is_exterior=True,
-            is_load_bearing=True,
-        )
-        walls["WAL_EXT_W"] = WallSegment(
-            wall_id="WAL_EXT_W",
-            wall_type="W1",
-            thickness_m=W1_EXTERIOR_THICKNESS_M,
-            x1=0.0,
-            y1=0.0,
-            x2=0.0,
-            y2=env_d,
-            orientation="vertical",
-            is_exterior=True,
-            is_load_bearing=True,
-        )
-        walls["WAL_EXT_E"] = WallSegment(
-            wall_id="WAL_EXT_E",
-            wall_type="W1",
-            thickness_m=W1_EXTERIOR_THICKNESS_M,
-            x1=env_w,
-            y1=0.0,
-            x2=env_w,
-            y2=env_d,
-            orientation="vertical",
-            is_exterior=True,
-            is_load_bearing=True,
-        )
+        # Check if single rectangular envelope has a terrace band / room
+        terrace_room = next((r for r in raw_rooms if (getattr(r, "zone_category", "") == "terrace" or (isinstance(r, dict) and r.get("zone_category") == "terrace") or "terrace" in (getattr(r, "room_id", "") or (r.get("room_id", "") if isinstance(r, dict) else "")).lower())), None)
+        if terrace_room:
+            tx = float(getattr(terrace_room, "x", 0.0) if hasattr(terrace_room, "x") else terrace_room.get("x", 0.0))
+            ty = float(getattr(terrace_room, "y", 0.0) if hasattr(terrace_room, "y") else terrace_room.get("y", 0.0))
+            tw = float(getattr(terrace_room, "width_m", 0.0) if hasattr(terrace_room, "width_m") else terrace_room.get("width_m", 0.0))
+            td = float(getattr(terrace_room, "depth_m", 0.0) if hasattr(terrace_room, "depth_m") else terrace_room.get("depth_m", 0.0))
+
+            plate_poly = shapely_box(0.0, 0.0, round(env_w, 3), round(env_d, 3))
+            t_box = shapely_box(round(tx, 3), round(ty, 3), round(tx + tw, 3), round(ty + td, 3))
+            occupied_poly = plate_poly.difference(t_box)
+
+            occ_coords = list(occupied_poly.exterior.coords) if hasattr(occupied_poly, "exterior") else []
+            for i in range(len(occ_coords) - 1):
+                p1 = occ_coords[i]
+                p2 = occ_coords[i + 1]
+                seg_dy = abs(p2[1] - p1[1])
+                orient = "horizontal" if seg_dy < 1e-4 else "vertical"
+                wall_key = f"WAL_EXT_{i+1}"
+                is_facade = False
+                facade_label = None
+                if abs(p1[1]) < 0.05 and abs(p2[1]) < 0.05 and orient == "horizontal":
+                    is_facade = True
+                    facade_label = "STREET FACADE"
+
+                walls[wall_key] = WallSegment(
+                    wall_id=wall_key,
+                    wall_type="W1",
+                    thickness_m=W1_EXTERIOR_THICKNESS_M,
+                    x1=round(p1[0], 3),
+                    y1=round(p1[1], 3),
+                    x2=round(p2[0], 3),
+                    y2=round(p2[1], 3),
+                    orientation=orient,
+                    is_exterior=True,
+                    is_load_bearing=True,
+                    is_street_facade=is_facade,
+                    label=facade_label,
+                )
+
+            t_coords = list(t_box.exterior.coords)
+            p_idx = 1
+            for i in range(len(t_coords) - 1):
+                p1 = t_coords[i]
+                p2 = t_coords[i + 1]
+                mid_x = (p1[0] + p2[0]) / 2.0
+                mid_y = (p1[1] + p2[1]) / 2.0
+                if occupied_poly.distance(Point(mid_x, mid_y)) < 0.05:
+                    continue
+                seg_dy = abs(p2[1] - p1[1])
+                orient = "horizontal" if seg_dy < 1e-4 else "vertical"
+                parapet_key = f"WAL_PARAPET_{p_idx}"
+                walls[parapet_key] = WallSegment(
+                    wall_id=parapet_key,
+                    wall_type="W_PARAPET",
+                    thickness_m=W2_INTERIOR_THICKNESS_M,
+                    x1=round(p1[0], 3),
+                    y1=round(p1[1], 3),
+                    x2=round(p2[0], 3),
+                    y2=round(p2[1], 3),
+                    orientation=orient,
+                    is_exterior=True,
+                    is_load_bearing=False,
+                    is_parapet=True,
+                    label="PARAPET WALL",
+                )
+                p_idx += 1
+        else:
+            # Four Exterior Boundary Walls (W1 = 230mm) for single rectangular envelope
+            walls["WAL_EXT_N"] = WallSegment(
+                wall_id="WAL_EXT_N",
+                wall_type="W1",
+                thickness_m=W1_EXTERIOR_THICKNESS_M,
+                x1=0.0,
+                y1=0.0,
+                x2=env_w,
+                y2=0.0,
+                orientation="horizontal",
+                is_exterior=True,
+                is_load_bearing=True,
+                is_street_facade=True,
+                label="STREET FACADE",
+            )
+            walls["WAL_EXT_S"] = WallSegment(
+                wall_id="WAL_EXT_S",
+                wall_type="W1",
+                thickness_m=W1_EXTERIOR_THICKNESS_M,
+                x1=0.0,
+                y1=env_d,
+                x2=env_w,
+                y2=env_d,
+                orientation="horizontal",
+                is_exterior=True,
+                is_load_bearing=True,
+            )
+            walls["WAL_EXT_W"] = WallSegment(
+                wall_id="WAL_EXT_W",
+                wall_type="W1",
+                thickness_m=W1_EXTERIOR_THICKNESS_M,
+                x1=0.0,
+                y1=0.0,
+                x2=0.0,
+                y2=env_d,
+                orientation="vertical",
+                is_exterior=True,
+                is_load_bearing=True,
+            )
+            walls["WAL_EXT_E"] = WallSegment(
+                wall_id="WAL_EXT_E",
+                wall_type="W1",
+                thickness_m=W1_EXTERIOR_THICKNESS_M,
+                x1=env_w,
+                y1=0.0,
+                x2=env_w,
+                y2=env_d,
+                orientation="vertical",
+                is_exterior=True,
+                is_load_bearing=True,
+            )
 
     # (b) Internal Partition Walls (W2 = 115mm, W3 = 75mm)
     # Trace shared boundaries between adjacent rooms
@@ -920,6 +987,12 @@ def build_constructible_wall_graph(
         for j in range(i + 1, len(room_list)):
             rA = room_list[i]
             rB = room_list[j]
+
+            # Terraces are open-to-sky; their dividing boundary is an exterior building wall, not interior partition
+            is_rA_t = getattr(rA, "zone_category", "") == "terrace" or "terrace" in getattr(rA, "room_id", "").lower()
+            is_rB_t = getattr(rB, "zone_category", "") == "terrace" or "terrace" in getattr(rB, "room_id", "").lower()
+            if is_rA_t or is_rB_t:
+                continue
 
             # Check if they share a vertical boundary (X is adjacent)
             x_boundary = None
@@ -1521,7 +1594,7 @@ def build_constructible_wall_graph(
             "height_mm": int(round(d.height_m * 1000.0)),
             "dimension": f"{int(round(d.width_m * 1000.0))} x {int(round(d.height_m * 1000.0))}",
             "type": (d.door_type or "standard").replace("_", " ").title() + " Flush Door",
-            "level": f"Level {floor_index}",
+            "level": f"L{floor_index}",
             "sill_mm": 0,
             "lintel_mm": int(round(d.lintel_m * 1000.0)),
             "from_room": d.from_room or "-",
@@ -1537,7 +1610,7 @@ def build_constructible_wall_graph(
             "dimension": f"{int(round(w.width_m * 1000.0))} x {int(round(w.height_m * 1000.0))}",
             "sill_mm": int(round(w.sill_m * 1000.0)),
             "lintel_mm": int(round(w.lintel_m * 1000.0)),
-            "level": f"Level {floor_index}",
+            "level": f"L{floor_index}",
             "type": "UPVC Double Glazed Casement" if w.sill_m < 1.0 else "Aluminium Frosted Louver Vent",
             "room": w.from_room or "-",
             "code_citation": NBC_2016_HABITABLE_CITATION if w.sill_m < 1.0 else NBC_2016_SANITARY_CITATION,
@@ -1545,6 +1618,8 @@ def build_constructible_wall_graph(
 
     for idx, r in enumerate(clear_rooms.values(), start=1):
         room_num = f"{floor_index * 100 + idx}"
+        orig_r = next((x for x in raw_rooms if _val(x, "room_id") == r.room_id), None)
+        canonical_area = round(float(_val(orig_r, "area_sqm", r.area_sqm)), 2) if orig_r else r.area_sqm
         room_schedule.append({
             "room_no": room_num,
             "room_number": idx,
@@ -1552,7 +1627,8 @@ def build_constructible_wall_graph(
             "room_id": r.room_id,
             "clear_dimensions": f"{r.width_m:.2f}m x {r.depth_m:.2f}m",
             "clear_dims": f"{r.width_m:.2f}m x {r.depth_m:.2f}m",
-            "clear_area_sqm": r.area_sqm,
+            "clear_area_sqm": canonical_area,
+            "area_sqm": canonical_area,
             "finish_zone": r.finish_zone,
             "zone": r.zone,
         })

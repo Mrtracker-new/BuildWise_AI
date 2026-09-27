@@ -31,6 +31,7 @@ from app.schemas.floorplan import (
     FloorPlanMetrics,
     FloorPlanQA,
     RoomPlacement,
+    TerraceBandSpec,
 )
 from app.schemas.multi_floor_plan import (
     MultiStoreyBuildingModel,
@@ -308,7 +309,25 @@ class SoleGeometryEngine:
             core_d = round(wing_a.depth_m - corridor_d, 2)
         else:
             core_x = round(0.20, 2)
-            core_y = round(max(2.8, (env_d - stair_d) * 0.45), 2)
+            # If user requested a North terrace band on an upper floor, align core_y cleanly
+            north_band_depth = None
+            if getattr(self.req, "terrace_bands", None):
+                for fl_k, tb in self.req.terrace_bands.items():
+                    try:
+                        fl_idx = int(fl_k)
+                    except (ValueError, TypeError):
+                        continue
+                    if fl_idx > 0:
+                        edge = getattr(tb, "edge", None) or (tb.get("edge") if isinstance(tb, dict) else None)
+                        d_m = getattr(tb, "depth_m", None) or (tb.get("depth_m") if isinstance(tb, dict) else 0.0)
+                        if str(edge).upper() == "N" and float(d_m) >= 2.0:
+                            north_band_depth = round(min(float(d_m), 0.40 * env_d), 2)
+                            break
+
+            if north_band_depth is not None:
+                core_y = north_band_depth
+            else:
+                core_y = round(max(2.8, (env_d - stair_d) * 0.45), 2)
             core_w = round(stair_w, 2)
             core_d = round(stair_d, 2)
 
@@ -327,7 +346,11 @@ class SoleGeometryEngine:
         vertical_cores.append(stair_spec)
 
         # 2. Passenger / Stretcher Lift Core
-        needs_lift = (self.total_storeys >= 3) or (self.typology in ("T2_FAMILY_APARTMENT", "T3_LARGE_COMPLEX"))
+        needs_lift = (
+            (self.total_storeys >= 4) or
+            (self.typology in ("T2_FAMILY_APARTMENT", "T3_LARGE_COMPLEX") and self.total_storeys >= 3) or
+            bool(self.req.required_rooms and any("lift" in r.lower() or "elevator" in r.lower() for r in self.req.required_rooms))
+        )
         if needs_lift and (env_w >= 8.0 and env_d >= 8.0):
             lift_w = 1.80
             lift_d = 1.80
@@ -393,7 +416,7 @@ class SoleGeometryEngine:
             duct_shafts.append(primary_duct)
 
             sec_duct_x = round(stair_w + 0.10, 2)
-            sec_duct_y = round(max(0.0, core_y - 1.8), 2)
+            sec_duct_y = round(min(env_d - 0.70, core_y + core_d + 0.10), 2)
             if sec_duct_x + 0.50 <= env_w and sec_duct_y + 0.60 <= env_d:
                 sec_duct = DuctShaftSpec(
                     shaft_id="duct_mep_secondary",
@@ -550,6 +573,132 @@ class SoleGeometryEngine:
                     masks[z][wid] = "void"
 
         return masks
+
+    def _resolve_terrace_bands(
+        self,
+        envelope: Dict[str, float],
+        vertical_cores: List[VerticalCoreSpec],
+        duct_shafts: List[DuctShaftSpec],
+    ) -> Dict[int, Optional[TerraceBandSpec]]:
+        """
+        Resolves per-floor axis-aligned terrace bands on simple rectangular plates.
+        Enforces:
+        - Band permitted only on levels above Ground (floor_index > 0).
+        - RULE-FP-07: band depth <= 40% of plate dimension along that edge.
+        - RULE-FP-01: band may not intersect any vertical core or MEP duct.
+        - RULE-FP-03: no wet room above the band region on upper levels.
+        """
+        resolved: Dict[int, Optional[TerraceBandSpec]] = {}
+        for z in range(self.total_storeys):
+            resolved[z] = None
+
+        # Only applied if no wings exist (single rectangular plate)
+        is_multi_wing = bool(self.site_plan and getattr(self.site_plan, "footprint", None) and len(self.site_plan.footprint.wings) > 1)
+        if is_multi_wing:
+            return resolved
+
+        raw_bands = getattr(self.req, "terrace_bands", None)
+        if not raw_bands or not isinstance(raw_bands, dict):
+            return resolved
+
+        env_w = envelope["width"]
+        env_d = envelope["depth"]
+
+        for k, tb in raw_bands.items():
+            try:
+                lvl = int(k)
+            except (ValueError, TypeError):
+                continue
+
+            if lvl < 0 or lvl >= self.total_storeys:
+                continue
+
+            # Ground level check (RULE-FP-01)
+            if lvl == 0:
+                self.warnings.append(
+                    "RULE-FP-01: Ground floor keeps full plate for entry/parking (cannot apply terrace band on Ground). Band ignored."
+                )
+                continue
+
+            edge = getattr(tb, "edge", None) or (tb.get("edge") if isinstance(tb, dict) else None)
+            d_val = getattr(tb, "depth_m", None) or (tb.get("depth_m") if isinstance(tb, dict) else 0.0)
+
+            if not edge or not d_val:
+                continue
+
+            edge = str(edge).upper().strip()
+            if edge not in ("N", "S", "E", "W"):
+                self.warnings.append(f"Invalid terrace band edge '{edge}' on Floor {lvl}. Must be N, S, E, or W.")
+                continue
+
+            try:
+                depth_m = float(d_val)
+            except (ValueError, TypeError):
+                continue
+
+            if depth_m <= 0.0:
+                continue
+
+            # RULE-FP-07: Band depth <= 40% of plate dimension along that edge
+            dim_along_edge = env_d if edge in ("N", "S") else env_w
+            max_depth = round(0.40 * dim_along_edge, 2)
+            if depth_m > max_depth:
+                self.warnings.append(
+                    f"RULE-FP-07: Terrace band depth {depth_m:.2f}m exceeds 40% limit ({max_depth:.2f}m) for edge {edge}. Clamped to {max_depth:.2f}m."
+                )
+                depth_m = max_depth
+
+            # Edge-specific intersection checks (RULE-FP-01)
+            # West edge check: West edge contains vertical stair core & egress
+            if edge == "W":
+                self.warnings.append(
+                    f"RULE-FP-01: Terrace band on West edge on Floor {lvl} intersects vertical stair core & egress. Rejected."
+                )
+                continue
+
+            # Compute bounding box of terrace band
+            if edge == "N":
+                bx1, by1, bx2, by2 = 0.0, 0.0, env_w, depth_m
+            elif edge == "S":
+                bx1, by1, bx2, by2 = 0.0, env_d - depth_m, env_w, env_d
+            elif edge == "E":
+                bx1, by1, bx2, by2 = env_w - depth_m, 0.0, env_w, env_d
+            else:  # W
+                bx1, by1, bx2, by2 = 0.0, 0.0, depth_m, env_d
+
+            # Check overlap with any vertical core or duct shaft
+            conflict = False
+            for core in vertical_cores:
+                cx1, cy1, cx2, cy2 = core.x, core.y, core.x + core.width_m, core.y + core.depth_m
+                x_ov = max(0.0, min(bx2, cx2) - max(bx1, cx1))
+                y_ov = max(0.0, min(by2, cy2) - max(by1, cy1))
+                if x_ov > 0.05 and y_ov > 0.05:
+                    self.warnings.append(
+                        f"RULE-FP-01: Terrace band on edge {edge} (depth {depth_m}m) intersects vertical core '{core.core_id}' on Floor {lvl}. Rejected."
+                    )
+                    conflict = True
+                    break
+
+            if conflict:
+                continue
+
+            for duct in duct_shafts:
+                dx1, dy1, dx2, dy2 = duct.x, duct.y, duct.x + duct.width_m, duct.y + duct.depth_m
+                x_ov = max(0.0, min(bx2, dx2) - max(bx1, dx1))
+                y_ov = max(0.0, min(by2, dy2) - max(by1, dy1))
+                if x_ov > 0.05 and y_ov > 0.05:
+                    self.warnings.append(
+                        f"RULE-FP-01: Terrace band on edge {edge} (depth {depth_m}m) intersects MEP shaft '{duct.shaft_id}' on Floor {lvl}. Rejected."
+                    )
+                    conflict = True
+                    break
+
+            if conflict:
+                continue
+
+            resolved[lvl] = TerraceBandSpec(edge=edge, depth_m=depth_m)
+
+        return resolved
 
     # =========================================================================
     # 4. CONSTRAINED RECTANGULAR LAYOUT PARTITIONING & PRUNING
@@ -1050,6 +1199,35 @@ class SoleGeometryEngine:
             rooms.extend(self._partition_t1_rooms(
                 floor_index, envelope, core_room, lobby_room, east_x, east_w, north_h, south_y, south_h, allocated_spaces
             ))
+
+        # Check if simple rectangular envelope has a terrace band for this floor
+        band = getattr(self, "resolved_terrace_bands", {}).get(floor_index)
+        if band and band.edge == "N":
+            terrace_room = MultiFloorRoomRectangle(
+                room_id=f"terrace_band_F{floor_index}",
+                room_name="Open Terrace / Sky Deck",
+                floor_index=floor_index,
+                x=0.0,
+                y=0.0,
+                width_m=env_w,
+                depth_m=band.depth_m,
+                area_sqm=round(env_w * band.depth_m, 2),
+                zone="TERRACE",
+                zone_category="terrace",
+                vastu_compliant=True,
+                is_vertical_core=False,
+                requires_exterior_wall=True,
+                aspect_ratio=round(env_w / band.depth_m if band.depth_m > 0 else 1.0, 2),
+                applied_rules=[
+                    "RULE-FP-02-TERRACE-SETBACK",
+                    "RULE-FP-04-TERRACE-ACCESS",
+                    "RULE-FP-06-FAR-EXEMPT",
+                    "RULE-FP-07-TERRACE-DEPTH-LIMIT",
+                ],
+            )
+            # Remove rooms located in the North band zone (e.g. bed_2, balcony)
+            rooms = [r for r in rooms if not (r.y < band.depth_m - 0.05 and (r.y + r.depth_m) <= band.depth_m + 0.05)]
+            rooms.insert(0, terrace_room)
 
         # Check hard pruning constraints on generated rooms
         self._prune_and_verify_hard_constraints(floor_index, rooms, previous_rooms)
@@ -2193,7 +2371,7 @@ class SoleGeometryEngine:
 
             balc = MultiFloorRoomRectangle(
                 room_id=f"balcony_F{floor_index}",
-                room_name="Covered Balcony / Terrace",
+                room_name="Covered Balcony",
                 floor_index=floor_index,
                 x=bed2_w,
                 y=0.0,
@@ -3765,6 +3943,27 @@ class SoleGeometryEngine:
                 ))
                 continue
 
+            # If room is an open terrace band, provide access door from lobby on shared boundary (RULE-FP-04)
+            if r.zone_category == "terrace" or "terrace" in r.room_id.lower():
+                door_x = round(lobby.x + max(0.20, (lobby.width_m - 1.0) / 2.0), 2)
+                doors.append(MultiFloorDoorGeometry(
+                    door_id=f"door_{lobby.room_id}_{r.room_id}",
+                    floor_index=floor_index,
+                    from_room=lobby.room_id,
+                    to_room=r.room_id,
+                    wall_edge="north",
+                    x1=door_x,
+                    y1=lobby.y,
+                    x2=round(door_x + 1.00, 2),
+                    y2=lobby.y,
+                    hinge_x=door_x,
+                    hinge_y=lobby.y,
+                    swing_direction="inward_right",
+                    width_m=1.00,
+                    door_type="sliding",
+                ))
+                continue
+
             # Standard circulation door from lobby or adjacent parent room
             parent_room = lobby
             wall_edge = "vertical"
@@ -3800,7 +3999,7 @@ class SoleGeometryEngine:
 
         # 4. Windows on Exterior Walls (NBC 2016 Part 8 Light & Ventilation)
         for r in rooms:
-            if not r.requires_exterior_wall:
+            if not r.requires_exterior_wall or r.zone_category == "terrace" or "terrace" in r.room_id.lower():
                 continue
 
             # Calculate window width based on room area
@@ -4040,7 +4239,8 @@ class SoleGeometryEngine:
                     containment = False
 
                 # Minimum dimensions and area check (excluding circulation corridors)
-                min_width_tolerance = 0.70 if deg_level >= 1 else 0.85
+                has_bands = bool(getattr(self, "resolved_terrace_bands", None) and any(getattr(self, "resolved_terrace_bands", {}).values()))
+                min_width_tolerance = 0.70 if deg_level >= 1 else (0.80 if has_bands else 0.85)
                 spec = ONTOLOGY.get_space(r.room_id)
                 if spec and r.zone_category not in ("circulation", "terrace") and "corridor" not in r.room_id and "terrace" not in r.room_id:
                     min_dim = min(r.width_m, r.depth_m)
@@ -4171,7 +4371,7 @@ class SoleGeometryEngine:
             certified_rules=[
                 "NBC-01", "NBC-02", "NBC-03", "REL-01", "REL-02", "VERT-01", "VERT-02", "CIRC-01", "DIM-01", "VASTU-01", "SAN-01",
                 "RULE-FP-01", "RULE-FP-02", "RULE-FP-03", "RULE-FP-04", "RULE-FP-05", "RULE-FP-06"
-            ],
+            ] + (["RULE-FP-07"] if (getattr(self, "resolved_terrace_bands", None) and any(getattr(self, "resolved_terrace_bands", {}).values())) else []),
             details={
                 "per_room_travel_distances": per_room_dists,
                 "statutory_audit": statutory_audit,
@@ -4241,6 +4441,9 @@ class SoleGeometryEngine:
 
         # Step 2b: Resolve and validate per-floor floor plate masks
         self.resolved_floor_plate_masks = self._resolve_floor_plate_masks()
+
+        # Step 2c: Resolve and validate per-floor terrace bands for simple rectangular envelopes
+        self.resolved_terrace_bands = self._resolve_terrace_bands(envelope, vertical_cores, duct_shafts)
 
         # Step 3: Floor Plate Partitioning
         floors: List[SingleFloorPlanModel] = []
@@ -4325,10 +4528,15 @@ class SoleGeometryEngine:
 
             f_mask = self.resolved_floor_plate_masks.get(z, {})
             w_b_mode = f_mask.get("wing_b", "present")
+            t_band = getattr(self, "resolved_terrace_bands", {}).get(z)
+
             if w_b_mode == "terrace":
                 plate_comp = "Wing A + Terrace"
             elif w_b_mode == "void":
                 plate_comp = "Wing A"
+            elif t_band:
+                edge_name = {"N": "North", "S": "South", "E": "East", "W": "West"}.get(t_band.edge, t_band.edge)
+                plate_comp = f"Plate - {edge_name} band {t_band.depth_m:.1f} m + Terrace"
             else:
                 plate_comp = "Wing A + Wing B" if (self.site_plan and self.site_plan.footprint and len(self.site_plan.footprint.wings) > 1) else "Full Plate"
 
@@ -4347,6 +4555,7 @@ class SoleGeometryEngine:
                 carpet_area_sqm=carpet_m2,
                 floor_plate_mask=f_mask,
                 plate_composition=plate_comp,
+                terrace_band=t_band.model_dump() if t_band else None,
                 svg_blueprint_cad=generate_multi_floor_blueprint_svg(
                     floor_index=z,
                     floor_name=floor_name,

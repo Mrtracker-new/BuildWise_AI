@@ -4,6 +4,15 @@ from app.schemas.room_program import RoomProgram
 from app.schemas.multi_floor_plan import MultiStoreyBuildingModel, ExtractedClientConstraints
 from app.schemas.site_plan import PlotPolygonModel, SitePlanModel
 
+class TerraceBandSpec(BaseModel):
+    """
+    Axis-aligned terrace band applied to a single rectangular plate.
+    Occupied region = plate minus band.
+    """
+    edge: Literal["N", "S", "E", "W"] = Field(..., description="Edge along which terrace band is cut (N, S, E, W)")
+    depth_m: float = Field(..., ge=0.0, description="Depth of terrace band in meters")
+
+
 class FloorPlanRequest(BaseModel):
     plot_width_m: Optional[float] = Field(default=None, ge=6.0, le=60.0, description="Plot frontage width in meters")
     plot_depth_m: Optional[float] = Field(default=None, ge=6.0, le=60.0, description="Plot depth in meters")
@@ -44,6 +53,10 @@ class FloorPlanRequest(BaseModel):
         default=None,
         description="Per-floor wing presence mask: floor_index -> wing_id -> present|terrace|void"
     )
+    terrace_bands: Optional[Dict[str, TerraceBandSpec] | Dict[int, TerraceBandSpec]] = Field(
+        default=None,
+        description="Per-floor terrace band on simple rectangular plate: floor_index -> {edge: N|S|E|W, depth_m}"
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -53,6 +66,8 @@ class FloorPlanRequest(BaseModel):
                 data["multi_storey"] = data["multiStorey"]
             if "floorPlateMasks" in data and "floor_plate_masks" not in data:
                 data["floor_plate_masks"] = data["floorPlateMasks"]
+            if "terraceBands" in data and "terrace_bands" not in data:
+                data["terrace_bands"] = data["terraceBands"]
             if "groundCoverageRatio" in data and "ground_coverage_ratio" not in data:
                 data["ground_coverage_ratio"] = data["groundCoverageRatio"]
             if "builtUpAreaSqft" in data and "built_up_area_sqft" not in data:

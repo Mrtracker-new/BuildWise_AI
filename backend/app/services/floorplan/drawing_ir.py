@@ -343,6 +343,11 @@ def _approx_text_width(text: str, fs: float) -> float:
     return 0.6 * fs * len(text)
 
 
+def _ellipsize_str(s: str, max_len: int) -> str:
+    s = str(s).strip()
+    return s if len(s) <= max_len else s[:max_len - 2].rstrip() + ".."
+
+
 def _get_abbrev(name: str) -> str:
     cleaned = name.strip().upper()
     if cleaned in ROOM_ABBREV_MAP:
@@ -784,7 +789,7 @@ def build_drawing_ir(
             primitives.append(WallPrimitive(
                 layer="walls",
                 wall_id=str(_get(w, "wall_id", "")),
-                wall_type=wt if wt in ("W1", "W2", "W3") else "W2",
+                wall_type=wt if wt in ("W1", "W2", "W3", "W_PARAPET") else "W2",
                 x1=wx1_ir,
                 y1=wy1_ir,
                 x2=wx2_ir,
@@ -1415,8 +1420,8 @@ def build_drawing_ir(
         if is_terrace:
             full_name = "OPEN TO SKY / TERRACE"
             abbrev_name = "TERRACE"
-            dims_full = f"{area_m2:.1f} SQ.M (NON-CARPET) | DRAINAGE SLOPE 1:100 TO RWO"
-            dims_short = f"{area_m2:.1f} SQ.M (TERRACE)"
+            dims_full = f"{area_m2:.1f}m² (NON-CARPET) | DRAINAGE SLOPE 1:100 TO RWO"
+            dims_short = f"{area_m2:.1f}m² (TERRACE)"
         else:
             full_name = rname.upper()
             abbrev_name = _get_abbrev(rname)
@@ -2135,8 +2140,8 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                 if length > 0.1:
                     nx = -dy / length * 2.0
                     ny = dx / length * 2.0
-                    svg.append(f'  <line x1="{x1_s + nx:.1f}" y1="{y1_s + ny:.1f}" x2="{x2_s + nx:.1f}" y2="{y2_s + ny:.1f}" stroke="{w_strk}" stroke-width="1.2" stroke-linecap="square" />')
-                    svg.append(f'  <line x1="{x1_s - nx:.1f}" y1="{y1_s - ny:.1f}" x2="{x2_s - nx:.1f}" y2="{y2_s - ny:.1f}" stroke="{w_strk}" stroke-width="1.2" stroke-linecap="square" />')
+                    svg.append(f'  <line data-wall-type="W_PARAPET" data-wall-id="{w.wall_id}" x1="{x1_s + nx:.1f}" y1="{y1_s + ny:.1f}" x2="{x2_s + nx:.1f}" y2="{y2_s + ny:.1f}" stroke="{w_strk}" stroke-width="1.2" stroke-linecap="square" />')
+                    svg.append(f'  <line data-wall-type="W_PARAPET" data-wall-id="{w.wall_id}" x1="{x1_s - nx:.1f}" y1="{y1_s - ny:.1f}" x2="{x2_s - nx:.1f}" y2="{y2_s - ny:.1f}" stroke="{w_strk}" stroke-width="1.2" stroke-linecap="square" />')
                     continue
                 else:
                     w_w = max(2.0, w.thickness_m * scale)
@@ -2387,8 +2392,14 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                 d_wh = f"{d_row['width_mm']/1000.0:.2f}x{d_row['height_mm']/1000.0:.2f}"
             else:
                 d_wh = f"{_safe_float(d_row.get('width_m', 0.9), 0.9):.2f}x{_safe_float(d_row.get('height_m', 2.1), 2.1):.2f}"
-            d_tp = str(d_row.get("door_type", d_row.get("type", "Standard")))[:11]
-            d_lvl = f"L{d_row.get('level', ir.header.floor_index)}"
+            d_tp = _ellipsize_str(d_row.get("door_type", d_row.get("type", "Standard")), 14)
+            raw_lvl = d_row.get("level", ir.header.floor_index)
+            if isinstance(raw_lvl, str) and raw_lvl.startswith("Level "):
+                d_lvl = f"L{raw_lvl[6:].strip()}"
+            elif isinstance(raw_lvl, str) and raw_lvl.startswith("L"):
+                d_lvl = raw_lvl
+            else:
+                d_lvl = f"L{raw_lvl}"
             rcx = 0.0
             for val_txt, cw in zip([d_tag, d_wh, d_tp, d_lvl], d_cols):
                 svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(val_txt)}</text>')
@@ -2447,8 +2458,8 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
         for r_idx, r_row in enumerate(ir.room_schedule[:6]):
             ry_pos = 29.0 + (r_idx * 10.5)
             r_num = str(r_row.get("room_number", r_row.get("room_no", r_row.get("no", r_idx + 1))))
-            r_name = str(r_row.get("room_name", "Room"))[:18]
-            area_val = r_row.get("clear_area_sqm", r_row.get("clear_area_m2", r_row.get("area_sqm", r_row.get("area", 0.0))))
+            r_name = _ellipsize_str(r_row.get("room_name", "Room"), 18)
+            area_val = r_row.get("area_sqm", r_row.get("clear_area_sqm", r_row.get("clear_area_m2", r_row.get("area", 0.0))))
             r_area = f"{_safe_float(area_val, 0.0):.1f}m²"
             r_dims = r_row.get("clear_dimensions", r_row.get("clear_dims"))
             if not r_dims:

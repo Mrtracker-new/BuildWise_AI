@@ -29,10 +29,11 @@ const ROOM_METADATA: Record<string, { dotColor: string; label: string; zone: str
   bed_2: { dotColor: '#3B82F6', label: 'Bedroom 2', zone: 'NW' },
   dining: { dotColor: '#F97316', label: 'Dining Area', zone: 'W' },
   stairs: { dotColor: '#8B5CF6', label: 'Staircase Core', zone: 'SW/W', isCore: true },
-  balcony: { dotColor: '#10B981', label: 'Balcony', zone: 'N/E' },
+  balcony: { dotColor: '#10B981', label: 'Covered Balcony', zone: 'NE' },
   study: { dotColor: '#6366F1', label: 'Study / Office', zone: 'NE' },
   utility: { dotColor: '#EC4899', label: 'Utility / Store', zone: 'SE' },
   terrace_wing_b: { dotColor: '#0EA5E9', label: 'Open Terrace / Setback Deck', zone: 'TERRACE' },
+  terrace_band: { dotColor: '#0EA5E9', label: 'Open Terrace / Sky Deck', zone: 'TERRACE' },
   terrace: { dotColor: '#0EA5E9', label: 'Open Terrace / Setback Deck', zone: 'TERRACE' },
 
   // T2 Apartment
@@ -715,38 +716,48 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
             )}
           </div>
           {currentPlacements.map((p, pIdx) => {
-            const meta = ROOM_METADATA[p.room_id] || {
-              dotColor: p.is_core ? '#8B5CF6' : '#64748B',
+            const baseRoomId = p.room_id.replace(/_F\d+$/, '');
+            const isTerraceBand = baseRoomId === 'terrace_band' || baseRoomId.includes('terrace') || (p as any).zone_category === 'terrace';
+            const isBalcony = baseRoomId === 'balcony' || baseRoomId === 'apt_balcony';
+
+            const meta = ROOM_METADATA[p.room_id] || ROOM_METADATA[baseRoomId] || {
+              dotColor: p.is_core ? '#8B5CF6' : (isTerraceBand ? '#0EA5E9' : (isBalcony ? '#10B981' : '#64748B')),
               label: p.room_name,
               zone: p.zone,
             };
+            const chipDotColor = isTerraceBand ? '#0EA5E9' : (isBalcony ? '#10B981' : meta.dotColor);
+            const chipLabel = isTerraceBand ? 'Open Terrace / Sky Deck' : (isBalcony ? 'Covered Balcony' : (meta.label || p.room_name));
+            const chipZone = isTerraceBand ? 'TERRACE' : (isBalcony ? (p.zone || 'NE') : (meta.zone || p.zone));
+
             return (
               <div
                 key={`${p.room_id}-${pIdx}`}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium whitespace-nowrap select-none border transition-colors ${
                   p.is_core
                     ? 'bg-purple-500/10 border-purple-500/30 text-purple-700 dark:text-purple-300'
+                    : isTerraceBand
+                    ? 'bg-sky-500/10 border-sky-500/30 text-sky-800 dark:text-sky-200'
                     : 'bg-[var(--fill)] border-transparent text-[var(--text-1)]'
                 }`}
               >
                 <span
                   className="w-2.5 h-2.5 rounded-full shrink-0 shadow-2xs"
-                  style={{ backgroundColor: meta.dotColor }}
+                  style={{ backgroundColor: chipDotColor }}
                 />
                 <span className="text-[11px] font-mono font-semibold opacity-75">[{pIdx + 1}]</span>
-                <span className="text-[12px] font-medium">{meta.label}</span>
-                {p.area_sqm && (
-                  <span className="text-[11px] font-mono opacity-75">{p.area_sqm.toFixed(1)}m²</span>
+                <span className="text-[12px] font-medium">{chipLabel}</span>
+                {p.area_sqm !== undefined && (
+                  <span className="text-[11px] font-mono opacity-75">{p.area_sqm.toFixed(2)}m²</span>
                 )}
-                <span className="text-[10px] text-[var(--text-3)] font-normal">({p.zone})</span>
+                <span className="text-[10px] text-[var(--text-3)] font-normal">({chipZone})</span>
                 {p.is_core && (
                   <span className="text-[9px] px-1 py-0.2 rounded font-bold uppercase bg-purple-500/20 text-purple-600 dark:text-purple-300 tracking-wider">
                     Core
                   </span>
                 )}
-                {((p as any).zone_category === 'terrace' || p.room_id.toLowerCase().includes('terrace')) && (
+                {isTerraceBand && (
                   <span className="text-[9px] px-1.5 py-0.2 rounded font-bold uppercase bg-sky-500/20 text-sky-700 dark:text-sky-300 tracking-wider">
-                    Non-Carpet
+                    TERRACE / Non-Carpet
                   </span>
                 )}
               </div>
@@ -1009,38 +1020,48 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                     )}
                   </div>
                   {currentPlacements.map((p, pIdx) => {
-                    const meta = ROOM_METADATA[p.room_id] || {
-                      dotColor: p.is_core ? '#8B5CF6' : '#64748B',
+                    const baseRoomId = p.room_id.replace(/_F\d+$/, '');
+                    const isTerraceBand = baseRoomId === 'terrace_band' || baseRoomId.includes('terrace') || (p as any).zone_category === 'terrace';
+                    const isBalcony = baseRoomId === 'balcony' || baseRoomId === 'apt_balcony';
+
+                    const meta = ROOM_METADATA[p.room_id] || ROOM_METADATA[baseRoomId] || {
+                      dotColor: p.is_core ? '#8B5CF6' : (isTerraceBand ? '#0EA5E9' : (isBalcony ? '#10B981' : '#64748B')),
                       label: p.room_name,
                       zone: p.zone,
                     };
+                    const chipDotColor = isTerraceBand ? '#0EA5E9' : (isBalcony ? '#10B981' : meta.dotColor);
+                    const chipLabel = isTerraceBand ? 'Open Terrace / Sky Deck' : (isBalcony ? 'Covered Balcony' : (meta.label || p.room_name));
+                    const chipZone = isTerraceBand ? 'TERRACE' : (isBalcony ? (p.zone || 'NE') : (meta.zone || p.zone));
+
                     return (
                       <div
                         key={`modal-legend-${p.room_id}-${pIdx}`}
                         className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium whitespace-nowrap select-none border ${
                           p.is_core
                             ? 'bg-purple-500/10 border-purple-500/30 text-purple-700 dark:text-purple-300'
+                            : isTerraceBand
+                            ? 'bg-sky-500/10 border-sky-500/30 text-sky-800 dark:text-sky-200'
                             : 'bg-[var(--fill)] border-transparent text-[var(--text-1)]'
                         }`}
                       >
                         <span
                           className="w-2.5 h-2.5 rounded-full shrink-0 shadow-2xs"
-                          style={{ backgroundColor: meta.dotColor }}
+                          style={{ backgroundColor: chipDotColor }}
                         />
                         <span className="text-[11px] font-mono font-semibold opacity-75">[{pIdx + 1}]</span>
-                        <span className="text-[12px] font-medium">{meta.label}</span>
-                        {p.area_sqm && (
-                          <span className="text-[11px] font-mono opacity-80">{p.area_sqm.toFixed(1)}m²</span>
+                        <span className="text-[12px] font-medium">{chipLabel}</span>
+                        {p.area_sqm !== undefined && (
+                          <span className="text-[11px] font-mono opacity-80">{p.area_sqm.toFixed(2)}m²</span>
                         )}
-                        <span className="text-[11px] text-[var(--text-3)] font-normal">({p.zone})</span>
+                        <span className="text-[11px] text-[var(--text-3)] font-normal">({chipZone})</span>
                         {p.is_core && (
                           <span className="text-[9px] px-1 py-0.2 rounded font-bold uppercase bg-purple-500/20 text-purple-600 dark:text-purple-300 tracking-wider">
                             Core
                           </span>
                         )}
-                        {((p as any).zone_category === 'terrace' || p.room_id.toLowerCase().includes('terrace')) && (
+                        {isTerraceBand && (
                           <span className="text-[9px] px-1.5 py-0.2 rounded font-bold uppercase bg-sky-500/20 text-sky-700 dark:text-sky-300 tracking-wider">
-                            Non-Carpet
+                            TERRACE / Non-Carpet
                           </span>
                         )}
                       </div>

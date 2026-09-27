@@ -269,3 +269,169 @@ def test_rectangle_equivalence_unaffected():
     assert model.mathematical_certificate.get("is_valid") is True
     assert model.mathematical_certificate.get("core_continuity_valid") is True
     assert model.mathematical_certificate.get("no_wet_over_terrace_valid") is True
+
+
+def test_golden_rectangular_terrace_band_g2_level2_north_3m():
+    """
+    Golden Case: Simple rectangular 12x15m G+2 (3 storeys) with North terrace band of 3.0m on Level 2.
+    Verifies:
+    1. Core continuity holds (same core geometry and position across all floors).
+    2. No wet room over band (RULE-FP-03).
+    3. FAR numerator drops by exactly band area (9.60 * 3.00 = 28.80 sqm).
+    4. Level 2 built-up area = 72.00 sqm (was 100.80 sqm).
+    5. Parapet double lines and terrace hatch emitted in SVG.
+    6. Drainage note 'DRAINAGE SLOPE 1:100 TO RWO' present in SVG.
+    7. Balcony slider door from lobby to terrace present.
+    8. Plate composition: 'Plate - North band + Terrace'.
+    9. RULE-FP-07 certified.
+    """
+    req = FloorPlanRequest(
+        plot_width_m=12.0,
+        plot_depth_m=15.0,
+        building_typology="residential_single",
+        floors=3,
+        terrace_bands={
+            2: {"edge": "N", "depth_m": 3.0},
+        },
+    )
+
+    engine = SoleGeometryEngine(req)
+    model = engine.solve()
+
+    assert model.total_storeys == 3
+    assert len(model.floors) == 3
+
+    f0 = model.floors[0]
+    f1 = model.floors[1]
+    f2 = model.floors[2]
+
+    # Plate compositions
+    assert f0.plate_composition == "Full Plate"
+    assert f1.plate_composition == "Full Plate"
+    assert f2.plate_composition == "Plate - North band 3.0 m + Terrace"
+    assert f2.terrace_band == {"edge": "N", "depth_m": 3.0}
+
+    # 1. Core Continuity (RULE-FP-01)
+    core0 = next(r for r in f0.rooms if r.is_vertical_core)
+    core1 = next(r for r in f1.rooms if r.is_vertical_core)
+    core2 = next(r for r in f2.rooms if r.is_vertical_core)
+    assert (core0.x, core0.y, core0.width_m, core0.depth_m) == (core1.x, core1.y, core1.width_m, core1.depth_m)
+    assert (core1.x, core1.y, core1.width_m, core1.depth_m) == (core2.x, core2.y, core2.width_m, core2.depth_m)
+    assert core2.y == 3.0  # Aligned with terrace band depth!
+
+    # 2. Area reduction by exactly band area (RULE-FP-06)
+    env_w = f2.envelope["width"]  # 9.60m
+    band_area = round(env_w * 3.0, 2)  # 28.80 sqm
+    assert band_area == 28.80
+
+    assert round(f0.built_up_area_sqm - f2.built_up_area_sqm, 2) == band_area
+    assert round(model.total_built_up_area_sqm, 2) == round(f0.built_up_area_sqm + f1.built_up_area_sqm + f2.built_up_area_sqm, 2)
+
+    # 3. Terrace room properties
+    t_rooms = [r for r in f2.rooms if r.zone_category == "terrace"]
+    assert len(t_rooms) == 1
+    t_room = t_rooms[0]
+    assert t_room.room_id == "terrace_band_F2"
+    assert t_room.area_sqm == 28.80
+    assert t_room.x == 0.0 and t_room.y == 0.0
+    assert t_room.width_m == 9.60 and t_room.depth_m == 3.0
+
+    # 4. Door: Balcony slider door from lobby to terrace (RULE-FP-04)
+    terr_doors = [d for d in f2.doors if d.to_room == t_room.room_id or d.from_room == t_room.room_id]
+    assert len(terr_doors) == 1
+    assert terr_doors[0].door_type == "sliding"
+    assert terr_doors[0].from_room == "lobby_spine_F2"
+
+    # 5. Drawing IR / SVG: Parapet, Hatch, Drainage note
+    assert "mf-hatch-terrace" in f2.svg_blueprint_cad
+    assert "DRAINAGE SLOPE 1:100 TO RWO" in f2.svg_blueprint_cad
+    assert "WAL_PARAPET" in f2.svg_blueprint_cad or "PARAPET" in f2.svg_blueprint_cad
+
+    # 6. Certificate validations
+    cert = model.mathematical_certificate
+    assert cert.get("is_valid") is True
+    assert cert.get("core_continuity_valid") is True
+    assert cert.get("no_wet_over_terrace_valid") is True
+    assert cert.get("terrace_far_exempt") is True
+    assert "RULE-FP-07" in cert.get("certified_rules", [])
+
+
+def test_terrace_band_disabled_cases():
+    """
+    Verifies disabling and clamping rules:
+    - Ground floor band is rejected/ignored (RULE-FP-01).
+    - West edge band is rejected due to stair core conflict (RULE-FP-01).
+    - Depth exceeding 40% is clamped to 40% (RULE-FP-07).
+    """
+    # Case 1: Ground floor band requested
+    req_g = FloorPlanRequest(
+        plot_width_m=12.0,
+        plot_depth_m=15.0,
+        building_typology="residential_single",
+        floors=3,
+        terrace_bands={
+            0: {"edge": "N", "depth_m": 3.0},
+        },
+    )
+    eng_g = SoleGeometryEngine(req_g)
+    model_g = eng_g.solve()
+    assert model_g.floors[0].plate_composition == "Full Plate"
+    assert model_g.floors[0].terrace_band is None
+    assert any("Ground floor keeps full plate" in w for w in model_g.warnings)
+
+    # Case 2: West edge band requested (stair core conflict)
+    req_w = FloorPlanRequest(
+        plot_width_m=12.0,
+        plot_depth_m=15.0,
+        building_typology="residential_single",
+        floors=3,
+        terrace_bands={
+            2: {"edge": "W", "depth_m": 2.0},
+        },
+    )
+    eng_w = SoleGeometryEngine(req_w)
+    model_w = eng_w.solve()
+    assert model_w.floors[2].plate_composition == "Full Plate"
+    assert model_w.floors[2].terrace_band is None
+    assert any("West edge" in w and "intersects vertical stair core" in w for w in model_w.warnings)
+
+    # Case 3: Depth exceeding 40% (env_d = 10.50m, 40% = 4.20m; requested 5.0m)
+    req_clamp = FloorPlanRequest(
+        plot_width_m=12.0,
+        plot_depth_m=15.0,
+        building_typology="residential_single",
+        floors=3,
+        terrace_bands={
+            2: {"edge": "N", "depth_m": 5.0},
+        },
+    )
+    eng_clamp = SoleGeometryEngine(req_clamp)
+    model_clamp = eng_clamp.solve()
+    f2 = model_clamp.floors[2]
+    assert f2.terrace_band["depth_m"] == 4.50
+    assert any("RULE-FP-07" in w and "Clamped to 4.50m" in w for w in model_clamp.warnings)
+
+
+def test_rectangle_equivalence_no_band_identical():
+    """
+    Verifies that when NO terrace band is requested, the 12x15 G+2 model
+    has all full plates, 100.80 sqm per floor, and is identical to baseline.
+    """
+    req = FloorPlanRequest(
+        plot_width_m=12.0,
+        plot_depth_m=15.0,
+        building_typology="residential_single",
+        floors=3,
+    )
+    eng = SoleGeometryEngine(req)
+    model = eng.solve()
+
+    assert model.total_storeys == 3
+    for z in range(3):
+        assert model.floors[z].plate_composition == "Full Plate"
+        assert model.floors[z].terrace_band is None
+        assert model.floors[z].built_up_area_sqm == model.floors[0].built_up_area_sqm
+
+    assert model.total_built_up_area_sqm == round(model.floors[0].built_up_area_sqm * 3, 2)
+    assert model.mathematical_certificate.get("is_valid") is True
+

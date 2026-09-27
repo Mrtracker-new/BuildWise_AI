@@ -509,7 +509,7 @@ UNIVERSAL_SPACE_CATALOG: Dict[str, SpaceTypeSpec] = {
     ),
     "balcony": SpaceTypeSpec(
         id="balcony",
-        name="Covered Balcony / Terrace",
+        name="Covered Balcony",
         typologies=["T1_SINGLE_FAMILY"],
         function=FunctionType.OUTDOOR,
         hygiene=HygieneType.CLEAN,
