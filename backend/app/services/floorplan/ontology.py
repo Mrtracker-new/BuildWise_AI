@@ -1860,8 +1860,41 @@ class MathematicalValidityCertificate(BaseModel):
     must_adjacency_satisfied: bool = Field(..., description="100% of MUST_ADJACENT space pairs are contiguous")
     prefer_adjacency_score: float = Field(default=100.0, ge=0.0, le=100.0, description="Percentage of PREFER_ADJACENT / PREFER_SEPARATE rules satisfied")
     vertical_stack_valid: bool = Field(default=True, description="Vertical core locking, wet stacks, and vertical rules hold across all floors")
+    core_continuity_valid: bool = Field(default=True, description="Core continuity across all occupied levels (RULE-FP-01)")
+    no_wet_over_terrace_valid: bool = Field(default=True, description="No wet room directly above terrace or open-to-sky (RULE-FP-03)")
+    terrace_far_exempt: bool = Field(default=True, description="Terrace area excluded from FAR numerator (RULE-FP-06)")
+    cores_stack_aligned: bool = Field(default=True, description="Remaining cores still stack-aligned across storeys")
     sanitation_wc_count_satisfied: bool = Field(default=True, description="Provided WC count >= NBC occupancy statutory minimum")
     parking_count_satisfied: bool = Field(default=True, description="Provided/calculated parking ECS satisfies NBC statutory minimum")
     certificate_id: str = Field(default="CERT-MATH-VALID-2026", description="Unique identifier for this statutory audit certificate")
     certified_rules: List[str] = Field(default_factory=list, description="Explicit list of rule IDs verified and certified")
     details: Dict[str, Any] = Field(default_factory=dict, description="Detailed metrics, per-room travel distances, rule audit log")
+
+
+def propose_default_floor_plate_masks(
+    typology: str,
+    total_storeys: int,
+    wings: Optional[List[Any]] = None,
+) -> Dict[int, Dict[str, str]]:
+    """
+    Proposes default FloorPlateMask per level based on typology profile.
+    - Default: all present.
+    - T1 Single Family (G+2 or higher, i.e. storeys >= 3): top level terraces the private wing (Wing B).
+    - T4 Warehouse: upper level mezzanine partial.
+    """
+    wing_ids = [getattr(w, "wing_id", str(w)).lower() for w in wings] if wings else ["wing_a", "wing_b"]
+    masks: Dict[int, Dict[str, str]] = {}
+    for z in range(total_storeys):
+        masks[z] = {wid: "present" for wid in wing_ids}
+
+    typ_upper = typology.upper()
+    if ("T1" in typ_upper or "SINGLE" in typ_upper) and total_storeys >= 3 and len(wing_ids) >= 2:
+        # Top level terraces private wing
+        top_idx = total_storeys - 1
+        private_id = wing_ids[1]
+        masks[top_idx][private_id] = "terrace"
+    elif ("T4" in typ_upper or "WAREHOUSE" in typ_upper) and total_storeys >= 2 and len(wing_ids) >= 2:
+        for z in range(1, total_storeys):
+            masks[z][wing_ids[1]] = "terrace"
+
+    return masks

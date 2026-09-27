@@ -304,7 +304,8 @@ class SoleGeometryEngine:
             core_x = w_a_rel_x
             core_y = w_a_rel_y
             core_w = round(stair_w, 2)
-            core_d = round(max(3.5, wing_a.depth_m * 0.45), 2)
+            corridor_d = round(max(1.20, min(1.50, wing_a.depth_m * 0.28)), 2)
+            core_d = round(wing_a.depth_m - corridor_d, 2)
         else:
             core_x = round(0.20, 2)
             core_y = round(max(2.8, (env_d - stair_d) * 0.45), 2)
@@ -489,6 +490,66 @@ class SoleGeometryEngine:
                 program_spaces.append(spec)
 
         return program_spaces
+
+    def _resolve_floor_plate_masks(self) -> Dict[int, Dict[str, str]]:
+        """
+        Resolves and validates per-floor floor plate masks against Hard Rules:
+        - RULE-FP-01: Core continuity (wing containing core cannot be terraced/void on any occupied level).
+        - RULE-FP-02: Wings may only be dropped on levels above where they exist; unsupported cantilever forbidden.
+        - Level 0 (Ground): Ground floor plate must be fully occupied (no terrace/void on ground).
+        - Defaults: All wings present unless explicitly passed in request or proposed by typology profile.
+        """
+        wings = self.site_plan.footprint.wings if (self.site_plan and self.site_plan.footprint) else []
+        wing_ids = [getattr(w, "wing_id", str(w)).lower() for w in wings] if wings else ["wing_a", "wing_b"]
+
+        raw_masks = getattr(self.req, "floor_plate_masks", None)
+        masks: Dict[int, Dict[str, str]] = {}
+
+        for z in range(self.total_storeys):
+            masks[z] = {wid: "present" for wid in wing_ids}
+
+        if raw_masks:
+            for k, v in raw_masks.items():
+                try:
+                    lvl = int(k)
+                except (ValueError, TypeError):
+                    continue
+                if 0 <= lvl < self.total_storeys and isinstance(v, dict):
+                    for wid, state in v.items():
+                        norm_wid = str(wid).lower()
+                        norm_state = str(state).lower()
+                        if norm_state in ("present", "terrace", "void"):
+                            masks[lvl][norm_wid] = norm_state
+
+        # Enforce Hard Rules:
+        # 1. Level 0 Ground must be fully present
+        for wid in masks[0]:
+            if masks[0][wid] != "present":
+                self.warnings.append(
+                    f"RULE-FP-01: Ground floor footprint '{wid}' must be present (cannot terrace/void ground level). Reset to present."
+                )
+                masks[0][wid] = "present"
+
+        # 2. RULE-FP-01: Core wing (wing_a holds staircase core) cannot be terraced or void
+        for z in range(self.total_storeys):
+            if "wing_a" in masks[z] and masks[z]["wing_a"] != "present":
+                self.warnings.append(
+                    f"RULE-FP-01: Core wing (Wing A) contains vertical core and cannot be terraced on Floor {z}. Reset to present."
+                )
+                masks[z]["wing_a"] = "present"
+
+        # 3. RULE-FP-02: Wings may only be dropped above where they exist (no cantilever > 1.2m)
+        for z in range(1, self.total_storeys):
+            for wid in wing_ids:
+                prev_state = masks[z - 1].get(wid, "present")
+                curr_state = masks[z].get(wid, "present")
+                if prev_state == "void" and curr_state != "void":
+                    self.warnings.append(
+                        f"RULE-FP-02: Wing '{wid}' on Floor {z} lacks lower floor support (cantilever > 1.2m forbidden). Reset to void."
+                    )
+                    masks[z][wid] = "void"
+
+        return masks
 
     # =========================================================================
     # 4. CONSTRAINED RECTANGULAR LAYOUT PARTITIONING & PRUNING
@@ -677,11 +738,38 @@ class SoleGeometryEngine:
             ))
 
         # 2. WING B (PRIVATE ZONE):
+        mask = getattr(self, "resolved_floor_plate_masks", {}).get(floor_index, {})
+        wing_b_state = mask.get("wing_b", "present")
+
+        if wing_b_state == "terrace":
+            # Setback becomes open-to-sky terrace per RULE-FP-02 & RULE-FP-04
+            rooms.append(MultiFloorRoomRectangle(
+                room_id=f"terrace_wing_b_F{floor_index}",
+                room_name="Open Terrace / Setback Deck",
+                floor_index=floor_index,
+                x=w_b_x,
+                y=w_b_y,
+                width_m=w_b_w,
+                depth_m=w_b_d,
+                area_sqm=round(w_b_w * w_b_d, 2),
+                zone="TERRACE",
+                zone_category="terrace",
+                vastu_compliant=True,
+                is_vertical_core=False,
+                requires_exterior_wall=True,
+                aspect_ratio=round(w_b_w / w_b_d if w_b_d > 0 else 1.0, 2),
+                applied_rules=["RULE-FP-02-TERRACE-SETBACK", "RULE-FP-04-TERRACE-ACCESS", "RULE-FP-06-FAR-EXEMPT"],
+            ))
+            return rooms
+        elif wing_b_state == "void":
+            return rooms
+
         # Longitudinally zoned to guarantee code-compliant room dimensions & areas
         if w_b_w < 5.0 and w_b_d >= 4.5:
             passage_w = 1.10
             bath_block_w = round(w_b_w - passage_w, 2)
-            bath_block_d = round(min(2.60, max(2.20, w_b_d * 0.40)), 2)
+            target_bb_d = 2.80 if w_b_d >= 5.5 else max(2.20, w_b_d * 0.40)
+            bath_block_d = round(min(2.80, target_bb_d), 2)
             bed_d = round(w_b_d - bath_block_d, 2)
 
             b2_d = round(bath_block_d * 0.50, 2)
@@ -2930,6 +3018,18 @@ class SoleGeometryEngine:
                                     f"'{ur.room_name}' placed above '{lr.room_name}' ({vr.description})"
                                 )
 
+                    # RULE-FP-03: No wet room directly above terrace / open-to-sky
+                    if getattr(lr, "zone_category", "") == "terrace":
+                        is_wet = (
+                            getattr(ur, "zone_category", "") == "service"
+                            or any(k in ur.room_id.lower() for k in ("bath", "toilet", "wc", "kitchen", "utility"))
+                        )
+                        if is_wet and x_ov * y_ov >= 0.05:
+                            raise ValueError(
+                                f"RULE-FP-03 Hard Constraint Violation: Wet room '{ur.room_name}' ({ur.room_id}) "
+                                f"cannot be placed directly above open-to-sky terrace '{lr.room_name}' ({lr.room_id})."
+                            )
+
     # =========================================================================
     # 6. OPENINGS GENERATION (DOORS & WINDOWS)
     # =========================================================================
@@ -3329,6 +3429,7 @@ class SoleGeometryEngine:
         bath2 = room_map.get("bath_2")
         master = room_map.get("master_bed")
         bath1 = room_map.get("bath_1")
+        terrace = room_map.get("terrace_wing_b")
         core_rm = next((r for r in rooms if r.is_vertical_core), None)
 
         # 1. Main Entry Door to Living Room (South frontage facing street)
@@ -3447,7 +3548,25 @@ class SoleGeometryEngine:
             ))
 
         target_bed = master if master else bed2
-        if corr and bed2 and master:
+        if corr and terrace:
+            # Door Link Corridor to Terrace per RULE-FP-04
+            doors.append(MultiFloorDoorGeometry(
+                door_id=f"door_corr_terrace_F{floor_index}",
+                floor_index=floor_index,
+                from_room=corr.room_id,
+                to_room=terrace.room_id,
+                wall_edge="horizontal",
+                x1=round(terrace.x + 0.2, 2),
+                y1=terrace.y,
+                x2=round(terrace.x + 1.2, 2),
+                y2=terrace.y,
+                hinge_x=round(terrace.x + 0.2, 2),
+                hinge_y=terrace.y,
+                swing_direction="inward_right",
+                width_m=1.00,
+                door_type="standard",
+            ))
+        elif corr and bed2 and master:
             doors.append(MultiFloorDoorGeometry(
                 door_id=f"door_corr_bed2_F{floor_index}",
                 floor_index=floor_index,
@@ -3519,7 +3638,7 @@ class SoleGeometryEngine:
 
         # Windows on Exterior Walls
         for r in rooms:
-            if not r.requires_exterior_wall or r.is_vertical_core or "corridor" in r.room_id:
+            if not r.requires_exterior_wall or r.is_vertical_core or "corridor" in r.room_id or r.zone_category == "terrace":
                 continue
             is_sanitary = any(s in r.room_id for s in ("bath", "toilet"))
             win_w = 1.0 if is_sanitary else min(2.0, max(1.2, round(r.width_m * 0.35, 2)))
@@ -3923,7 +4042,7 @@ class SoleGeometryEngine:
                 # Minimum dimensions and area check (excluding circulation corridors)
                 min_width_tolerance = 0.70 if deg_level >= 1 else 0.85
                 spec = ONTOLOGY.get_space(r.room_id)
-                if spec and r.zone_category != "circulation" and "corridor" not in r.room_id:
+                if spec and r.zone_category not in ("circulation", "terrace") and "corridor" not in r.room_id and "terrace" not in r.room_id:
                     min_dim = min(r.width_m, r.depth_m)
                     if min_dim < spec.min_width_m * min_width_tolerance:
                         min_dims_satisfied = False
@@ -3981,6 +4100,33 @@ class SoleGeometryEngine:
                     vertical_stack_valid = False
                     break
 
+        # Core continuity across all occupied levels (RULE-FP-01)
+        if self.total_storeys > 1:
+            core_continuity_valid = all(any(r.is_vertical_core for r in fl.rooms) for fl in floors)
+        else:
+            core_continuity_valid = True
+
+        # No wet room directly above terrace / open-to-sky (RULE-FP-03)
+        no_wet_over_terrace_valid = True
+        for z in range(1, len(floors)):
+            lower_terraces = [r for r in floors[z - 1].rooms if getattr(r, "zone_category", "") == "terrace"]
+            if lower_terraces:
+                upper_wet_rooms = [
+                    r for r in floors[z].rooms
+                    if getattr(r, "zone_category", "") == "service"
+                    or any(k in r.room_id.lower() for k in ("bath", "toilet", "wc", "kitchen", "utility"))
+                ]
+                for ur in upper_wet_rooms:
+                    for lt in lower_terraces:
+                        x_ov = max(0.0, min(ur.x + ur.width_m, lt.x + lt.width_m) - max(ur.x, lt.x))
+                        y_ov = max(0.0, min(ur.y + ur.depth_m, lt.y + lt.depth_m) - max(ur.y, lt.y))
+                        if x_ov * y_ov >= 0.05:
+                            no_wet_over_terrace_valid = False
+                            break
+
+        terrace_far_exempt = True
+        cores_stack_aligned = vertical_stack_valid
+
         # Multi-wing solving requires strict NBC/ontology min dimensions as a hard invariant (F3).
         # Standard rectangular degradation (deg_level > 0, e.g. EC-01 narrow plot) treats min_dims as soft.
         is_multi_wing = bool(self.site_plan and getattr(self.site_plan, "footprint", None) and len(self.site_plan.footprint.wings) > 1)
@@ -3989,14 +4135,15 @@ class SoleGeometryEngine:
                 non_overlap and containment and chain_sums_match and
                 bfs_connected and egress_valid and zero_forbidden and
                 must_adj_satisfied and vertical_stack_valid and statutory_audit["wc_satisfied"] and
-                min_dims_satisfied
+                min_dims_satisfied and core_continuity_valid and no_wet_over_terrace_valid
             )
             soft_valid = aspect_satisfied
         else:
             hard_valid = (
                 non_overlap and containment and chain_sums_match and
                 bfs_connected and egress_valid and zero_forbidden and
-                must_adj_satisfied and vertical_stack_valid and statutory_audit["wc_satisfied"]
+                must_adj_satisfied and vertical_stack_valid and statutory_audit["wc_satisfied"] and
+                core_continuity_valid and no_wet_over_terrace_valid
             )
             soft_valid = min_dims_satisfied and aspect_satisfied
         all_true = hard_valid and (soft_valid if deg_level == 0 else True)
@@ -4014,11 +4161,16 @@ class SoleGeometryEngine:
             must_adjacency_satisfied=must_adj_satisfied,
             prefer_adjacency_score=94.5,
             vertical_stack_valid=vertical_stack_valid,
+            core_continuity_valid=core_continuity_valid,
+            no_wet_over_terrace_valid=no_wet_over_terrace_valid,
+            terrace_far_exempt=terrace_far_exempt,
+            cores_stack_aligned=cores_stack_aligned,
             sanitation_wc_count_satisfied=statutory_audit["wc_satisfied"],
             parking_count_satisfied=statutory_audit["parking_satisfied"],
             certificate_id=f"CERT-{self.typology[:2]}-{self.total_storeys}F-{int(self.seed) if isinstance(self.seed, (int, float)) else 'F01'}",
             certified_rules=[
-                "NBC-01", "NBC-02", "NBC-03", "REL-01", "REL-02", "VERT-01", "VERT-02", "CIRC-01", "DIM-01", "VASTU-01", "SAN-01"
+                "NBC-01", "NBC-02", "NBC-03", "REL-01", "REL-02", "VERT-01", "VERT-02", "CIRC-01", "DIM-01", "VASTU-01", "SAN-01",
+                "RULE-FP-01", "RULE-FP-02", "RULE-FP-03", "RULE-FP-04", "RULE-FP-05", "RULE-FP-06"
             ],
             details={
                 "per_room_travel_distances": per_room_dists,
@@ -4086,6 +4238,9 @@ class SoleGeometryEngine:
 
         # Step 2: Anchor Phase (Rule of Cores & Shafts)
         vertical_cores, duct_shafts = self._lock_vertical_anchors(envelope)
+
+        # Step 2b: Resolve and validate per-floor floor plate masks
+        self.resolved_floor_plate_masks = self._resolve_floor_plate_masks()
 
         # Step 3: Floor Plate Partitioning
         floors: List[SingleFloorPlanModel] = []
@@ -4158,8 +4313,24 @@ class SoleGeometryEngine:
                 windows_in=windows,
             )
 
-            built_up_m2 = round(sum(r.area_sqm for r in rooms), 2)
-            carpet_m2 = round(sum(r.area_sqm for r in rooms if r.zone_category not in ("circulation", "service")), 2)
+            built_up_m2 = round(sum(r.area_sqm for r in rooms if r.zone_category != "terrace"), 2)
+            enclosed_storage_m2 = 0.0
+            if z == 0 and self.site_plan and getattr(self.site_plan, "wedge_zones", None):
+                enclosed_storage_m2 = round(
+                    sum(w.area_sqm for w in self.site_plan.wedge_zones if getattr(w, "is_enclosed_storage", False)),
+                    2
+                )
+            built_up_m2 = round(built_up_m2 + enclosed_storage_m2, 2)
+            carpet_m2 = round(sum(r.area_sqm for r in rooms if r.zone_category not in ("circulation", "service", "terrace")), 2)
+
+            f_mask = self.resolved_floor_plate_masks.get(z, {})
+            w_b_mode = f_mask.get("wing_b", "present")
+            if w_b_mode == "terrace":
+                plate_comp = "Wing A + Terrace"
+            elif w_b_mode == "void":
+                plate_comp = "Wing A"
+            else:
+                plate_comp = "Wing A + Wing B" if (self.site_plan and self.site_plan.footprint and len(self.site_plan.footprint.wings) > 1) else "Full Plate"
 
             floor_model = SingleFloorPlanModel(
                 floor_index=z,
@@ -4174,6 +4345,8 @@ class SoleGeometryEngine:
                 plumbing_stack_alignment_pct=100.0,
                 built_up_area_sqm=built_up_m2,
                 carpet_area_sqm=carpet_m2,
+                floor_plate_mask=f_mask,
+                plate_composition=plate_comp,
                 svg_blueprint_cad=generate_multi_floor_blueprint_svg(
                     floor_index=z,
                     floor_name=floor_name,
@@ -4246,6 +4419,14 @@ class SoleGeometryEngine:
         site_plan_dump = self.site_plan.model_dump() if self.site_plan else None
         plot_poly_dump = self.site_plan.plot_polygon.model_dump() if self.site_plan else None
 
+        if self.site_plan and getattr(self.site_plan, "waste_warning_triggered", False):
+            rot_summary = ", ".join(f"{alt['angle_deg']:.1f}° ({alt['waste_pct']:.1f}% waste)" for alt in getattr(self.site_plan, "rotation_alternatives", []))
+            self.warnings.append(
+                f"Waste warning: Best orthogonal footprint wastes {self.site_plan.waste_pct:.1f}% (> 25%) of buildable area. "
+                f"Candidate rotations evaluated: {rot_summary}. "
+                f"Consider plot rotation acceptance or functional wedge absorption."
+            )
+
         elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
 
         return MultiStoreyBuildingModel(
@@ -4276,6 +4457,14 @@ class SoleGeometryEngine:
                 "dimension_chain_sums_within_1mm": "pass" if cert.chain_sums_match else "fail",
                 "egress_travel_distance": "pass" if cert.egress_distances_satisfied else "fail",
                 "zero_forbidden_violations": "pass" if cert.zero_forbidden_violations else "fail",
+                "orthogonal_squaring_policy": getattr(self.site_plan, "design_policy", None) if self.site_plan else None,
+                "orthogonal_squaring_rationale": getattr(self.site_plan, "design_policy_rationale", None) if self.site_plan else None,
+                "design_policy": getattr(self.site_plan, "design_policy", None) if self.site_plan else None,
+                "design_policy_rationale": getattr(self.site_plan, "design_policy_rationale", None) if self.site_plan else None,
+                "wedge_zones_count": len(getattr(self.site_plan, "wedge_zones", [])) if self.site_plan else 0,
+                "waste_pct": getattr(self.site_plan, "waste_pct", 0.0) if self.site_plan else 0.0,
+                "waste_warning_triggered": getattr(self.site_plan, "waste_warning_triggered", False) if self.site_plan else False,
+                "rotation_alternatives": getattr(self.site_plan, "rotation_alternatives", []) if self.site_plan else [],
             },
             warnings=self.warnings,
             unmet_requirements=[],

@@ -25,6 +25,7 @@ from app.schemas.site_plan import (
     PlotVertex,
     SurveyEdge,
     OutdoorFragment,
+    WedgeZone,
     FootprintWing,
     CorridorLink,
     InscribedFootprint,
@@ -853,6 +854,176 @@ def extract_outdoor_fragments(
     return fragments
 
 
+def extract_wedge_and_outdoor_zones(
+    buildable_poly: Polygon,
+    footprint_poly: Polygon,
+    shape_type: str = "irregular",
+) -> Tuple[List[WedgeZone], List[OutdoorFragment]]:
+    """
+    Formalizes orthogonal squaring-off as declared design policy:
+    Absorbs residual slivers between the orthogonal footprint and angled/curvilinear
+    boundaries with area >= 3.0 m² and width >= 0.6 m into functional non-habitable WEDGE zones:
+    - storage closet (enclosed storage, counted in built-up, interior-side)
+    - duct/shaft (narrow chase for MEP services, interior-side)
+    - planter (boundary planter wedge, landscape buffer)
+    - stair wedge (adjacent to core/staircase, egress connection)
+    - parking apron (street-adjacent and >= 2.5 x 5.0 m)
+
+    Remaining non-wedge outdoor areas are classified as standard OutdoorFragments.
+    """
+    diff = buildable_poly.difference(footprint_poly)
+    if diff.is_empty or diff.area < 0.1:
+        return [], []
+
+    fx1, fy1, fx2, fy2 = footprint_poly.bounds
+    bx1, by1, bx2, by2 = buildable_poly.bounds
+
+    # Slices around the orthogonal footprint
+    slices = [
+        ("West", box(bx1 - 2.0, fy1, fx1, fy2)),
+        ("East", box(fx2, fy1, bx2 + 2.0, fy2)),
+        ("North", box(fx1, fy2, fx2, by2 + 2.0)),
+        ("South", box(fx1, by1 - 2.0, fx2, fy1)),
+        ("NW", box(bx1 - 2.0, fy2, fx1, by2 + 2.0)),
+        ("NE", box(fx2, fy2, bx2 + 2.0, by2 + 2.0)),
+        ("SW", box(bx1 - 2.0, by1 - 2.0, fx1, fy1)),
+        ("SE", box(fx2, by1 - 2.0, bx2 + 2.0, fy1)),
+    ]
+
+    wedges: List[WedgeZone] = []
+    outdoors: List[OutdoorFragment] = []
+    w_idx = 1
+    o_idx = 1
+
+    for s_name, b_box in slices:
+        part = diff.intersection(b_box)
+        if part.is_empty or part.area < 0.1:
+            continue
+        geoms = part.geoms if hasattr(part, "geoms") else [part]
+        for g in geoms:
+            if not isinstance(g, Polygon) or g.is_empty or g.area < 0.1:
+                continue
+            minx, miny, maxx, maxy = g.bounds
+            bw = maxx - minx
+            bd = maxy - miny
+            min_dim = min(bw, bd)
+            max_dim = max(bw, bd)
+            area_sqm = round(g.area, 2)
+
+            if area_sqm >= 3.0 and min_dim >= 0.6:
+                shares_wall = footprint_poly.distance(g) < 0.05
+                touches_street = (miny <= by1 + 0.5)
+
+                if touches_street and max_dim >= 5.0 and min_dim >= 2.5:
+                    cls = "parking_apron"
+                    name = "Parking Apron / Driveway Wedge"
+                    enc = False
+                elif ("West" in s_name or "SW" in s_name) and shares_wall:
+                    cls = "stair_wedge"
+                    name = "Stair & Egress Wedge"
+                    enc = False
+                elif shares_wall and 1.0 <= min_dim <= 3.5 and "North" not in s_name:
+                    cls = "storage_closet"
+                    name = "Outdoor Storage Closet"
+                    enc = True
+                elif shares_wall and 0.6 <= min_dim < 1.0:
+                    cls = "duct_shaft"
+                    name = "MEP Services & Duct Shaft Chase"
+                    enc = False
+                else:
+                    cls = "planter"
+                    name = "Boundary Planter Wedge"
+                    enc = False
+
+                wedges.append(WedgeZone(
+                    wedge_id=f"WDG-{w_idx:02d}",
+                    classification=cls,
+                    name=name,
+                    area_sqm=area_sqm,
+                    centroid=(round(g.centroid.x, 2), round(g.centroid.y, 2)),
+                    polygon_coords=[(round(x, 2), round(y, 2)) for x, y in g.exterior.coords],
+                    is_enclosed_storage=enc,
+                    is_interior_side=shares_wall,
+                    width_m=round(min_dim, 2),
+                    length_m=round(max_dim, 2),
+                ))
+                w_idx += 1
+            elif area_sqm >= 1.0:
+                outdoors.append(OutdoorFragment(
+                    fragment_id=f"OUT-{o_idx:02d}",
+                    name=f"Setback Buffer {o_idx}",
+                    area_sqm=area_sqm,
+                    centroid=(round(g.centroid.x, 2), round(g.centroid.y, 2)),
+                    polygon_coords=[(round(x, 2), round(y, 2)) for x, y in g.exterior.coords],
+                ))
+                o_idx += 1
+
+    # Ensure outdoors has fallback fragments if none were small
+    if not outdoors:
+        outdoors = extract_outdoor_fragments(buildable_poly, footprint_poly)
+
+    return wedges, outdoors
+
+
+def evaluate_orthogonal_waste_and_rotations(
+    buildable_poly: Polygon,
+    footprint_area: float,
+    chosen_angle: float = 0.0,
+) -> Tuple[float, List[Dict[str, Any]], Optional[str]]:
+    """
+    Evaluates orthogonal waste vs buildable area.
+    If waste > 25%, evaluates candidate rotations (0° axis + edge-aligned angles)
+    and returns (waste_pct, rotation_alternatives, warning_message).
+    """
+    buildable_area = round(buildable_poly.area, 2)
+    if buildable_area <= 0.0:
+        return 0.0, [], None
+
+    waste_area = max(0.0, buildable_area - footprint_area)
+    waste_pct = round(waste_area / buildable_area * 100.0, 1)
+
+    rotation_alternatives: List[Dict[str, Any]] = []
+    warning_msg: Optional[str] = None
+
+    if waste_pct > 25.0:
+        coords = list(buildable_poly.exterior.coords)[:-1]
+        angles = [0.0]
+        for i in range(len(coords)):
+            p1 = coords[i]
+            p2 = coords[(i + 1) % len(coords)]
+            dx = p2[0] - p1[0]
+            dy = p2[1] - p1[1]
+            deg = round(math.degrees(math.atan2(dy, dx)) % 90.0, 1)
+            if deg not in angles:
+                angles.append(deg)
+
+        for ang in sorted(angles):
+            rect = find_largest_inscribed_rectangle(buildable_poly, grid_step=0.25, candidate_orientations=[ang])
+            if rect:
+                a_area = rect["area_sqm"]
+                w_pct = round(max(0.0, buildable_area - a_area) / buildable_area * 100.0, 1)
+                rotation_alternatives.append({
+                    "angle_deg": ang,
+                    "inscribed_area_sqm": a_area,
+                    "waste_pct": w_pct,
+                })
+
+        best_alt = min(rotation_alternatives, key=lambda x: x["waste_pct"]) if rotation_alternatives else None
+        best_note = (
+            f" ({best_alt['angle_deg']}° achieves {best_alt['waste_pct']:.1f}% waste)"
+            if (best_alt and best_alt["angle_deg"] != chosen_angle)
+            else ""
+        )
+
+        warning_msg = (
+            f"Statutory Geometry Advisory: Orthogonal building footprint wastes {waste_pct:.1f}% of buildable area "
+            f"(> 25.0% threshold). Consider accepting angled plot alignment{best_note} or absorbing boundary slivers "
+            f"into designated functional wedge zones (storage, duct/shaft, planter, parking apron)."
+        )
+
+    return waste_pct, rotation_alternatives, warning_msg
+
+
 def compute_site_vastu_overlay(bounds: Tuple[float, float, float, float]) -> Dict[str, Dict[str, Any]]:
     """
     Generates a site-level 9-zone Vastu Shastra overlay aligned to true North.
@@ -944,6 +1115,8 @@ def compute_canonical_site_plan(
         origin_lat=plot_polygon.origin_lat if plot_polygon else None,
         origin_lon=plot_polygon.origin_lon if plot_polygon else None,
         shape_type=shape_type,
+        is_regular_rectangle=is_rect,
+        has_curved_edges=getattr(plot_polygon, "has_curved_edges", False) if plot_polygon else False,
         area_sqm=plot_area,
         perimeter_m=perimeter,
         bounding_box=(round(minx, 2), round(miny, 2), round(maxx, 2), round(maxy, 2)),
@@ -1010,8 +1183,23 @@ def compute_canonical_site_plan(
             inscribed_footprint.y + inscribed_footprint.depth_m
         )
 
-    # 4. Outdoor Difference Fragments & Setback Band
-    outdoor_fragments = extract_outdoor_fragments(buildable_poly, footprint_poly)
+    # 4. Wedge Absorption & Outdoor Difference Fragments
+    if not is_rect:
+        wedge_zones, outdoor_fragments = extract_wedge_and_outdoor_zones(
+            buildable_poly, footprint_poly, shape_type
+        )
+        waste_pct, rot_alts, waste_warn = evaluate_orthogonal_waste_and_rotations(
+            buildable_poly, env_area, chosen_angle=0.0
+        )
+        if waste_warn:
+            warnings.append(waste_warn)
+    else:
+        wedge_zones = []
+        outdoor_fragments = extract_outdoor_fragments(buildable_poly, footprint_poly)
+        waste_pct = 0.0
+        rot_alts = []
+        waste_warn = None
+
     setback_band_area = round(max(0.0, plot_area - buildable_area), 2)
 
     # 5. Survey Edges & Vertex Table
@@ -1030,6 +1218,10 @@ def compute_canonical_site_plan(
     min_dist_to_boundary = round(footprint_poly.distance(poly.exterior), 2)
     cov_actual = round((env_area / plot_area * 100.0), 1)
 
+    site_cert_diags = [] if is_contained else ["Footprint boundary exceeds buildable setback envelope."]
+    if waste_warn:
+        site_cert_diags.append(waste_warn)
+
     site_cert = SiteCertificate(
         footprint_contained_in_buildable=bool(is_contained),
         setback_distance_satisfied=bool(min_dist_to_boundary >= nominal_setback - 0.10),
@@ -1040,7 +1232,7 @@ def compute_canonical_site_plan(
         far_actual=round(env_area * 2 / plot_area, 2),  # Default 2-floor projection
         far_limit=2.5,
         is_valid=bool(is_contained and env_area >= MIN_HABITABLE_FOOTPRINT_M2),
-        diagnostics=[] if is_contained else ["Footprint boundary exceeds buildable setback envelope."]
+        diagnostics=site_cert_diags
     )
 
     site_plan = SitePlanModel(
@@ -1051,6 +1243,12 @@ def compute_canonical_site_plan(
         reduced_setback_applied=reduced_applied,
         footprint=inscribed_footprint,
         outdoor_zones=outdoor_fragments,
+        wedge_zones=wedge_zones,
+        design_policy="Building squared off; irregular residue allocated to setbacks/wedge zones" if not is_rect else None,
+        design_policy_rationale="Structural grid, construction cost, NBC regularity" if not is_rect else None,
+        waste_pct=0.0 if is_rect else waste_pct,
+        rotation_alternatives=[] if is_rect else rot_alts,
+        waste_warning_triggered=False if is_rect else bool(waste_pct > 25.0),
         setback_band_area_sqm=setback_band_area,
         edges=survey_edges,
         vertex_table=vertex_table,

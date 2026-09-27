@@ -64,6 +64,16 @@ WALL_TYPE_SPECS: Dict[str, Dict[str, Any]] = {
         "hatch": "hollow_double",
         "fire_rating_hours": 1.0,
     },
+    "W_PARAPET": {
+        "tag": "W_PARAPET",
+        "name": "Terrace Parapet Wall",
+        "thickness_mm": 115,
+        "thickness_m": 0.115,
+        "description": "115mm Parapet Wall (1.0m height) with coping & drainage weep holes",
+        "is_load_bearing": False,
+        "hatch": "solid_subtle",
+        "fire_rating_hours": 1.0,
+    },
 }
 
 
@@ -324,7 +334,7 @@ class WallSegment:
     A single shared wall segment separates two adjacent rooms (never doubled).
     """
     wall_id: str
-    wall_type: Literal["W1", "W2", "W3"]
+    wall_type: Literal["W1", "W2", "W3", "W_PARAPET"]
     thickness_m: float
     x1: float
     y1: float
@@ -333,6 +343,7 @@ class WallSegment:
     orientation: Literal["horizontal", "vertical"]
     is_exterior: bool = False
     is_load_bearing: bool = False
+    is_parapet: bool = False
     adjacent_rooms: List[str] = field(default_factory=list)
     openings: List[HostedOpening] = field(default_factory=list)
     is_street_facade: bool = False
@@ -382,6 +393,7 @@ class WallSegment:
             "orientation": self.orientation,
             "is_exterior": self.is_exterior,
             "is_load_bearing": self.is_load_bearing,
+            "is_parapet": self.is_parapet,
             "adjacent_rooms": list(self.adjacent_rooms),
             "openings": [op.to_dict() for op in self.openings],
             "is_street_facade": self.is_street_facade,
@@ -750,35 +762,101 @@ def build_constructible_wall_graph(
                 cd = float(getattr(c, "depth_m", 0.0))
                 corr_boxes.append(shapely_box(round(cx, 3), round(cy, 3), round(cx + cw, 3), round(cy + cd, 3)))
 
-        union_poly = unary_union(wing_boxes + corr_boxes)
-        ext_coords = list(union_poly.exterior.coords) if hasattr(union_poly, "exterior") else []
-        for i in range(len(ext_coords) - 1):
-            p1 = ext_coords[i]
-            p2 = ext_coords[i + 1]
-            seg_dy = abs(p2[1] - p1[1])
-            orient = "horizontal" if seg_dy < 1e-4 else "vertical"
-            wall_key = f"WAL_EXT_{i+1}"
+        terrace_room = next((r for r in raw_rooms if (getattr(r, "zone_category", "") == "terrace" or (isinstance(r, dict) and r.get("zone_category") == "terrace") or "terrace" in (getattr(r, "room_id", "") or (r.get("room_id", "") if isinstance(r, dict) else "")).lower())), None)
 
-            is_facade = False
-            facade_label = None
-            if abs(p1[1]) < 0.05 and abs(p2[1]) < 0.05 and orient == "horizontal":
-                is_facade = True
-                facade_label = "STREET FACADE"
+        if terrace_room and len(wing_boxes) > 1:
+            # Wing A (wing_boxes[0]) + Corridors are occupied enclosed building
+            occupied_poly = unary_union([wing_boxes[0]] + corr_boxes)
+            occ_coords = list(occupied_poly.exterior.coords) if hasattr(occupied_poly, "exterior") else []
+            for i in range(len(occ_coords) - 1):
+                p1 = occ_coords[i]
+                p2 = occ_coords[i + 1]
+                seg_dy = abs(p2[1] - p1[1])
+                orient = "horizontal" if seg_dy < 1e-4 else "vertical"
+                wall_key = f"WAL_EXT_{i+1}"
 
-            walls[wall_key] = WallSegment(
-                wall_id=wall_key,
-                wall_type="W1",
-                thickness_m=W1_EXTERIOR_THICKNESS_M,
-                x1=round(p1[0], 3),
-                y1=round(p1[1], 3),
-                x2=round(p2[0], 3),
-                y2=round(p2[1], 3),
-                orientation=orient,
-                is_exterior=True,
-                is_load_bearing=True,
-                is_street_facade=is_facade,
-                label=facade_label,
-            )
+                is_facade = False
+                facade_label = None
+                if abs(p1[1]) < 0.05 and abs(p2[1]) < 0.05 and orient == "horizontal":
+                    is_facade = True
+                    facade_label = "STREET FACADE"
+
+                walls[wall_key] = WallSegment(
+                    wall_id=wall_key,
+                    wall_type="W1",
+                    thickness_m=W1_EXTERIOR_THICKNESS_M,
+                    x1=round(p1[0], 3),
+                    y1=round(p1[1], 3),
+                    x2=round(p2[0], 3),
+                    y2=round(p2[1], 3),
+                    orientation=orient,
+                    is_exterior=True,
+                    is_load_bearing=True,
+                    is_street_facade=is_facade,
+                    label=facade_label,
+                )
+
+            # Outer boundary of terrace box (wing_boxes[1]) receives W_PARAPET walls (115mm)
+            from shapely.geometry import Point
+            t_box = wing_boxes[1]
+            t_coords = list(t_box.exterior.coords)
+            p_idx = 1
+            for i in range(len(t_coords) - 1):
+                p1 = t_coords[i]
+                p2 = t_coords[i + 1]
+                mid_x = (p1[0] + p2[0]) / 2.0
+                mid_y = (p1[1] + p2[1]) / 2.0
+                # If edge midpoint is shared with occupied building, skip (already has W1 wall)
+                if occupied_poly.distance(Point(mid_x, mid_y)) < 0.05:
+                    continue
+                seg_dy = abs(p2[1] - p1[1])
+                orient = "horizontal" if seg_dy < 1e-4 else "vertical"
+                parapet_key = f"WAL_PARAPET_{p_idx}"
+                walls[parapet_key] = WallSegment(
+                    wall_id=parapet_key,
+                    wall_type="W_PARAPET",
+                    thickness_m=W2_INTERIOR_THICKNESS_M,
+                    x1=round(p1[0], 3),
+                    y1=round(p1[1], 3),
+                    x2=round(p2[0], 3),
+                    y2=round(p2[1], 3),
+                    orientation=orient,
+                    is_exterior=True,
+                    is_load_bearing=False,
+                    is_parapet=True,
+                    label="PARAPET WALL",
+                )
+                p_idx += 1
+        else:
+            union_poly = unary_union(wing_boxes + corr_boxes)
+            ext_coords = list(union_poly.exterior.coords) if hasattr(union_poly, "exterior") else []
+            for i in range(len(ext_coords) - 1):
+                p1 = ext_coords[i]
+                p2 = ext_coords[i + 1]
+                seg_dy = abs(p2[1] - p1[1])
+                orient = "horizontal" if seg_dy < 1e-4 else "vertical"
+                wall_key = f"WAL_EXT_{i+1}"
+
+                is_facade = False
+                facade_label = None
+                if abs(p1[1]) < 0.05 and abs(p2[1]) < 0.05 and orient == "horizontal":
+                    is_facade = True
+                    facade_label = "STREET FACADE"
+
+                walls[wall_key] = WallSegment(
+                    wall_id=wall_key,
+                    wall_type="W1",
+                    thickness_m=W1_EXTERIOR_THICKNESS_M,
+                    x1=round(p1[0], 3),
+                    y1=round(p1[1], 3),
+                    x2=round(p2[0], 3),
+                    y2=round(p2[1], 3),
+                    orientation=orient,
+                    is_exterior=True,
+                    is_load_bearing=True,
+                    is_street_facade=is_facade,
+                    label=facade_label,
+                )
     else:
         # Four Exterior Boundary Walls (W1 = 230mm) for single rectangular envelope
         walls["WAL_EXT_N"] = WallSegment(
@@ -1100,7 +1178,8 @@ def build_constructible_wall_graph(
                 if abs(p1 - w_a_rel_x) < 0.05 and abs(seg_len - w_a_w) < 0.05:
                     lbl = f"WING A: {seg_mm}"
                 elif abs(p1 - w_b_rel_x) < 0.05 and abs(seg_len - w_b_w) < 0.05:
-                    lbl = f"WING B: {seg_mm}"
+                    is_t = any(getattr(r, "zone_category", "") == "terrace" or (isinstance(r, dict) and r.get("zone_category") == "terrace") for r in raw_rooms)
+                    lbl = f"TERRACE: {seg_mm}" if is_t else f"WING B: {seg_mm}"
                 else:
                     lbl = f"STEP: {seg_mm}"
                 x_segs.append(DimensionSegment(lbl, seg_mm, seg_len, p1, p2))
