@@ -130,6 +130,57 @@ class InscribedFootprint(BaseModel):
     courtyard_void: Optional[OutdoorFragment] = None
 
 
+class ParkingBay(BaseModel):
+    """Standard Equivalent Car Space (ECS) parking bay geometry (2.5m x 5.0m)."""
+    bay_id: str = Field(..., description="Unique bay identifier, e.g. ECS-1")
+    width_m: float = Field(default=2.5, description="Bay clear width in meters")
+    length_m: float = Field(default=5.0, description="Bay clear length in meters")
+    x: float = Field(..., description="SW corner Easting in meters")
+    y: float = Field(..., description="SW corner Northing in meters")
+    orientation_deg: float = Field(default=0.0, description="Orientation angle in degrees")
+    polygon_coords: List[Tuple[float, float]] = Field(default_factory=list, description="4 corner coordinates")
+
+
+class ParkingEnvelope(BaseModel):
+    """
+    Parking envelope derived in the parking-first pipeline prior to footprint.
+    Contains required/provided ECS counts, individual bays, drive aisle, and coexistence options.
+    """
+    required_ecs: int = Field(default=1, description="Statutory ECS count required by typology/units")
+    provided_ecs: int = Field(default=1, description="Actual surface ECS bays accommodated on site")
+    deficit_ecs: int = Field(default=0, description="Deficit count if surface parking cannot fit")
+    bays: List[ParkingBay] = Field(default_factory=list, description="Accommodated 2.5x5.0m parking bays")
+    drive_aisle_polygon: List[Tuple[float, float]] = Field(default_factory=list, description="Drive aisle access geometry")
+    drive_aisle_width_m: float = Field(default=3.5, description="Drive aisle clear width in meters")
+    total_parking_area_sqm: float = Field(
+        default=0.0,
+        description="Total parking envelope area: ECS bays + drive aisle (single source for UI/PDF)"
+    )
+    coexistence_status: str = Field(
+        default="COEXISTENT",
+        description="COEXISTENT if statutory parking fits with footprint, else DEFICIT_WARNED"
+    )
+    deficit_warning: Optional[str] = Field(default=None, description="Explicit warning if parking + footprint cannot coexist")
+    coexistence_options: List[str] = Field(
+        default_factory=list,
+        description="Explicit options to resolve deficit: reduce footprint, stack parking, accept deficit"
+    )
+
+
+class SiteSheetChecklist(BaseModel):
+    """Programmatic completeness checklist for Sheet 10.0 / Site Survey."""
+    has_road_annotation: bool = Field(default=False, description="Road side + width annotated")
+    has_gates: bool = Field(default=False, description="Vehicular gate + pedestrian entry marked")
+    has_parking_bays: bool = Field(default=False, description="Parking bays with 2.5x5.0m dims and aisle")
+    has_sewer_connection: bool = Field(default=False, description="Sewer connection point with invert level")
+    has_stormwater_drainage: bool = Field(default=False, description="Stormwater outlet + drainage direction arrows")
+    has_levels_and_slope: bool = Field(default=False, description="Finished ground level + road level + slope note")
+    has_setbacks_all_sides: bool = Field(default=False, description="Setback dimensions indicated on every side")
+    has_neighbour_ticks: bool = Field(default=False, description="Neighbour / boundary ticks on adjoining edges")
+    is_complete: bool = Field(default=False, description="True if all 8 required items are present")
+    missing_items: List[str] = Field(default_factory=list, description="List of missing required items if incomplete")
+
+
 class SiteCertificate(BaseModel):
     """Mathematical site compliance certificate."""
     footprint_contained_in_buildable: bool = True
@@ -175,4 +226,40 @@ class SitePlanModel(BaseModel):
     vertex_table: List[PlotVertex] = Field(default_factory=list)
     site_vastu_zones: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     certificate: SiteCertificate = Field(default_factory=SiteCertificate)
+    building_line_coords: List[Tuple[float, float]] = Field(
+        default_factory=list,
+        description="Explicit building line coordinates derived from inward setback envelope"
+    )
+    setback_dimensions: Dict[str, float] = Field(
+        default_factory=dict,
+        description="Setback distance dimensions on all sides (front_m, rear_m, left_m, right_m)"
+    )
+    derivation_chain: List[str] = Field(
+        default_factory=list,
+        description="Explicit derivation chain: plot -> setbacks -> buildable -> building line -> footprint"
+    )
+    derivation_text: str = Field(
+        default="",
+        description="Printed derivation banner text: FOOTPRINT DERIVED FROM BUILDABLE POLYGON P1..Pn"
+    )
+    parking: Optional[ParkingEnvelope] = Field(
+        default=None,
+        description="Parking-first envelope with 2.5x5.0m bays and drive aisle"
+    )
+    checklist: Optional[SiteSheetChecklist] = Field(
+        default=None,
+        description="Site sheet completeness checklist evaluation"
+    )
+    validated_layers: List[str] = Field(
+        default_factory=lambda: ["L1", "L2"],
+        description="List of validated layer tokens for drawing status stamp"
+    )
+    validation_gate: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Universal validation gate for the SITE scope: site layers evaluated, building layers N/A with explicit reasons"
+    )
+    drawing_status_stamp: str = Field(
+        default="STATUS: CONCEPT DESIGN - VALIDATED LAYERS: [L1, L2] - NOT FOR CONSTRUCTION",
+        description="Drawing status stamp line"
+    )
     svg_site_plan: Optional[str] = None
