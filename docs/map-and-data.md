@@ -64,19 +64,21 @@ The map interface is powered by **MapLibre GL JS** (`frontend/src/components/Map
 
 Managed via `MapStyleSelector.tsx`. Users can switch between 3 basemap modes:
 
-### 1. Vector Street Map (OpenFreeMap Positron)
-- **Style URL:** `https://tiles.openfreemap.org/styles/positron`
-- **Features:** Clean, high-contrast monochrome design tailored for engineering overlays, road labels, and building footprints.
+### 1. Vector Street Map (OpenFreeMap Liberty / Dark)
+- **Style URL:** `https://tiles.openfreemap.org/styles/liberty` (light) / `.../styles/dark` (dark)
+- **Features:** Clean cartography tailored for engineering overlays, road labels, and 3D extruded buildings (`fill-extrusion`).
 - **Provider:** OpenFreeMap / OpenStreetMap contributors.
 
-### 2. High-Resolution Satellite Hybrid (Esri + OpenFreeMap Overlay)
+### 2. High-Resolution Satellite Hybrid (Esri Imagery Base)
 - **Basemap:** Esri World Imagery (Maxar, Earthstar Geographics, USDA, USGS, AeroGRID, IGN).
   - Tile URL: `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}`
-- **Overlay Layer:** OpenFreeMap vector street and boundary lines overlaid with transparency to provide contextual navigation over aerial imagery.
+- **Compositing:** ALL vector base layers are hidden (fills, lines, symbols, and Liberty's `natural_earth`/`building-3d` extras) so the photography is the sole ground truth. Street/road lines are re-projected on top with Apple-Maps-style dark cartography, and 3D building extrusions are disabled to prevent grey slabs ghosting over imagery.
 
-### 3. Topographic Contours (OpenTopoMap)
-- **Tile URL:** `https://a.tile.opentopomap.org/{z}/{x}/{y}.png`
-- **Features:** Visual relief shading, 20-meter contour lines, and topographic elevation gradients.
+### 3. Topographic Relief (OpenTopoMap + 3D Terrain)
+- **Raster Tile URL:** `https://a.tile.opentopomap.org/{z}/{x}/{y}.png`
+- **DEM Source:** AWS Terrain Tiles (Terrarium encoding, Mapzen/AWS Open Data) drives true 3D relief via MapLibre `setTerrain` plus a `hillshade` layer for ridge shading.
+- **Camera:** Selecting Terrain smoothly tilts the camera to 55° pitch with a subtle bearing for a 3D perspective; returning to Standard/Satellite levels the camera back to 0°. Building extrusions (`minzoom 14.5`) drape over the relief for a 3D-city effect.
+- **Base handling:** All vector base layers (including raster low-zoom layers like `natural_earth`) are hidden to avoid double-drawing beneath the topographic raster.
 
 ---
 

@@ -138,10 +138,10 @@ All components reside in [`frontend/src/components/`](../frontend/src/components
 
 ### 1. MapCanvas & MapStyleSelector
 
-BuildWise AI leverages **MapLibre GL** with three hybrid cartographic modes:
-1. **Standard:** Vector tiles powered by OpenFreeMap / CARTO with dynamic light/dark theming and 3D extruded buildings (`fill-extrusion`).
-2. **Satellite Hybrid:** ESRI World Imagery raster tiles combined with transparent OpenFreeMap vector labels, boundaries, and road vectors.
-3. **Terrain Hybrid:** OpenTopoMap elevation contour rasters overlaid with vector infrastructure.
+BuildWise AI leverages **MapLibre GL** with three hybrid cartographic modes (mode compositing handled by `applyMapStyleVisibility` in `MapCanvas.tsx`):
+1. **Standard:** Vector tiles powered by OpenFreeMap (Liberty/Dark) with dynamic light/dark theming and 3D extruded buildings (`fill-extrusion`, auto camera tilt at zoom ≥ 14.6).
+2. **Satellite Hybrid:** ESRI World Imagery as the sole base; vector fills/labels are hidden and street lines re-projected on top with dark cartography. 3D buildings are disabled so extrusions never ghost over imagery.
+3. **Terrain Hybrid:** OpenTopoMap raster + AWS Terrarium DEM (`raster-dem` → `setTerrain`) driving true 3D relief with a hillshade layer; building extrusions drape over the relief and the camera auto-tilts to 55° pitch, levelling back out on exit.
 
 ### 2. AnalysisHUD
 

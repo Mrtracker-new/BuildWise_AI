@@ -23,6 +23,7 @@ interface MapCanvasProps {
 const CUSTOM_LAYER_IDS = new Set([
   'satellite-layer',
   'terrain-layer',
+  'hillshade-layer',
   '3d-buildings',
   'footprint-fill',
   'footprint-line',
@@ -97,6 +98,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   }, [waterBodies]);
 
   const footprintGeoJsonRef = useRef<FeatureCollection>(EMPTY_GEOJSON_COLLECTION);
+  // Tracks whether the current camera pitch was applied automatically by us (Standard-mode
+  // building tilt) so we only auto-flatten pitches we own — never user-set ones.
+  const autoTiltedRef = useRef<boolean>(false);
   const entranceShaftGeoJsonRef = useRef<FeatureCollection>(EMPTY_GEOJSON_COLLECTION);
   const entranceHeadGeoJsonRef = useRef<FeatureCollection>(EMPTY_GEOJSON_COLLECTION);
   const footprintCornersLatLngRef = useRef<{ lat: number; lng: number }[]>([]);
@@ -128,10 +132,15 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   };
 
   /**
-   * Hybrid Logic Filter:
-   * - Satellite Mode: Hide base fills and background; keep lines (roads) and symbols (labels).
-   * - Terrain Mode: Hide all vector base layers (fills, lines, symbols) to avoid double vision.
-   * - Standard Mode: Show all base vector layers.
+   * Hybrid Logic Filter (map mode compositing):
+   * - Standard: every base style layer visible; 3D buildings on with an auto camera tilt
+   *   once zoomed past the extrusion minzoom (top-down views hide building height).
+   * - Satellite: hide ALL base layers (fills, lines, symbols, raster, background) and show
+   *   the Esri imagery raster instead. 3D buildings are hidden so grey extrusion slabs never
+   *   ghost over the photography; vector street lines are re-projected on top instead.
+   * - Terrain: same full base hide; OpenTopoMap raster + DEM-driven 3D relief + hillshade,
+   *   with building extrusions draped over the relief (Apple Maps "3D city" style).
+   * Custom overlay layers (footprint, entrance, canopy, water) are never touched.
    */
   const applyMapStyleVisibility = (map: maplibregl.Map, mode: MapStyleMode) => {
     const style = map.getStyle();
@@ -143,24 +152,103 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     if (map.getLayer('terrain-layer')) {
       map.setLayoutProperty('terrain-layer', 'visibility', mode === 'terrain' ? 'visible' : 'none');
     }
+    if (map.getLayer('hillshade-layer')) {
+      map.setLayoutProperty('hillshade-layer', 'visibility', mode === 'terrain' ? 'visible' : 'none');
+    }
+    // Building extrusions live in Standard (vector) and Terrain (relief) views — never over imagery.
+    if (map.getLayer('3d-buildings')) {
+      map.setLayoutProperty(
+        '3d-buildings',
+        'visibility',
+        mode === 'satellite' ? 'none' : 'visible'
+      );
+    }
+
+    const hasVectorStreets = Boolean(map.getLayer('vector-street-lines'));
 
     for (const layer of style.layers) {
       if (CUSTOM_LAYER_IDS.has(layer.id)) continue;
+
+      // Liberty ships its own building-3d extrusion that would ghost over imagery — kill it.
+      if (layer.id === 'building-3d') {
+        try {
+          map.setLayoutProperty('building-3d', 'visibility', 'none');
+        } catch {
+          // ignore
+        }
+        continue;
+      }
 
       try {
         if (mode === 'standard') {
           map.setLayoutProperty(layer.id, 'visibility', 'visible');
         } else if (mode === 'satellite') {
-          if (layer.type === 'fill' || layer.id === 'background') {
+          // Keep only street/road casings + lines above imagery for Apple-style dark cartography.
+          const isStreetLine =
+            layer.type === 'line' &&
+            (layer.id.startsWith('road_') ||
+              layer.id.startsWith('bridge_') ||
+              layer.id.startsWith('highway_'));
+          if (isStreetLine && hasVectorStreets) {
             map.setLayoutProperty(layer.id, 'visibility', 'none');
-          } else if (layer.type === 'line' || layer.type === 'symbol') {
+          } else if (isStreetLine) {
             map.setLayoutProperty(layer.id, 'visibility', 'visible');
+          } else {
+            map.setLayoutProperty(layer.id, 'visibility', 'none');
           }
         } else if (mode === 'terrain') {
           map.setLayoutProperty(layer.id, 'visibility', 'none');
         }
       } catch {
         // Ignore unmodifiable internal layer styles
+      }
+    }
+  };
+
+  /**
+   * Mode camera choreography (Apple Maps behaviour):
+   * - Terrain: true DEM displacement (setTerrain) + 55° tilt so relief reads well.
+   * - Standard: gentle 45° tilt when zoomed into the building-extrusion range (top-down
+   *   views make extruded blocks invisible); flattens out at street-map zooms.
+   * - Satellite: level orthographic-style view over the imagery.
+   */
+  const syncCameraForMode = (map: maplibregl.Map, mode: MapStyleMode) => {
+    const currentPitch = map.getPitch();
+    if (mode === 'terrain') {
+      autoTiltedRef.current = false;
+      // Lazily ensure the DEM source exists (e.g. mode toggled before style.load setup ran).
+      if (!map.getSource('terrain-dem-source')) {
+        map.addSource('terrain-dem-source', {
+          type: 'raster-dem',
+          tiles: [
+            'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
+          ],
+          tileSize: 256,
+          maxzoom: 13,
+          encoding: 'terrarium',
+        });
+      }
+      map.setTerrain({ source: 'terrain-dem-source' });
+      if (currentPitch < 1) {
+        map.easeTo({ pitch: 55, bearing: map.getBearing() === 0 ? -17.5 : map.getBearing(), duration: 900 });
+      }
+    } else {
+      if (map.getTerrain()) {
+        map.setTerrain(null);
+      }
+      if (mode === 'standard') {
+        // Auto-tilt only when the camera is still flat or already auto-tilted by us —
+        // never stomp a pitch the user set themselves.
+        const buildingZoom = map.getZoom() >= 14.6;
+        if (currentPitch < 1 && buildingZoom) {
+          autoTiltedRef.current = true;
+          map.easeTo({ pitch: 45, duration: 800 });
+        } else if (autoTiltedRef.current && !buildingZoom) {
+          autoTiltedRef.current = false;
+          map.easeTo({ pitch: 0, duration: 700 });
+        }
+      } else if (currentPitch >= 1) {
+        map.easeTo({ pitch: 0, duration: 700 });
       }
     }
   };
@@ -232,6 +320,53 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       );
     }
 
+    // 2b. Hillshade Source & Layer (AWS Terrain Tiles / Terrarium PNG, global)
+    if (!map.getSource('hillshade-source')) {
+      map.addSource('hillshade-source', {
+        type: 'raster-dem',
+        tiles: [
+          'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
+        ],
+        tileSize: 256,
+        maxzoom: 13,
+        encoding: 'terrarium',
+        attribution: 'Terrain: AWS Open Data / Mapzen',
+      });
+    }
+    if (!map.getLayer('hillshade-layer')) {
+      map.addLayer(
+        {
+          id: 'hillshade-layer',
+          type: 'hillshade',
+          source: 'hillshade-source',
+          layout: {
+            visibility: currentMode === 'terrain' ? 'visible' : 'none',
+          },
+          paint: {
+            'hillshade-exaggeration': 0.45,
+            'hillshade-shadow-color': '#473B24',
+            'hillshade-highlight-color': '#FFFFFF',
+            'hillshade-accent-color': '#3A3126',
+          },
+        },
+        firstLayerId
+      );
+    }
+
+    // 2c. Dedicated 3D Terrain DEM Source (separate from hillshade-source per MapLibre
+    // guidance — sharing one source between hillshade + setTerrain degrades render quality).
+    if (!map.getSource('terrain-dem-source')) {
+      map.addSource('terrain-dem-source', {
+        type: 'raster-dem',
+        tiles: [
+          'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
+        ],
+        tileSize: 256,
+        maxzoom: 13,
+        encoding: 'terrarium',
+      });
+    }
+
     // 3. Find first symbol layer to place 3D buildings below street/POI labels
     let firstSymbolId: string | undefined;
     for (const l of style.layers || []) {
@@ -261,7 +396,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           source: vectorSourceId,
           'source-layer': 'building',
           type: 'fill-extrusion',
-          minzoom: 15.5,
+          // Low enough that Terrain mode shows extruded blocks over the relief;
+          // below ~14.5 tile detail is too coarse for meaningful building shapes.
+          minzoom: 14.5,
           paint: {
             'fill-extrusion-color': currentTheme === 'dark' ? '#1F2430' : '#E8E6E1',
             'fill-extrusion-height': [
@@ -479,6 +616,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
     // Apply the active Hybrid logic filter
     applyMapStyleVisibility(map, currentMode);
+    syncCameraForMode(map, currentMode);
   };
 
   // Mount MapLibre Map instance
@@ -497,7 +635,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       center: initialCenter,
       zoom: initialZoom,
       minZoom: 3,
-      maxZoom: 20,
+      // Cap at z18: beyond that the pitched camera dips below extruded rooftops and the
+      // scene collapses into floating grey blocks with the base map invisible.
+      maxZoom: 18,
       pitch: 0,
       bearing: 0,
       attributionControl: false,
@@ -518,6 +658,21 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     // Click handler for location selection
     map.on('click', (e: maplibregl.MapMouseEvent) => {
       onLocationSelectRef.current(e.lngLat.lat, e.lngLat.lng);
+    });
+
+    // Standard-mode auto-tilt: pitch into 3D when zooming into the extrusion range and
+    // flatten again when zooming back out. Skipped when the user has pitched manually.
+    map.on('zoomend', () => {
+      if (mapStyleRef.current === 'standard') {
+        syncCameraForMode(map, 'standard');
+      }
+    });
+
+    // Any manual pitch adjustment (right-drag / compass) hands camera control to the user.
+    map.on('pitchend', () => {
+      if (Math.abs(map.getPitch() - 45) > 0.5) {
+        autoTiltedRef.current = false;
+      }
     });
 
     // Tooltips on Hover for Custom GeoJSON Layers
@@ -656,6 +811,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     if (!map) return;
 
     applyMapStyleVisibility(map, mapStyle);
+    syncCameraForMode(map, mapStyle);
   }, [mapStyle]);
 
   // Invalidate / Resize helper
@@ -941,7 +1097,15 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       if (map.getLayer('entrance-head')) {
         map.setPaintProperty('entrance-head', 'fill-color', accentColor);
       }
+      // Buildings visible in Standard + Terrain; hidden in Satellite so extrusions never
+      // ghost over the photography.
+      const show3dBuildings = mapStyleRef.current !== 'satellite';
       if (map.getLayer('3d-buildings')) {
+        map.setLayoutProperty(
+          '3d-buildings',
+          'visibility',
+          show3dBuildings ? 'visible' : 'none'
+        );
         map.setPaintProperty(
           '3d-buildings',
           'fill-extrusion-color',
@@ -1292,6 +1456,15 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                 className="hover:underline text-[var(--text-1)] font-medium"
               >
                 OpenTopoMap (CC-BY-SA)
+              </a>
+              <span className="text-[var(--hairline)]">|</span>
+              <a
+                href="https://registry.opendata.aws/terrain-tiles/"
+                target="_blank"
+                rel="noreferrer"
+                className="hover:underline text-[var(--text-1)] font-medium"
+              >
+                Terrain: AWS Open Data
               </a>
             </>
           )}
