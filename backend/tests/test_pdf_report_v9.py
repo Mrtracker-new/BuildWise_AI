@@ -330,8 +330,9 @@ def test_pdf_report_multi_storey_dossier():
 
     reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
     num_pages = len(reader.pages)
-    # Minimal payload (1 page) + Sheet 10.0 + 4 floor sheets = exactly 6 pages
-    assert num_pages == 6, f"Expected exactly 6 pages (1 base + 5 floorplan sheets), got {num_pages}"
+    # Minimal payload (1 page) + Sheet 10.0 (dossier incl. universal gate layer
+    # table, +1 page since Phase 2) + 4 floor sheets = exactly 7 pages
+    assert num_pages == 7, f"Expected exactly 7 pages (1 base + 6 floorplan sheets), got {num_pages}"
 
     pages_text = [page.extract_text() for page in reader.pages]
     full_text = "\n--- PAGE ---\n".join(pages_text)

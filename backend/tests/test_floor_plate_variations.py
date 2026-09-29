@@ -435,3 +435,78 @@ def test_rectangle_equivalence_no_band_identical():
     assert model.total_built_up_area_sqm == round(model.floors[0].built_up_area_sqm * 3, 2)
     assert model.mathematical_certificate.get("is_valid") is True
 
+
+
+def test_mask_terrace_on_single_rectangle_plate_materializes_band():
+    """
+    Root-cause regression (QA sweep): a `wing_b=terrace` floor-plate mask on a
+    plot whose footprint decomposes to a SINGLE rectangle (no Wing B) used to
+    desynchronize state - plate_composition claimed 'Wing A + Terrace' while no
+    terrace room ever materialized (L11 falsely N/A 'no terrace requested').
+
+    Contract now:
+    1. The unknown-wing mask emits an explicit warning (never silently ignored).
+    2. The terrace intent is translated into the validated North-band pipeline
+       (40% depth clamp, core/duct conflict checks) and materializes as a real
+       terrace room with honest plate_composition.
+    3. No overlap between the terrace band and any conditioned room.
+    4. Gate layer L11 reports PASS with a real terrace count.
+    """
+    l_shape_verts = [
+        [0.0, 0.0],
+        [14.0, 0.0],
+        [14.0, 6.0],
+        [8.0, 6.0],
+        [8.0, 14.0],
+        [0.0, 14.0],
+    ]
+    poly = PlotPolygonModel(
+        vertices=l_shape_verts,
+        shape_type="l_shape",
+        area_sqm=148.0,
+        perimeter_m=56.0,
+        bounding_box=[0.0, 0.0, 14.0, 14.0],
+        is_regular_rectangle=False,
+    )
+    req = FloorPlanRequest(
+        plot_width_m=14.0,
+        plot_depth_m=14.0,
+        required_rooms=["living", "kitchen", "master_bed", "bath_1", "dining", "stairs"],
+        building_typology="residential_multi",
+        floors=3,
+        vastu_strictness="high",
+        plot_polygon=poly,
+        floor_plate_masks={
+            2: {"wing_a": "present", "wing_b": "terrace"},
+        },
+    )
+    eng = SoleGeometryEngine(req)
+    model = eng.solve()
+
+    # 1. Explicit warning about the ignored unknown wing (no silent drop).
+    assert any("not present in footprint" in w.lower() for w in eng.warnings)
+
+    # 2. Terrace materialized through the band pipeline on Level 2 only.
+    f2 = model.floors[2]
+    terrace_rooms = [r for r in f2.rooms if r.zone_category == "terrace"]
+    assert len(terrace_rooms) == 1
+    assert terrace_rooms[0].room_id.startswith("terrace_band_F")
+    assert "Terrace" in f2.plate_composition
+    for z in (0, 1):
+        assert not [r for r in model.floors[z].rooms if r.zone_category == "terrace"]
+
+    # 3. Hard non-overlap invariant: terrace must not overlap conditioned rooms.
+    terr = terrace_rooms[0]
+    for r in f2.rooms:
+        if r is terr:
+            continue
+        x_ov = max(0.0, min(terr.x + terr.width_m, r.x + r.width_m) - max(terr.x, r.x))
+        y_ov = max(0.0, min(terr.y + terr.depth_m, r.y + r.depth_m) - max(terr.y, r.y))
+        assert x_ov * y_ov < 0.05, f"terrace overlaps {r.room_id} by {x_ov * y_ov:.2f} sqm"
+
+    # 4. Gate layer L11 sees the real terrace.
+    cert = model.mathematical_certificate
+    gate = (cert.get("details") or {}).get("validation_gate") or {}
+    l11 = next(l for l in gate.get("layers", []) if l.get("layer_id") == "L11")
+    assert l11["status"] == "PASS"
+    assert "1 terrace" in (l11.get("summary") or "")

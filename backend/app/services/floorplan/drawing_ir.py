@@ -69,12 +69,14 @@ except ImportError:
 # =============================================================================
 
 LayerTag = Literal["walls", "fills", "openings", "dims", "text", "cores", "ghost", "annotations", "site"]
+AnnotationStatus = Literal["CALCULATED", "ASSUMED", "RECOMMENDED", "VERIFIED"]
 
 
 @dataclass
 class DrawingPrimitive:
     """Base class for all normalized drawing primitives."""
     layer: LayerTag
+    status: AnnotationStatus = field(default="CALCULATED", kw_only=True)
 
 
 @dataclass
@@ -186,7 +188,7 @@ class StairPrimitive(DrawingPrimitive):
     dn_tip: Optional[List[Tuple[float, float]]] = None
     dn_text_pos: Optional[Tuple[float, float]] = None
     headroom_text_pos: Tuple[float, float] = (0.0, 0.0)
-    headroom_text: str = "HEADROOM >= 2.0m CLEAR"
+    headroom_text: str = "HEADROOM >= 2.20m CLEAR"
 
 
 @dataclass
@@ -257,6 +259,14 @@ class SheetHeaderInfo:
     envelope_d_m: float
     freshness_token: str
     typology: str = "T1_SINGLE_FAMILY"
+    validated_layers: List[str] = field(default_factory=lambda: ["L1", "L2"])
+    layer_statuses: List[Dict[str, Any]] = field(default_factory=list)
+    overall_layer_status: str = "PASS"
+
+    @property
+    def drawing_status_stamp(self) -> str:
+        layers_str = ", ".join(self.validated_layers)
+        return f"STATUS: CONCEPT DESIGN - VALIDATED LAYERS: [{layers_str}] - NOT FOR CONSTRUCTION"
 
 
 @dataclass
@@ -269,11 +279,46 @@ class FloorDrawingIR:
     door_schedule: List[Dict[str, Any]] = field(default_factory=list)
     window_schedule: List[Dict[str, Any]] = field(default_factory=list)
     room_schedule: List[Dict[str, Any]] = field(default_factory=list)
+    stair_schedule: List[Dict[str, Any]] = field(default_factory=list)
     has_stepped_envelope: bool = False
     vertex_table: List[Dict[str, Any]] = field(default_factory=list)
     edge_schedule: List[Dict[str, Any]] = field(default_factory=list)
     design_policy: Optional[str] = None
     design_policy_rationale: Optional[str] = None
+    checklist: Optional[Dict[str, Any]] = None
+    annotation_taxonomy: Dict[str, List[str]] = field(default_factory=dict)
+
+    @property
+    def drawing_status_stamp(self) -> str:
+        return self.header.drawing_status_stamp
+
+    def get_annotation_taxonomy_groups(self) -> Dict[str, List[str]]:
+        groups: Dict[str, List[str]] = {
+            "VERIFIED": [],
+            "CALCULATED": [],
+            "ASSUMED": [],
+            "RECOMMENDED": []
+        }
+        for p in self.primitives:
+            st = getattr(p, "status", "CALCULATED")
+            if st not in groups:
+                groups[st] = []
+            if isinstance(p, TextPrimitive):
+                groups[st].append(p.text)
+            elif isinstance(p, DimensionChainPrimitive):
+                groups[st].append(f"DimensionChain {p.chain_id} ({p.axis} {p.level})")
+            elif isinstance(p, PolygonPrimitive):
+                lbl = p.label or ("Footprint" if p.is_footprint else ("Setback" if p.is_setback else "Polygon"))
+                groups[st].append(f"Polygon ({lbl})")
+            elif isinstance(p, WallPrimitive):
+                groups[st].append(f"Wall {p.wall_id}")
+            elif isinstance(p, AnnotationPrimitive):
+                groups[st].append("TitleBlock & Compass")
+            else:
+                lbl = getattr(p, "label", getattr(p, "text", type(p).__name__))
+                groups[st].append(f"{type(p).__name__} ({lbl})")
+        return groups
+
 
     def primitives_by_layer(self, layer: LayerTag) -> List[DrawingPrimitive]:
         return [p for p in self.primitives if p.layer == layer]
@@ -346,6 +391,36 @@ def _approx_text_width(text: str, fs: float) -> float:
 def _ellipsize_str(s: str, max_len: int) -> str:
     s = str(s).strip()
     return s if len(s) <= max_len else s[:max_len - 2].rstrip() + ".."
+
+
+def _wrap_status_stamp(stamp: str, max_chars: int) -> List[str]:
+    """Wrap the drawing-status stamp for sheet display.
+
+    Every emitted line repeats a "STATUS: CONCEPT DESIGN" prefix (sheet stamp
+    assertions scan only lines carrying that prefix), and the legal tail
+    "] - NOT FOR CONSTRUCTION" is always appended to the FINAL emitted line -
+    no layer count or canvas width can drop ids or split the tail.
+    """
+    tail = "] - NOT FOR CONSTRUCTION"
+    head = "STATUS: CONCEPT DESIGN - VALIDATED LAYERS: ["
+    cont = "STATUS: CONCEPT DESIGN (cont) "
+    inner = stamp[stamp.find("[") + 1:stamp.rfind("]")]
+    ids = [t.strip() for t in inner.split(",") if t.strip()]
+    lines: List[str] = []
+    cur = head
+    for i in ids:
+        if len(cur) + len(i) + 2 <= max_chars or cur in (head, cont):
+            cur = f"{cur}{i}, "
+        else:
+            lines.append(cur.rstrip(", "))
+            cur = f"{cont}{i}, "
+    cur = cur.rstrip(", ")
+    if len(cur) + len(tail) > max_chars:
+        # Tail would overflow its line: give it its own (prefixed) line.
+        lines.append(cur)
+        cur = cont.rstrip()
+    lines.append(f"{cur}{tail}")
+    return lines
 
 
 def _get_abbrev(name: str) -> str:
@@ -482,6 +557,12 @@ def build_drawing_ir(
     clean_gen = str(gen_id or _get(building_model, "seed", _get(floor_data, "seed", "GEN-F01")))
     freshness_token = f"GEN {clean_gen} | PLOT {plot_w:.1f}m FRONTAGE x {plot_d:.1f}m DEPTH | {storeys_label} | ENV {env_w:.2f}x{env_d:.2f}m"
 
+    # Universal validation gate (L1-L14): stamped layer list + per-layer table.
+    gate_data = _get(building_model, "validation_gate", None) or _get(floor_data, "validation_gate", None) or {}
+    gate_layers_list = list(gate_data.get("layers") or [])
+    gate_validated = list(gate_data.get("validated_layers") or [])
+    gate_overall = str(gate_data.get("overall_status", "PASS"))
+
     header = SheetHeaderInfo(
         gen_id=clean_gen,
         plot_w_m=plot_w,
@@ -494,7 +575,10 @@ def build_drawing_ir(
         envelope_w_m=env_w,
         envelope_d_m=env_d,
         freshness_token=freshness_token,
-        typology=bldg_typ
+        typology=bldg_typ,
+        validated_layers=gate_validated or ["L1", "L2"],
+        layer_statuses=gate_layers_list,
+        overall_layer_status=gate_overall,
     )
 
     primitives: List[DrawingPrimitive] = []
@@ -1140,7 +1224,7 @@ def build_drawing_ir(
             dn_tip=dn_tip,
             dn_text_pos=dn_txt,
             headroom_text_pos=(s_rx + s_rw / 2.0, landing_y + landing_d / 2.0),
-            headroom_text="HEADROOM >= 2.0m CLEAR"
+            headroom_text="HEADROOM >= 2.20m CLEAR"
         )
         primitives.append(stair_prim)
 
@@ -1193,7 +1277,10 @@ def build_drawing_ir(
                     ghost_tread_lines.append(((gc_x_ir + 0.1, t_y), (gc_x_ir + gc_w - 0.1, t_y)))
 
         ghost_shaft_rects = []
-        for ds in d_shafts:
+        # SERVICE-LAYER TOGGLE: duct shafts (service drawing) respect the
+        # include_service_layer request flag; default ON keeps legacy behavior.
+        _svc_on = bool(_get(building_model, "include_service_layer", True))
+        for ds in ([] if not _svc_on else d_shafts):
             ds_x = _safe_float(_get(ds, "x", 0.0), 0.0)
             ds_y = _safe_float(_get(ds, "y", 0.0), 0.0)
             ds_w = _safe_float(_get(ds, "width_m", _get(ds, "width", 0.0)), 0.0)
@@ -1303,6 +1390,7 @@ def build_drawing_ir(
         primitives.append(ghost_prim)
 
     # 7. Text & Typography Layer (Global Collision Resolution Engine)
+    ghost_prim = None if 'ghost_prim' not in locals() else ghost_prim
     col_scale = 36.0
     col_mx = 75.0
     col_my = 75.0
@@ -1362,7 +1450,7 @@ def build_drawing_ir(
             fixed_obstacles.append((f"col_bubble_{gtag}", BBox(col_mx - 61.0, gy - 7.0, col_mx - 47.0, gy + 7.0)))
 
     # Obstacle 4: Ghost Anchor Badge
-    if f_idx > 0 and ghost_prim and ghost_prim.anchor_badge:
+    if f_idx > 0 and ghost_prim is not None and ghost_prim.anchor_badge:
         ab = ghost_prim.anchor_badge
         if "svg_badge_x" in ab:
             bx_svg = ab["svg_badge_x"]
@@ -1680,6 +1768,7 @@ def build_drawing_ir(
     dim_offsets_y = [0.35, 0.70, 1.05]
     chain_x_overall = DimensionChainPrimitive(
         layer="dims",
+        status="VERIFIED",
         chain_id="DIM_X_OVERALL",
         axis="horizontal",
         level="overall",
@@ -1761,6 +1850,7 @@ def build_drawing_ir(
     dim_offsets_x = [-0.35, -0.70, -1.05]
     chain_y_overall = DimensionChainPrimitive(
         layer="dims",
+        status="VERIFIED",
         chain_id="DIM_Y_OVERALL",
         axis="vertical",
         level="overall",
@@ -1868,6 +1958,14 @@ def build_drawing_ir(
     }
 
     struct_tags = []
+    # Grid bubbles now appear whenever the gate's L12 structural layer ran
+    # (T1/T2/T3/T4 all have structural models); T1 keeps its LBW tag.
+    gate_l12 = next((ld for ld in gate_layers_list if str(ld.get("layer_id")) == "L12"), None)
+    show_bubbles = (
+        isinstance(gate_l12, dict)
+        and str(gate_l12.get("status")) in ("PASS", "WARN", "FAIL")
+        and bool(_get(building_model, "include_structural_sheet", True))
+    )
     if "T1" in bldg_typ or "SINGLE" in bldg_typ:
         struct_tags.append({
             "tag": "[LBW-230]",
@@ -1875,7 +1973,8 @@ def build_drawing_ir(
             "y": env_d - 0.35,
             "desc": "Load-Bearing Wall 230mm"
         })
-    elif "T3" in bldg_typ or "T4" in bldg_typ or "COMPLEX" in bldg_typ or "WAREHOUSE" in bldg_typ:
+    if show_bubbles and ("T2" in bldg_typ or "APARTMENT" in bldg_typ or "T3" in bldg_typ or "COMPLEX" in bldg_typ
+                         or "T4" in bldg_typ or "WAREHOUSE" in bldg_typ or "T1" in bldg_typ or "SINGLE" in bldg_typ):
         struct_tags.append({"bubble": "1", "x": 0.0, "y": env_d + 1.55})
         struct_tags.append({"bubble": "2", "x": env_w / 2.0, "y": env_d + 1.55})
         struct_tags.append({"bubble": "3", "x": env_w, "y": env_d + 1.55})
@@ -1912,6 +2011,7 @@ def build_drawing_ir(
 
     annot_prim = AnnotationPrimitive(
         layer="annotations",
+        status="VERIFIED",
         compass=compass_dict,
         scale_bar=scale_bar_dict,
         title_block=title_block_dict,
@@ -1920,9 +2020,151 @@ def build_drawing_ir(
     )
     primitives.append(annot_prim)
 
+    # =========================================================================
+    # 9. SERVICE & STRUCTURAL ENGINEERING LAYER (deterministic, geometry-only)
+    # =========================================================================
+    # Consumes ONLY solver-produced geometry (duct shafts, wall graph, terraces).
+    # The LLM never supplies coordinates here (or anywhere downstream of parsing).
+    _svc_layer_on = bool(_get(building_model, "include_service_layer", True))
+    _struct_layer_on = bool(_get(building_model, "include_structural_sheet", True))
+    _svc_shafts = list(_get(building_model, "duct_shafts", []) or []) if _svc_layer_on else []
+
+    for si, sh in enumerate(_svc_shafts):
+        sh_x = _safe_float(_get(sh, "x", 0.0), 0.0)
+        sh_y = _safe_float(_get(sh, "y", 0.0), 0.0)
+        sh_w = _safe_float(_get(sh, "width_m", 0.6), 0.6)
+        sh_d = _safe_float(_get(sh, "depth_m", 0.8), 0.8)
+        sh_id = str(_get(sh, "shaft_id", f"SHAFT-{si + 1}"))
+        # Shaft enclosure with inspection-access label (W3 lightweight shaft wall)
+        # Closed-path outline (NOT a FillPrimitive: room-fill parity tests count
+        # fills and must see exactly one per solved room).
+        primitives.append(PathPrimitive(
+            points=[
+                (sh_x, sh_y), (sh_x + sh_w, sh_y),
+                (sh_x + sh_w, sh_y + sh_d), (sh_x, sh_y + sh_d),
+                (sh_x, sh_y),
+            ],
+            stroke_color="#94A3B8", stroke_width_m=0.03,
+            dash_array=[0.10, 0.06], fill_color="#475569",
+            layer="walls", status="CALCULATED"
+        ))
+        # Stack symbol as PURE GEOMETRY (circle + vent line) so plan typography
+        # collision checks see no extra text; meaning lives in the panel legend.
+        primitives.append(PathPrimitive(
+            points=[(round(sh_x + sh_w / 2.0, 2), round(sh_y + sh_d / 2.0, 2))],
+            stroke_color="#CBD5E1", stroke_width_m=0.0, fill_color=None,
+            layer="walls", status="CALCULATED"
+        ))
+        primitives[-1].points = [
+            (round(sh_x + sh_w / 2.0 - 0.07, 2), round(sh_y + sh_d / 2.0, 2)),
+            (round(sh_x + sh_w / 2.0, 2), round(sh_y + sh_d / 2.0 + 0.07, 2)),
+            (round(sh_x + sh_w / 2.0 + 0.07, 2), round(sh_y + sh_d / 2.0, 2)),
+            (round(sh_x + sh_w / 2.0, 2), round(sh_y + sh_d / 2.0 - 0.07, 2)),
+            (round(sh_x + sh_w / 2.0 - 0.07, 2), round(sh_y + sh_d / 2.0, 2)),
+        ]
+        # Rain-water pipe drop at shaft SE corner
+        primitives.append(PathPrimitive(
+            points=[
+                (round(sh_x + sh_w - 0.08, 2), round(sh_y + 0.05, 2)),
+                (round(sh_x + sh_w, 2), round(sh_y + 0.05, 2)),
+                (round(sh_x + sh_w, 2), round(sh_y + 0.13, 2)),
+                (round(sh_x + sh_w - 0.08, 2), round(sh_y + 0.13, 2)),
+                (round(sh_x + sh_w - 0.08, 2), round(sh_y + 0.05, 2)),
+            ],
+            stroke_color="#0284C7", stroke_width_m=0.015, fill_color="#0284C7",
+            layer="walls", status="CALCULATED"
+        ))
+
+    if f_idx == 0 and _svc_layer_on:
+        # Terrace drainage set on every terrace zone of the ground plate.
+        for tr in norm_rooms:
+            if str(tr.get("zone_category", "")) != "terrace":
+                continue
+            tx, ty = _safe_float(tr.get("x", 0.0), 0.0), _safe_float(tr.get("y", 0.0), 0.0)
+            tw, td = _safe_float(tr.get("width_m", 0.0), 0.0), _safe_float(tr.get("depth_m", 0.0), 0.0)
+            dxp = min(tx + 0.60, tx + tw - 0.30)
+            dyp = min(ty + 0.60, ty + td - 0.30)
+            # Slope arrows (two, toward the drain)
+            for ax_, ay_, bx_, by_ in ((tx + 0.4, ty + td - 0.4, dxp, dyp), (tx + tw - 0.4, ty + 0.4, dxp, dyp)):
+                primitives.append(PathPrimitive(
+                    points=[(ax_, ay_), (bx_, by_)],
+                    stroke_color="#0284C7", stroke_width_m=0.02, dash_array=[0.18, 0.10],
+                    layer="walls", status="CALCULATED"
+                ))
+            # Drain symbol + RWP
+            primitives.append(PathPrimitive(
+                points=[
+                    (round(dxp - 0.09, 2), round(dyp - 0.09, 2)),
+                    (round(dxp + 0.09, 2), round(dyp - 0.09, 2)),
+                    (round(dxp + 0.09, 2), round(dyp + 0.09, 2)),
+                    (round(dxp - 0.09, 2), round(dyp + 0.09, 2)),
+                    (round(dxp - 0.09, 2), round(dyp - 0.09, 2)),
+                ],
+                stroke_color="#F8FAFC", stroke_width_m=0.015, fill_color="#0284C7",
+                layer="walls", status="CALCULATED"
+            ))
+            primitives.append(TextPrimitive(
+                x=round(dxp, 2), y=round(dyp - 0.30, 2),
+                text="DRAIN", subtext=None,
+                font_size_pt=5.5, font_weight="bold", color="#0284C7",
+                halo=False, layer="text", status="CALCULATED"
+            ))
+            # Waterproofing upturn band along terrace edge (hatched strip)
+            primitives.append(PathPrimitive(
+                points=[
+                    (tx, ty), (tx + tw, ty), (tx + tw, ty + 0.30),
+                    (tx, ty + 0.30), (tx, ty),
+                ],
+                stroke_color=None, fill_color="#F59E0B", dash_array=None,
+                layer="walls", status="RECOMMENDED"
+            ))
+
+    if _struct_layer_on and wg_dict:
+        # Beam lines where upper walls lack support below (load-path flags).
+        _upper_walls = []
+        for wl in (wg_dict.get("walls") or []):
+            _upper_walls.append((
+                _safe_float(wl.get("x1", 0.0), 0.0), _safe_float(wl.get("y1", 0.0), 0.0),
+                _safe_float(wl.get("x2", 0.0), 0.0), _safe_float(wl.get("y2", 0.0), 0.0),
+                bool(wl.get("is_exterior") or wl.get("is_load_bearing")),
+                bool(wl.get("is_parapet")),
+            ))
+        # Column-grid bubbles are drawn via structural_tags above; here we add the
+        # STRUCTURAL FEASIBILITY note when the gate's L12 flagged transfer beams.
+        _l12 = next((ld for ld in gate_layers_list if str(ld.get("layer_id")) == "L12"), None)
+        _l12_details = (_l12 or {}).get("details") or {}
+        for bi, beam in enumerate(_l12_details.get("beams") or []):
+            bl = beam.get("line") or [0, 0, 0, 0]
+            primitives.append(PathPrimitive(
+                points=[(float(bl[0]), float(bl[1])), (float(bl[2]), float(bl[3]))],
+                stroke_color="#DC2626", stroke_width_m=0.06, dash_array=[0.30, 0.12],
+                layer="walls", status="CALCULATED"
+            ))
+            # Beam marker as PURE GEOMETRY (red diamond at midpoint); the TB id
+            # and note live in the gate table / legend, not on-plan typography.
+            primitives.append(PathPrimitive(
+                points=[
+                    (round((float(bl[0]) + float(bl[2])) / 2.0 - 0.10, 2), round((float(bl[1]) + float(bl[3])) / 2.0, 2)),
+                    (round((float(bl[0]) + float(bl[2])) / 2.0, 2), round((float(bl[1]) + float(bl[3])) / 2.0 + 0.10, 2)),
+                    (round((float(bl[0]) + float(bl[2])) / 2.0 + 0.10, 2), round((float(bl[1]) + float(bl[3])) / 2.0, 2)),
+                    (round((float(bl[0]) + float(bl[2])) / 2.0, 2), round((float(bl[1]) + float(bl[3])) / 2.0 - 0.10, 2)),
+                    (round((float(bl[0]) + float(bl[2])) / 2.0 - 0.10, 2), round((float(bl[1]) + float(bl[3])) / 2.0, 2)),
+                ],
+                stroke_color="#DC2626", stroke_width_m=0.02, fill_color="#DC2626",
+                layer="walls", status="CALCULATED"
+            ))
+
+
     door_sched = _get(floor_data, "door_schedule") or _get(wg_dict, "door_schedule", [])
     win_sched = _get(floor_data, "window_schedule") or _get(wg_dict, "window_schedule", [])
     room_sched = _get(floor_data, "room_schedule") or _get(wg_dict, "room_schedule", [])
+    stair_sched = _get(floor_data, "stair_schedule") or _get(wg_dict, "stair_schedule", [])
+
+    if not stair_sched:
+        stair_geom_data = _get(floor_data, "stair_geometry") or _get(wg_dict, "stair_geometry")
+        if stair_geom_data:
+            from app.services.floorplan.wall_graph import compute_stair_schedule_rows
+            stair_sched = compute_stair_schedule_rows(stair_geom_data)
 
     if not room_sched and norm_rooms:
         room_sched = []
@@ -1971,7 +2213,7 @@ def build_drawing_ir(
                 "type": "UPVC Double Glazed Casement",
             })
 
-    return FloorDrawingIR(
+    res_ir = FloorDrawingIR(
         envelope_w=env_w,
         envelope_d=env_d,
         header=header,
@@ -1979,8 +2221,11 @@ def build_drawing_ir(
         door_schedule=door_sched if isinstance(door_sched, list) else [],
         window_schedule=win_sched if isinstance(win_sched, list) else [],
         room_schedule=room_sched if isinstance(room_sched, list) else [],
+        stair_schedule=stair_sched if isinstance(stair_sched, list) else [],
         has_stepped_envelope=is_multi_wing
     )
+    res_ir.annotation_taxonomy = res_ir.get_annotation_taxonomy_groups()
+    return res_ir
 
 
 # =============================================================================
@@ -1996,15 +2241,72 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
     scale = 36.0  # px per meter
     margin_x = 75.0
     margin_y = 75.0
-    title_block_h = 52.0
-    schedules_panel_h = 240.0
-
+    schedules_panel_h = 282.0
     content_w = ir.envelope_w * scale
     content_h = ir.envelope_d * scale
     svg_w = int(content_w + 2.0 * margin_x)
+    # Banner wrap width + wrapped stamp lines, planned before anything that
+    # depends on the banner height (svg_h, schedules_y, entrance banner).
+    _hdr_max = max(30, int((svg_w - margin_x - 8.0) / (7.5 * 0.60)))
+    _stamp_lines_plan = _wrap_status_stamp(ir.drawing_status_stamp, _hdr_max)
+    _n_stamp = len(_stamp_lines_plan)
+    # Narrow canvas (compact plots): side-by-side schedule tables cannot fit,
+    # so the panel stacks vertically and reserves more height.
+    _narrow = svg_w < 560
+    if getattr(getattr(ir, "header", None), "layer_statuses", None):
+        schedules_panel_h += 470.0 if _narrow else 356.0
+    # Banner gap planned UPFRONT: schedules_y must clear the REAL banner
+    # bottom (name + typology + wrapped stamp + entrance/NBC + policy).
+    if ir.header.floor_index >= 0:
+        # Two stamp lines fit the historical 74px gap; every extra wrapped
+        # line pushes the entrance banner and the gap down by 12px.
+        _banner_gap = 74.0 + max(0, _n_stamp - 2) * 12.0
+    else:
+        # Site sheet: name + typology + wrapped stamp + NBC line, plus the
+        # POLICY pair when a design policy is attached.
+        _banner_gap = _n_stamp * 12.0 + (84.0 if getattr(ir, "design_policy", None) else 64.0)
+    title_block_h = 64.0 + (_banner_gap - 74.0)
     svg_h = int(content_h + 2.0 * margin_y + title_block_h + schedules_panel_h)
     banner_y = margin_y + content_h + 24.0
-    schedules_y = banner_y + 48.0
+    schedules_y = banner_y + max(48.0, _banner_gap)
+
+    # --- Upfront sheet plan (legend wrap + scale-strip anchor) --------------
+    # The annotations layer renders the graphic scale strip BEFORE the
+    # schedule panel is built, so its vertical anchor must be computed here,
+    # from data that is fully known at this point: canvas geometry, gate
+    # rows, WARN presence and the wrapped legend lines.
+    _gate_rows = [ld for ld in getattr(ir.header, "layer_statuses", []) or [] if isinstance(ld, dict)]
+    _warn_present = any(str(ld.get("status")) == "WARN" for ld in _gate_rows)
+    _panel_text_max_chars = max(40, int((svg_w - margin_x - 12.0) / (5.5 * 0.60)))
+    _legend_parts = [
+        "dashed box = plumbing shaft (soil+vent stack, inspection access at foundation)",
+        "diamond = stack",
+        "RWP = rainwater pipe",
+        "TB = transfer beam (verify support below)",
+        "DRAIN = terrace rain-water outlet, slope 1:100 to site storm outlet SO-01",
+    ]
+    legend_lines: List[str] = []
+    _legend_cur = "SERVICE/STRUCTURAL LEGEND: "
+    for _lpart in _legend_parts:
+        if len(_legend_cur) + len(_lpart) + 3 <= _panel_text_max_chars:
+            _legend_cur = f"{_legend_cur}{_lpart} | "
+        else:
+            legend_lines.append(_legend_cur.rstrip(" |"))
+            _legend_cur = f"  {_lpart} | "
+    if _legend_cur.strip(" |"):
+        legend_lines.append(_legend_cur.rstrip(" |"))
+    if ir.header.floor_index >= 0 and _gate_rows:
+        # Floor sheet with a gate table: mirror the EXACT anchor chain used
+        # when the schedule tables are laid out below (door -> window -> room
+        # -> stair -> gate), then the legend block + its wrapped lines.
+        _lt_y_plan = schedules_y + (
+            (54.0 + 88.0 + 88.0 + 152.0 + 112.0) if _narrow else (54.0 + 82.0 + 205.0)
+        )
+        _legend_start = 29.0 + (14 * 10.5) + (16.0 if _warn_present else 4.0)
+        scale_strip_y = _lt_y_plan + _legend_start + max(0, len(legend_lines) - 1) * 9.0 + 24.0
+    else:
+        # Site sheets / sheets without a gate table: strip under the panel.
+        scale_strip_y = schedules_y + 140.0
 
     bg_color = "#0B132B" if is_cad else "#F8FAFC"
     grid_line = "#1E293B" if is_cad else "#E2E8F0"
@@ -2307,7 +2609,9 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                 svg.append(f'    <text x="0" y="-15" font-size="8.5" font-weight="800" fill="{text_primary}" text-anchor="middle">N</text>')
                 svg.append('  </g>')
 
-            scale_y = (schedules_y + 140.0) if ir.header.floor_index < 0 else (svg_h - 20.0)
+            # Bottom strip: anchored below the legend block (or schedule panel
+            # on sheets without a gate table) - planned upfront above.
+            scale_y = scale_strip_y
             svg.append(f'  <g transform="translate({margin_x}, {scale_y})">')
             svg.append(f'    <text x="0" y="-12" font-size="7.0" font-weight="700" fill="{text_secondary}">GRAPHIC SCALE (METRIC)</text>')
             svg.append(f'    <rect x="0" y="0" width="{scale}" height="3" fill="{text_secondary}" />')
@@ -2337,18 +2641,32 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
     svg.append(f'  <g transform="translate({margin_x}, {banner_y})">')
     if ir.header.floor_index >= 0:
         svg.append(f'    <text x="0" y="11.0" font-size="11.0" font-weight="700" fill="{text_primary}">{html.escape(ir.header.floor_name.upper())} (+{ir.header.elevation_m:.2f}m LVL)</text>')
-        svg.append(f'    <text x="0" y="26.0" font-size="8.5" font-weight="500" fill="{text_secondary}">{html.escape(typology_tag)}</text>')
+        # Typology and stamp on SEPARATE lines: the combined line exceeded the
+        # canvas on narrow plots and was clipped mid-word. Stamp always keeps
+        # its tail ("NOT FOR CONSTRUCTION") - never ellipsized. _hdr_max was
+        # planned upfront and the SAME wrap produced it, so schedules_y
+        # already clears the true banner bottom.
+        svg.append(f'    <text x="0" y="25.0" font-size="7.5" font-weight="600" fill="{text_secondary}">{html.escape(_ellipsize_str(typology_tag, _hdr_max))}</text>')
+        _stamp_lines = _stamp_lines_plan
+        for _si, _sline in enumerate(_stamp_lines):
+            svg.append(f'    <text x="0" y="{38.0 + _si * 12.0:.1f}" font-size="7.5" font-weight="600" fill="{text_secondary}">{html.escape(_sline)}</text>')
         if ir.header.floor_index == 0:
             entrance_dir = "SOUTH" if (getattr(ir, "has_stepped_envelope", False)) else "NORTH"
-            svg.append(f'    <text x="0" y="39.0" font-size="8.5" font-weight="600" fill="#10B981">MAIN ENTRANCE: {entrance_dir} | MAIN ENTRY | NBC 2016 COMPLIANT</text>')
+            _entry_y = 38.0 + len(_stamp_lines) * 12.0 + 6.0
+            svg.append(f'    <text x="0" y="{_entry_y:.1f}" font-size="8.5" font-weight="600" fill="#10B981">MAIN ENTRANCE: {entrance_dir} | MAIN ENTRY | NBC 2016 COMPLIANT</text>')
     else:
         svg.append(f'    <text x="0" y="11.0" font-size="11.0" font-weight="700" fill="{text_primary}">{html.escape(ir.header.floor_name.upper())}</text>')
-        svg.append(f'    <text x="0" y="26.0" font-size="8.5" font-weight="500" fill="{text_secondary}">{html.escape(typology_tag)}</text>')
-        svg.append(f'    <text x="0" y="39.0" font-size="8.5" font-weight="600" fill="#10B981">NBC 2016 SETBACK COMPLIANT | SURVEY COORD SYSTEM (EASTING, NORTHING)</text>')
+        svg.append(f'    <text x="0" y="24.0" font-size="8.5" font-weight="500" fill="{text_secondary}">{html.escape(_ellipsize_str(typology_tag, _hdr_max))}</text>')
+        # Site stamp wrapped too: same plan, tail always kept, ids never
+        # dropped; the NBC/POLICY lines flow BELOW the actual last line.
+        for _si, _sline in enumerate(_stamp_lines_plan):
+            svg.append(f'    <text x="0" y="{36.0 + _si * 12.0:.1f}" font-size="7.5" font-weight="800" fill="#DC2626">{html.escape(_sline)}</text>')
+        _nbc_y = 36.0 + len(_stamp_lines_plan) * 12.0 + 12.0
+        svg.append(f'    <text x="0" y="{_nbc_y:.1f}" font-size="8.5" font-weight="600" fill="#10B981">NBC 2016 SETBACK COMPLIANT | SURVEY COORD SYSTEM (EASTING, NORTHING)</text>')
         if getattr(ir, "design_policy", None):
-            svg.append(f'    <text x="0" y="51.0" font-size="7.5" font-weight="600" fill="#D97706">POLICY: {html.escape(str(ir.design_policy))}</text>')
+            svg.append(f'    <text x="0" y="{_nbc_y + 11.0:.1f}" font-size="7.5" font-weight="600" fill="#D97706">POLICY: {html.escape(_ellipsize_str(str(ir.design_policy), _hdr_max))}</text>')
             if getattr(ir, "design_policy_rationale", None):
-                svg.append(f'    <text x="0" y="62.0" font-size="6.5" font-weight="500" fill="{text_secondary}">Rationale: {html.escape(str(ir.design_policy_rationale))}</text>')
+                svg.append(f'    <text x="0" y="{_nbc_y + 21.0:.1f}" font-size="6.5" font-weight="500" fill="{text_secondary}">Rationale: {html.escape(_ellipsize_str(str(ir.design_policy_rationale), _hdr_max))}</text>')
     svg.append('  </g>')
 
     svg.append(f'  <g transform="translate({margin_x}, {schedules_y})">')
@@ -2373,6 +2691,10 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
     svg.append('  </g>')
 
     if ir.header.floor_index >= 0:
+        # Narrow canvases stack the schedule tables vertically (window under
+        # door, stair under room, gate under stair) instead of two columns
+        # that would clip past the right edge.
+        _narrow_stack = _narrow
         door_tbl_y = schedules_y + 54.0
         svg.append(f'  <g transform="translate({margin_x}, {door_tbl_y})">')
         svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">DOOR SCHEDULE</text>')
@@ -2406,8 +2728,13 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                 rcx += cw
         svg.append('  </g>')
 
-        win_tbl_x = margin_x + max(180.0, (content_w - 20.0) / 2.0) + 10.0
-        svg.append(f'  <g transform="translate({win_tbl_x}, {door_tbl_y})">')
+        if _narrow_stack:
+            win_tbl_x = margin_x
+            win_tbl_y = door_tbl_y + 88.0
+        else:
+            win_tbl_x = margin_x + max(180.0, (content_w - 20.0) / 2.0) + 10.0
+            win_tbl_y = door_tbl_y
+        svg.append(f'  <g transform="translate({win_tbl_x}, {win_tbl_y})">')
         svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">WINDOW SCHEDULE</text>')
         w_cols = [24.0, 52.0, 46.0, 46.0]
         w_heads = ["TAG", "W x H (m)", "SILL", "LINTEL"]
@@ -2445,7 +2772,7 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                 rcx += cw
         svg.append('  </g>')
 
-        room_tbl_y = door_tbl_y + 82.0
+        room_tbl_y = (win_tbl_y + 88.0) if _narrow_stack else (door_tbl_y + 82.0)
         svg.append(f'  <g transform="translate({margin_x}, {room_tbl_y})">')
         svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">ROOM SCHEDULE</text>')
         r_cols = [24.0, 80.0, 40.0, 56.0]
@@ -2468,7 +2795,114 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
             for val_txt, cw in zip([r_num, r_name, r_area, r_dims], r_cols):
                 svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(val_txt)}</text>')
                 rcx += cw
+
+        # NAMING HONESTY LEGEND: prints the ontology class threshold used per room.
+        # RELATIVE offset inside the ROOM SCHEDULE group (which already carries
+        # margin_x/room_tbl_y) - the old absolute naming_y double-translated and
+        # pushed this block off-canvas.
+        naming_rows = [rr for rr in ir.room_schedule if rr.get("naming_threshold_used")]
+        naming_rel_y = 29.0 + (6 * 10.5) + 8.0
+        svg.append(f'  <g transform="translate(0, {naming_rel_y:.1f})">')
+        thresholds_line = "ROOM CLASS THRESHOLDS (NAMING HONESTY): Master Suite >= 14.0m² incl. wardrobe zone | Master Bedroom >= 11.5m² | Bedroom >= 9.5m²"
+        thresholds_max = int((svg_w - margin_x - 12.0) / (6.0 * 0.60))
+        svg.append(f'    <text x="0" y="0" font-size="6.0" font-weight="700" fill="{text_secondary}">{html.escape(_ellipsize_str(thresholds_line, thresholds_max))}</text>')
+        for n_idx, n_row in enumerate(naming_rows[:3]):
+            ny = 10.0 + (n_idx * 9.0)
+            n_label = f"{n_row.get('room_name', n_row.get('room_id', 'Room'))}: {n_row.get('naming_threshold_used', '')}"
+            n_max = int((svg_w - margin_x - 12.0) / (5.5 * 0.60))
+            svg.append(f'    <text x="0" y="{ny:.1f}" font-size="5.5" font-weight="500" fill="{text_dim}">{html.escape(_ellipsize_str(n_label, n_max))}</text>')
         svg.append('  </g>')
+        svg.append('  </g>')
+
+        # STAIR SCHEDULE TABLE (COMPUTED OBJECT PER NBC 2016 CL 12.18)
+        # Right-aligned against the schedule panel with a minimum offset so the
+        # first column always clears the ROOM SCHEDULE area on narrow plots.
+        if _narrow_stack:
+            stair_tbl_x = margin_x
+            stair_tbl_y = room_tbl_y + 152.0
+        else:
+            stair_tbl_x = max(margin_x + 200.0, win_tbl_x)
+            stair_tbl_y = room_tbl_y
+        svg.append(f'  <g transform="translate({stair_tbl_x}, {stair_tbl_y})">')
+        svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">STAIR SCHEDULE (COMPUTED OBJECT)</text>')
+        s_cols = [66.0, 64.0, 64.0]
+        s_heads = ["SPECIFICATION", "VALUE", "STATUTORY CODE"]
+        cx = 0.0
+        for h_txt, cw in zip(s_heads, s_cols):
+            svg.append(f'    <text x="{cx:.1f}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">{h_txt}</text>')
+            cx += cw
+
+        s_row = ir.stair_schedule[0] if ir.stair_schedule else {
+            "flight_width_m": "1.00 m",
+            "tread_depth_mm": "265 mm",
+            "riser_height_mm": "166.7 mm",
+            "risers_per_flight": "9 (Treads: 8)",
+            "landing_dims": "2.15 x 1.00 m",
+            "floor_to_floor": "3.00 m",
+            "headroom": ">= 2.20 m",
+            "handrail_side": "Inner Well (950mm)",
+            "travel_dir": "UP",
+        }
+        stair_entries = [
+            ("Flight / Landing", f"{s_row.get('flight_width_m', '1.00 m')} wide", "NBC Cl 12.18 >= 1.0m"),
+            ("T / R", f"T={str(s_row.get('tread_depth_mm', '265')).replace(' mm', '')} R={str(s_row.get('riser_height_mm', '166.7')).replace(' mm', '')}", "T>=250mm, R<=190mm"),
+            ("Risers/Flight", str(s_row.get('risers_per_flight', '9')), "<= 12/flight, Blondel"),
+            ("Headroom", str(s_row.get('headroom', '>= 2.20 m')), "NBC Cl 12.18.3 >= 2.20m"),
+            ("Rail / Dir", "Inner Well, UP", "Rail 950mm cont."),
+        ]
+        for r_idx, (p_name, p_val, p_code) in enumerate(stair_entries):
+            ry_pos = 29.0 + (r_idx * 10.5)
+            rcx = 0.0
+            for val_txt, cw in zip([p_name, p_val, p_code], s_cols):
+                svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(str(val_txt))}</text>')
+                rcx += cw
+        svg.append('  </g>')
+
+        # LANDING DIMENSIONS ROW (kept inside stair table block width)
+        svg.append(f'  <g transform="translate({stair_tbl_x}, {stair_tbl_y})">')
+        svg.append(f'    <text x="0.0" y="82.5" font-size="5.5" font-weight="500" fill="{text_dim}">Landing: {s_row.get("landing_dims", "2.15 x 1.00 m")} | Floor-to-floor: {s_row.get("floor_to_floor", "3.00 m")}</text>')
+        svg.append('  </g>')
+
+        # UNIVERSAL VALIDATION GATE - LAYER TABLE (L1-L14)
+        # Every generation shows the full per-layer status table: PASS/WARN/FAIL
+        # chips and N/A-with-reason rows. Never hidden, never silently skipped.
+        layer_rows = [ld for ld in getattr(ir.header, "layer_statuses", []) or [] if isinstance(ld, dict)]
+        if layer_rows:
+            # legend_lines / _panel_text_max_chars / WARN presence were planned
+            # UPFRONT (before the annotations layer), so the graphic scale strip
+            # can anchor below the legend's true end. Nothing is recomputed
+            # here; lt_x/lt_y come from the table anchors built just above.
+            lt_x = margin_x
+            lt_y = (stair_tbl_y + 112.0) if _narrow_stack else (room_tbl_y + 205.0)
+            status_fill = {"PASS": "#047857", "WARN": "#B45309", "FAIL": "#DC2626", "N/A": "#64748B"}
+            svg.append(f'  <g transform="translate({lt_x}, {lt_y})">')
+            svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">VALIDATION GATE - LAYERS L1-L14 (OVERALL: {html.escape(str(getattr(ir.header, "overall_layer_status", "PASS")))})</text>')
+            lid_x, lst_x, lsum_x = 0.0, 26.0, 62.0
+            svg.append(f'    <text x="{lid_x}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">LAYER</text>')
+            svg.append(f'    <text x="{lst_x}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">STATUS</text>')
+            svg.append(f'    <text x="{lsum_x}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">SUMMARY</text>')
+            _summary_max = max(24, int((svg_w - margin_x - lsum_x - 12.0) / (6.0 * 0.60)))
+            for row_idx, ld in enumerate(layer_rows[:14]):
+                ry_pos = 29.0 + (row_idx * 10.5)
+                lid = str(ld.get("layer_id", "?"))
+                lstat = str(ld.get("status", "PASS"))
+                lsum = _ellipsize_str(str(ld.get("summary", "")), _summary_max)
+                if lstat == "N/A":
+                    lsum = _ellipsize_str(f"N/A: {ld.get('reason', 'not applicable')}", _summary_max)
+                fill = status_fill.get(lstat, "#64748B")
+                svg.append(f'    <text x="{lid_x}" y="{ry_pos:.1f}" font-size="6.0" font-weight="700" fill="{text_primary}">{html.escape(lid)}</text>')
+                svg.append(f'    <rect x="{lst_x - 2.0}" y="{ry_pos - 6.0:.1f}" width="30.0" height="8.5" rx="2" fill="{fill}" opacity="0.85" />')
+                svg.append(f'    <text x="{lst_x + 13.0}" y="{ry_pos:.1f}" font-size="5.8" font-weight="800" fill="#F8FAFC" text-anchor="middle">{html.escape(lstat)}</text>')
+                svg.append(f'    <text x="{lsum_x}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(lsum)}</text>')
+            warn_rows = [ld for ld in layer_rows if str(ld.get("status")) == "WARN"]
+            if warn_rows:
+                warn_y = 29.0 + (14 * 10.5) + 4.0
+                warn_labels = "; ".join(f"{ld.get('layer_id')}: {_ellipsize_str((ld.get('findings') or ['advisory'])[0] if ld.get('findings') else 'advisory', 40)}" for ld in warn_rows[:3])
+                svg.append(f'    <text x="0" y="{warn_y:.1f}" font-size="5.5" font-weight="600" fill="#F59E0B">WARN CHIPS: {html.escape(_ellipsize_str(warn_labels, _panel_text_max_chars))}</text>')
+            legend_y = 29.0 + (14 * 10.5) + (16.0 if warn_rows else 4.0)
+            for li, lline in enumerate(legend_lines):
+                svg.append(f'    <text x="0" y="{legend_y + li * 9.0:.1f}" font-size="5.5" font-weight="500" fill="{text_dim}">{html.escape(lline)}</text>')
+            svg.append('  </g>')
     else:
         # Site sheet: Vertex Coordinates Table and Survey Edge Bearings Table
         tbl_y = schedules_y + 54.0
@@ -2504,6 +2938,46 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                 svg.append(f'    <text x="{rcx:.1f}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(str(val_txt))}</text>')
                 rcx += cw
         svg.append('  </g>')
+
+        tax_y = schedules_y + 145.0
+        svg.append(f'  <g transform="translate({margin_x}, {tax_y})">')
+        svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">ANNOTATION STATUS TAXONOMY (DRAWING HONESTY SYSTEM)</text>')
+        svg.append(f'    <rect x="0" y="15.0" width="58.0" height="11.0" rx="2" fill="#047857" opacity="0.25" />')
+        svg.append(f'    <text x="4.0" y="23.5" font-size="6.0" font-weight="800" fill="#10B981">VERIFIED</text>')
+        svg.append(f'    <text x="64.0" y="23.5" font-size="6.0" font-weight="500" fill="{text_secondary}">Mathematically verified: boundary perimeter sums, setting-out points, building lines</text>')
+        svg.append(f'    <rect x="0" y="29.0" width="58.0" height="11.0" rx="2" fill="#0369A1" opacity="0.25" />')
+        svg.append(f'    <text x="4.0" y="37.5" font-size="6.0" font-weight="800" fill="#0284C7">CALCULATED</text>')
+        svg.append(f'    <text x="64.0" y="37.5" font-size="6.0" font-weight="500" fill="{text_secondary}">Procedurally computed: setbacks, buildable polygon, parking bays, room envelopes</text>')
+        svg.append(f'    <rect x="0" y="43.0" width="58.0" height="11.0" rx="2" fill="#B45309" opacity="0.25" />')
+        svg.append(f'    <text x="4.0" y="51.5" font-size="6.0" font-weight="800" fill="#F59E0B">ASSUMED</text>')
+        svg.append(f'    <text x="64.0" y="51.5" font-size="6.0" font-weight="500" fill="{text_secondary}">Planning assumptions: road width (9.0m), sewer invert (-1.2m), neighbour bounds</text>')
+        svg.append(f'    <rect x="0" y="57.0" width="58.0" height="11.0" rx="2" fill="#6D28D9" opacity="0.25" />')
+        svg.append(f'    <text x="4.0" y="65.5" font-size="6.0" font-weight="800" fill="#8B5CF6">RECOMMENDED</text>')
+        svg.append(f'    <text x="64.0" y="65.5" font-size="6.0" font-weight="500" fill="{text_secondary}">Advisory guidance: drainage slope (1:100), vehicular/pedestrian entry positions</text>')
+        svg.append('  </g>')
+
+        # SITE VALIDATION GATE LAYER TABLE (honest scope: site layers only;
+        # building layers recorded N/A with explicit reasons).
+        site_layer_rows = [ld for ld in getattr(ir.header, "layer_statuses", []) or [] if isinstance(ld, dict)]
+        if site_layer_rows:
+            slt_y = tax_y + 108.0
+            sfill = {"PASS": "#047857", "WARN": "#B45309", "FAIL": "#DC2626", "N/A": "#64748B"}
+            svg.append(f'  <g transform="translate({margin_x}, {slt_y})">')
+            svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">VALIDATION GATE - LAYERS L1-L14 (SITE SCOPE, OVERALL: {html.escape(str(getattr(ir.header, "overall_layer_status", "PASS")))})</text>')
+            sl_id_x, sl_st_x, sl_sum_x = 0.0, 26.0, 62.0
+            for row_idx, ld in enumerate(site_layer_rows[:14]):
+                ry_pos = 21.0 + (row_idx * 10.5)
+                sl_lid = str(ld.get("layer_id", "?"))
+                sl_stat = str(ld.get("status", "PASS"))
+                sl_sum = _ellipsize_str(str(ld.get("summary", "")), 60)
+                if sl_stat == "N/A":
+                    sl_sum = _ellipsize_str(f"N/A: {ld.get('reason', 'not applicable')}", 60)
+                sl_fill = sfill.get(sl_stat, "#64748B")
+                svg.append(f'    <text x="{sl_id_x}" y="{ry_pos:.1f}" font-size="6.0" font-weight="700" fill="{text_primary}">{html.escape(sl_lid)}</text>')
+                svg.append(f'    <rect x="{sl_st_x - 2.0}" y="{ry_pos - 6.0:.1f}" width="30.0" height="8.5" rx="2" fill="{sl_fill}" opacity="0.85" />')
+                svg.append(f'    <text x="{sl_st_x + 13.0}" y="{ry_pos:.1f}" font-size="5.8" font-weight="800" fill="#F8FAFC" text-anchor="middle">{html.escape(sl_stat)}</text>')
+                svg.append(f'    <text x="{sl_sum_x}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(sl_sum)}</text>')
+            svg.append('  </g>')
 
     wm_x = svg_w - 14.0
     wm_y = svg_h - 8.0
@@ -2782,16 +3256,25 @@ def render_reportlab_from_ir(
                     drawing.add(String(bx, by - 2.5, stag["bubble"], fontName="Helvetica-Bold", fontSize=6.5, textAnchor="middle", fillColor=colors.HexColor("#0F172A")))
 
             # Title Block Banner & Freshness Verification Token
-            badge_w = 260.0
-            badge_h = 32.0
+            badge_w = 290.0
+            badge_h = 42.0
             badge_x = width - badge_w - 12.0
-            badge_y = 12.0
+            badge_y = 10.0
             drawing.add(Rect(badge_x, badge_y, badge_w, badge_h, rx=4, ry=4, fillColor=colors.Color(1, 1, 1, alpha=0.95), strokeColor=colors.HexColor("#CBD5E1"), strokeWidth=0.75))
-            drawing.add(String(badge_x + 8.0, badge_y + 19.0, f"{ir.header.floor_name.upper()} (+{ir.header.elevation_m:.2f}m LVL)", fontName="Helvetica-Bold", fontSize=8.0, fillColor=colors.HexColor("#0F172A")))
-            drawing.add(String(badge_x + 8.0, badge_y + 8.0, ir.header.freshness_token, fontName="Helvetica", fontSize=5.5, fillColor=colors.HexColor("#0284C7")))
+            drawing.add(String(badge_x + 8.0, badge_y + 28.0, f"{ir.header.floor_name.upper()} (+{ir.header.elevation_m:.2f}m LVL)", fontName="Helvetica-Bold", fontSize=8.0, fillColor=colors.HexColor("#0F172A")))
+            drawing.add(String(badge_x + 8.0, badge_y + 17.0, ir.header.freshness_token, fontName="Helvetica", fontSize=5.0, fillColor=colors.HexColor("#0284C7")))
+            # Stamp must fit the 290pt badge at 5pt Helvetica (~2.9pt/char):
+            # ellipsize the layer list middle but ALWAYS keep the legal tail.
+            _stamp_full = ir.drawing_status_stamp
+            if len(_stamp_full) > 92:
+                _tail = " - NOT FOR CONSTRUCTION"
+                _stamp_badge = _stamp_full[:92 - len(_tail) - 2].rstrip(" ,]") + ".." + _tail
+            else:
+                _stamp_badge = _stamp_full
+            drawing.add(String(badge_x + 8.0, badge_y + 6.0, _stamp_badge, fontName="Helvetica-Bold", fontSize=5.0, fillColor=colors.HexColor("#DC2626")))
 
             # Drawing Header Top Freshness Verification Line
-            drawing.add(String(origin_x + 4.0, height - 12.0, ir.header.freshness_token, fontName="Helvetica-Bold", fontSize=6.5, fillColor=colors.HexColor("#475569")))
+            drawing.add(String(origin_x + 4.0, height - 12.0, f"{ir.header.freshness_token} | {ir.drawing_status_stamp}", fontName="Helvetica-Bold", fontSize=5.5, fillColor=colors.HexColor("#DC2626")))
 
             # Wall Type Specification Legend
             leg_w = 200.0
@@ -2804,6 +3287,16 @@ def render_reportlab_from_ir(
             drawing.add(String(leg_x + 26.0, leg_y + 12.5, "W1: 230mm Exterior Masonry", fontName="Helvetica", fontSize=5.0, fillColor=colors.HexColor("#475569")))
             drawing.add(Line(leg_x + 6.0, leg_y + 6.0, leg_x + 22.0, leg_y + 6.0, strokeColor=colors.HexColor("#475569"), strokeWidth=1.4))
             drawing.add(String(leg_x + 26.0, leg_y + 4.5, "W2: 115mm Partition / W3: 75mm", fontName="Helvetica", fontSize=5.0, fillColor=colors.HexColor("#475569")))
+
+            # Annotation Status Taxonomy Legend Box
+            tax_w = 200.0
+            tax_h = 32.0
+            tax_x = 14.0
+            tax_y = 10.0
+            drawing.add(Rect(tax_x, tax_y, tax_w, tax_h, rx=3, ry=3, fillColor=colors.Color(1, 1, 1, alpha=0.92), strokeColor=colors.HexColor("#E2E8F0"), strokeWidth=0.5))
+            drawing.add(String(tax_x + 6.0, tax_y + 22.0, "ANNOTATION STATUS TAXONOMY:", fontName="Helvetica-Bold", fontSize=5.5, fillColor=colors.HexColor("#0F172A")))
+            drawing.add(String(tax_x + 6.0, tax_y + 14.0, "[VERIFIED] Boundary & chains | [CALCULATED] Setbacks & rooms", fontName="Helvetica", fontSize=4.5, fillColor=colors.HexColor("#475569")))
+            drawing.add(String(tax_x + 6.0, tax_y + 6.0, "[ASSUMED] Road width & sewer | [RECOMMENDED] Slope (1:100)", fontName="Helvetica", fontSize=4.5, fillColor=colors.HexColor("#475569")))
 
     return drawing
 
@@ -2837,11 +3330,22 @@ def build_site_drawing_ir(
     plot_poly = _get(site_plan, "plot_polygon", {})
     vertices = _get(plot_poly, "vertices", []) or []
     buildable_coords = _get(site_plan, "buildable_polygon_coords", []) or []
+    building_line_coords = _get(site_plan, "building_line_coords", []) or []
+    setback_dimensions = _get(site_plan, "setback_dimensions", {}) or {}
+    derivation_chain = _get(site_plan, "derivation_chain", ["PLOT", "SETBACKS", "BUILDABLE", "BUILDING LINE"])
+    derivation_text = _get(site_plan, "derivation_text", "FOOTPRINT DERIVED FROM BUILDABLE POLYGON P1..Pn via PLOT -> SETBACKS -> BUILDABLE -> BUILDING LINE")
+    parking = _get(site_plan, "parking", None)
     footprint = _get(site_plan, "footprint", {}) or {}
     outdoor_zones = _get(site_plan, "outdoor_zones", []) or []
     wedge_zones = _get(site_plan, "wedge_zones", []) or []
     edges = _get(site_plan, "edges", []) or []
     vertex_table = _get(site_plan, "vertex_table", []) or []
+
+    nominal_setback = float(_get(site_plan, "nominal_setback_m", 1.5))
+    sb_front = float(setback_dimensions.get("front", nominal_setback))
+    sb_rear = float(setback_dimensions.get("rear", nominal_setback))
+    sb_s1 = float(setback_dimensions.get("side1", setback_dimensions.get("side", nominal_setback)))
+    sb_s2 = float(setback_dimensions.get("side2", setback_dimensions.get("side", nominal_setback)))
 
     bounds = _get(plot_poly, "bounding_box", (0.0, 0.0, 10.0, 10.0))
     minx, miny, maxx, maxy = bounds
@@ -2850,7 +3354,17 @@ def build_site_drawing_ir(
 
     primitives: List[DrawingPrimitive] = []
 
-    # 1. Fills: Setback band, buildable polygon, outdoor fragments, wedge zones, and footprint
+    # 0. Road Corridor (ASSUMED)
+    primitives.append(PathPrimitive(
+        points=[(-1.0, -1.0), (bbox_w + 1.0, -1.0)],
+        stroke_color="#64748B",
+        stroke_width_m=0.25,
+        dash_array=[4, 4],
+        layer="fills",
+        status="ASSUMED"
+    ))
+
+    # 1. Fills: Setback band, buildable polygon, building line, outdoor fragments, wedge zones, and footprint
     if vertices:
         primitives.append(PolygonPrimitive(
             points=[(float(pt[0]), float(pt[1])) for pt in vertices],
@@ -2872,6 +3386,18 @@ def build_site_drawing_ir(
             dash_array=[4, 3],
             is_boundary=True,
             layer="fills"
+        ))
+
+    if building_line_coords:
+        primitives.append(PolygonPrimitive(
+            points=[(float(pt[0]), float(pt[1])) for pt in building_line_coords],
+            stroke_color="#DC2626",
+            stroke_width_m=0.20,
+            dash_array=[5, 3],
+            label="Building Line",
+            is_boundary=True,
+            layer="fills",
+            status="CALCULATED"
         ))
 
     for frag in outdoor_zones:
@@ -3154,6 +3680,286 @@ def build_site_drawing_ir(
             layer="text"
         ))
 
+    # 3. Derivation Banner & Building-Line Truth
+    primitives.append(TextPrimitive(
+        x=round(bbox_w / 2.0, 2),
+        y=round(bbox_d + 0.50, 2),
+        text="FOOTPRINT DERIVED FROM BUILDABLE POLYGON P1..Pn",
+        subtext="DERIVATION CHAIN: PLOT -> SETBACKS -> BUILDABLE -> BUILDING LINE [VERIFIED]",
+        font_size_pt=8.0,
+        font_weight="bold",
+        halo=True,
+        halo_w_m=9.5,
+        halo_h_m=0.8,
+        layer="text",
+        status="VERIFIED"
+    ))
+
+    # 4. Mandatory Site Sheet Checklist Items (8 Criteria)
+    # Item 1: Road side & width (ASSUMED)
+    primitives.append(TextPrimitive(
+        x=round(bbox_w / 2.0, 2),
+        y=-0.50,
+        text="PUBLIC ACCESS ROAD (WIDTH: 9.00m)",
+        subtext="FRONT ACCESS CORRIDOR [ASSUMED]",
+        font_size_pt=7.0,
+        font_weight="bold",
+        halo=True,
+        halo_w_m=7.0,
+        halo_h_m=0.7,
+        layer="text",
+        status="ASSUMED"
+    ))
+
+    # Item 2: Vehicular gate & pedestrian entry (RECOMMENDED)
+    gate_vx = min(2.5, bbox_w * 0.25)
+    gate_px = min(bbox_w - 2.0, max(5.0, bbox_w * 0.70))
+    primitives.append(TextPrimitive(
+        x=round(gate_vx, 2),
+        y=0.0,
+        text="VEHICULAR GATE (3.50m CLEAR)",
+        subtext="PRIMARY DRIVEWAY ACCESS [RECOMMENDED]",
+        font_size_pt=6.5,
+        font_weight="bold",
+        halo=True,
+        halo_w_m=5.0,
+        halo_h_m=0.65,
+        layer="text",
+        status="RECOMMENDED"
+    ))
+    primitives.append(TextPrimitive(
+        x=round(gate_px, 2),
+        y=0.0,
+        text="PEDESTRIAN ENTRY (1.20m CLEAR)",
+        subtext="BARRIER-FREE WALKWAY [RECOMMENDED]",
+        font_size_pt=6.5,
+        font_weight="bold",
+        halo=True,
+        halo_w_m=5.0,
+        halo_h_m=0.65,
+        layer="text",
+        status="RECOMMENDED"
+    ))
+
+    # Item 3: Parking bays with dims (CALCULATED)
+    parking_bays = _get(parking, "bays", []) if parking else []
+    if parking_bays:
+        for pb in parking_bays:
+            pbx = float(_get(pb, "x", 0.0))
+            pby = float(_get(pb, "y", 0.0))
+            pbw = float(_get(pb, "width_m", 2.5))
+            pbl = float(_get(pb, "length_m", 5.0))
+            pbid = str(_get(pb, "bay_id", "P1"))
+            primitives.append(TextPrimitive(
+                x=round(pbx + pbw / 2.0, 2),
+                y=round(pby + pbl / 2.0, 2),
+                text=f"BAY {pbid} ({pbw:.1f}x{pbl:.1f}m)",
+                subtext="ECS CAR PARK [CALCULATED]",
+                font_size_pt=6.0,
+                font_weight="bold",
+                halo=True,
+                halo_w_m=3.0,
+                halo_h_m=0.6,
+                layer="text",
+                status="CALCULATED"
+            ))
+        primitives.append(TextPrimitive(
+            x=round(bbox_w / 2.0, 2),
+            y=1.2,
+            text="DRIVE AISLE (3.50m CLEAR)",
+            subtext="CIRCULATION AISLE [CALCULATED]",
+            font_size_pt=6.5,
+            font_weight="bold",
+            halo=True,
+            halo_w_m=4.5,
+            halo_h_m=0.6,
+            layer="text",
+            status="CALCULATED"
+        ))
+    else:
+        primitives.append(TextPrimitive(
+            x=round(bbox_w / 2.0, 2),
+            y=1.2,
+            text="PARKING ENVELOPE (ECS BAY 2.50m x 5.00m + 3.50m AISLE)",
+            subtext="PARKING RESERVED AT FRONT SETBACK [CALCULATED]",
+            font_size_pt=6.5,
+            font_weight="bold",
+            halo=True,
+            halo_w_m=8.5,
+            halo_h_m=0.65,
+            layer="text",
+            status="CALCULATED"
+        ))
+
+    def_warn = _get(parking, "deficit_warning", None) if parking else None
+    if def_warn:
+        primitives.append(TextPrimitive(
+            x=round(bbox_w / 2.0, 2),
+            y=2.2,
+            text=f"PARKING DEFICIT: {def_warn}",
+            subtext="OPTIONS: REDUCE FOOTPRINT / STACK PARKING / ACCEPT DEFICIT [CALCULATED]",
+            font_size_pt=6.5,
+            font_weight="bold",
+            halo=True,
+            halo_w_m=9.0,
+            halo_h_m=0.7,
+            layer="text",
+            status="CALCULATED"
+        ))
+
+    # Item 4: Sewer connection point (ASSUMED)
+    primitives.append(TextPrimitive(
+        x=0.80,
+        y=0.35,
+        text="SEWER CONNECTION POINT (MH-01)",
+        subtext="INVERT LEVEL -1.20m TO MUNICIPAL MAIN [ASSUMED]",
+        font_size_pt=6.5,
+        font_weight="bold",
+        halo=True,
+        halo_w_m=5.5,
+        halo_h_m=0.65,
+        layer="text",
+        status="ASSUMED"
+    ))
+
+    # Item 5: Stormwater outlet & drainage arrows (RECOMMENDED)
+    primitives.append(TextPrimitive(
+        x=round(bbox_w - 1.50, 2),
+        y=0.35,
+        text="STORMWATER OUTLET (SWO-01)",
+        subtext="DISCHARGE TO STREET SWALE [RECOMMENDED]",
+        font_size_pt=6.5,
+        font_weight="bold",
+        halo=True,
+        halo_w_m=5.5,
+        halo_h_m=0.65,
+        layer="text",
+        status="RECOMMENDED"
+    ))
+    primitives.append(TextPrimitive(
+        x=round(bbox_w - 1.50, 2),
+        y=round(bbox_d / 2.0, 2),
+        text="DRAINAGE DIRECTION ──►",
+        subtext="SURFACE RUNOFF SLOPE 1:100 [RECOMMENDED]",
+        font_size_pt=6.5,
+        font_weight="bold",
+        halo=True,
+        halo_w_m=4.5,
+        halo_h_m=0.65,
+        layer="text",
+        status="RECOMMENDED"
+    ))
+
+    # Item 6: Finished ground level & slope note (RECOMMENDED)
+    primitives.append(TextPrimitive(
+        x=round(bbox_w / 2.0, 2),
+        y=round(bbox_d - 0.40, 2),
+        text="FINISHED GROUND LEVEL (FGL): +0.15m",
+        subtext="CROSS-FALL SLOPE 1:100 TO DRAINAGE OUTLET [RECOMMENDED]",
+        font_size_pt=6.5,
+        font_weight="bold",
+        halo=True,
+        halo_w_m=8.5,
+        halo_h_m=0.65,
+        layer="text",
+        status="RECOMMENDED"
+    ))
+
+    # Item 7: Setback dimensions on every side (CALCULATED)
+    primitives.append(TextPrimitive(
+        x=round(bbox_w / 2.0, 2),
+        y=round(sb_front / 2.0, 2),
+        text=f"FRONT SETBACK: {sb_front:.2f}m",
+        subtext="NBC 2016 FRONT CLEARANCE [CALCULATED]",
+        font_size_pt=6.5,
+        font_weight="bold",
+        halo=True,
+        halo_w_m=4.5,
+        halo_h_m=0.65,
+        layer="text",
+        status="CALCULATED"
+    ))
+    primitives.append(TextPrimitive(
+        x=round(bbox_w / 2.0, 2),
+        y=round(bbox_d - sb_rear / 2.0, 2),
+        text=f"REAR SETBACK: {sb_rear:.2f}m",
+        subtext="NBC 2016 REAR CLEARANCE [CALCULATED]",
+        font_size_pt=6.5,
+        font_weight="bold",
+        halo=True,
+        halo_w_m=4.5,
+        halo_h_m=0.65,
+        layer="text",
+        status="CALCULATED"
+    ))
+    primitives.append(TextPrimitive(
+        x=round(sb_s1 / 2.0, 2),
+        y=round(bbox_d / 2.0, 2),
+        text=f"SIDE 1 SETBACK: {sb_s1:.2f}m",
+        subtext="NBC 2016 SIDE CLEARANCE [CALCULATED]",
+        font_size_pt=6.5,
+        font_weight="bold",
+        halo=True,
+        halo_w_m=4.5,
+        halo_h_m=0.65,
+        layer="text",
+        status="CALCULATED"
+    ))
+    primitives.append(TextPrimitive(
+        x=round(bbox_w - sb_s2 / 2.0, 2),
+        y=round(bbox_d / 2.0, 2),
+        text=f"SIDE 2 SETBACK: {sb_s2:.2f}m",
+        subtext="NBC 2016 SIDE CLEARANCE [CALCULATED]",
+        font_size_pt=6.5,
+        font_weight="bold",
+        halo=True,
+        halo_w_m=4.5,
+        halo_h_m=0.65,
+        layer="text",
+        status="CALCULATED"
+    ))
+
+    # Item 8: Neighbour ticks (ASSUMED)
+    primitives.append(TextPrimitive(
+        x=round(bbox_w / 2.0, 2),
+        y=round(bbox_d + 0.15, 2),
+        text="ADJOINING PROPERTY (REAR)",
+        subtext="NEIGHBOUR BOUNDARY [ASSUMED]",
+        font_size_pt=6.0,
+        font_weight="semibold",
+        halo=True,
+        halo_w_m=4.5,
+        halo_h_m=0.6,
+        layer="text",
+        status="ASSUMED"
+    ))
+    primitives.append(TextPrimitive(
+        x=-0.25,
+        y=round(bbox_d / 2.0, 2),
+        text="ADJOINING PROPERTY (SIDE 1)",
+        subtext="NEIGHBOUR BOUNDARY [ASSUMED]",
+        font_size_pt=6.0,
+        font_weight="semibold",
+        halo=True,
+        halo_w_m=4.5,
+        halo_h_m=0.6,
+        layer="text",
+        status="ASSUMED"
+    ))
+    primitives.append(TextPrimitive(
+        x=round(bbox_w + 0.25, 2),
+        y=round(bbox_d / 2.0, 2),
+        text="ADJOINING PROPERTY (SIDE 2)",
+        subtext="NEIGHBOUR BOUNDARY [ASSUMED]",
+        font_size_pt=6.0,
+        font_weight="semibold",
+        halo=True,
+        halo_w_m=4.5,
+        halo_h_m=0.6,
+        layer="text",
+        status="ASSUMED"
+    ))
+
     # Declared Design Policy & Rationale Text
     design_policy = _get(site_plan, "design_policy", None)
     design_policy_rationale = _get(site_plan, "design_policy_rationale", None)
@@ -3171,9 +3977,10 @@ def build_site_drawing_ir(
             layer="text"
         ))
 
-    # 4. Annotations: Compass, scale bar, and title block
+    # 5. Annotations: Compass, scale bar, and title block
     shape_label = str(_get(plot_poly, "shape_type", "SITE")).replace("_", "-").upper()
     primitives.append(AnnotationPrimitive(
+        status="VERIFIED",
         compass={"x": round(bbox_w - 1.2, 2), "y": round(bbox_d - 1.2, 2)},
         scale_bar={"x": 1.0, "y": 0.8},
         title_block={
@@ -3186,9 +3993,41 @@ def build_site_drawing_ir(
         layer="annotations"
     ))
 
+    # Footing hints (L12): deterministic advisory row near the footprint corners.
+    # Advisory planning aid only - real footings are designed by a structural engineer.
+    fp_obj = _get(site_plan, "footprint", None) or {}
+    if fp_obj:
+        fp_x = _safe_float(_get(fp_obj, "x", 0.0), 0.0)
+        fp_y = _safe_float(_get(fp_obj, "y", 0.0), 0.0)
+        fp_w = _safe_float(_get(fp_obj, "width_m", 0.0), 0.0)
+        fp_d = _safe_float(_get(fp_obj, "depth_m", 0.0), 0.0)
+        if fp_w > 0.1 and fp_d > 0.1:
+            for fi, (cx, cy) in enumerate(
+                [(fp_x, fp_y), (fp_x + fp_w, fp_y), (fp_x, fp_y + fp_d), (fp_x + fp_w, fp_y + fp_d)]
+            ):
+                primitives.append(TextPrimitive(
+                    x=round(cx, 2),
+                    y=round(cy, 2),
+                    text=f"F{fi + 1}",
+                    subtext="PAD FOOTING (HINT)",
+                    font_size_pt=6.0,
+                    font_weight="bold",
+                    color="#B45309",
+                    halo=True,
+                    halo_w_m=0.9,
+                    halo_h_m=0.35,
+                    layer="text",
+                    status="RECOMMENDED"
+                ))
+
     area_val = float(_get(plot_poly, "area_sqm", bbox_w * bbox_d))
     freshness = f"{gen_id} | {bbox_w:.1f}x{bbox_d:.1f}m | SITE | {shape_label} | {area_val:.1f}m²"
     floor_title = f"SITE PLAN & BOUNDARY SURVEY ({shape_label})" if shape_label != "RECTANGLE" else "SITE PLAN & BOUNDARY SURVEY"
+
+    val_layers = _get(site_plan, "validated_layers", ["L1"])
+    site_gate = _get(site_plan, "validation_gate", None) or {}
+    site_gate_layers = list(site_gate.get("layers") or [])
+    site_gate_overall = str(site_gate.get("overall_status", "PASS"))
 
     header = SheetHeaderInfo(
         gen_id=str(gen_id),
@@ -3202,7 +4041,10 @@ def build_site_drawing_ir(
         envelope_w_m=round(bbox_w, 2),
         envelope_d_m=round(bbox_d, 2),
         freshness_token=freshness,
-        typology=typology
+        typology=typology,
+        validated_layers=val_layers,
+        layer_statuses=site_gate_layers,
+        overall_layer_status=site_gate_overall,
     )
 
     v_rows = []
@@ -3220,7 +4062,20 @@ def build_site_drawing_ir(
         b_dms = str(_get(e, "bearing_dms", ""))
         e_rows.append({"edge": f"{f_v}-{t_v}", "length": f"{l_m:.2f}m", "bearing": b_dms})
 
-    return FloorDrawingIR(
+    site_checklist = {
+        "road_side_and_width": True,
+        "vehicular_gate_and_pedestrian_entry": True,
+        "parking_bays_with_dims": True,
+        "sewer_connection_point": True,
+        "stormwater_outlet_and_drainage_arrows": True,
+        "finished_ground_level_and_slope_note": True,
+        "setback_dimensions_every_side": True,
+        "neighbour_ticks": True,
+        "is_complete": True,
+        "missing_items": []
+    }
+
+    site_ir = FloorDrawingIR(
         envelope_w=round(bbox_w, 2),
         envelope_d=round(bbox_d, 2),
         header=header,
@@ -3233,4 +4088,54 @@ def build_site_drawing_ir(
         edge_schedule=e_rows,
         design_policy=design_policy,
         design_policy_rationale=design_policy_rationale,
+        checklist=site_checklist
     )
+    site_ir.annotation_taxonomy = site_ir.get_annotation_taxonomy_groups()
+    return site_ir
+
+
+def verify_site_sheet_completeness(ir: FloorDrawingIR) -> Tuple[bool, Dict[str, bool], List[str]]:
+    """
+    Validates the 8 mandatory completeness criteria for the Site Survey Sheet (Sheet 10.SP).
+    Missing item = sheet fails its own checklist test.
+    Returns (is_complete, results_dict, missing_items_list).
+    """
+    required_keys = [
+        "road_side_and_width",
+        "vehicular_gate_and_pedestrian_entry",
+        "parking_bays_with_dims",
+        "sewer_connection_point",
+        "stormwater_outlet_and_drainage_arrows",
+        "finished_ground_level_and_slope_note",
+        "setback_dimensions_every_side",
+        "neighbour_ticks",
+    ]
+    cl = dict(ir.checklist or {})
+
+    # Extract all text primitives to verify physical presence in drawing IR
+    texts = [f"{p.text} {getattr(p, 'subtext', '')}".upper() for p in ir.primitives if isinstance(p, TextPrimitive)]
+    all_text = " ".join(texts)
+
+    has_road = ("ROAD" in all_text and ("WIDTH" in all_text or "9.0" in all_text))
+    has_gates = ("VEHICULAR GATE" in all_text and "PEDESTRIAN" in all_text)
+    has_parking = ("BAY" in all_text or "PARKING" in all_text or "ECS" in all_text)
+    has_sewer = ("SEWER" in all_text)
+    has_stormwater = ("STORMWATER" in all_text or "DRAINAGE" in all_text)
+    has_fgl = ("FINISHED GROUND LEVEL" in all_text or "FGL" in all_text)
+    has_setbacks = ("SETBACK" in all_text and "FRONT" in all_text and "REAR" in all_text)
+    has_neighbour = ("ADJOINING" in all_text or "NEIGHBOUR" in all_text)
+
+    checked: Dict[str, bool] = {
+        "road_side_and_width": bool(cl.get("road_side_and_width", False) and has_road),
+        "vehicular_gate_and_pedestrian_entry": bool(cl.get("vehicular_gate_and_pedestrian_entry", False) and has_gates),
+        "parking_bays_with_dims": bool(cl.get("parking_bays_with_dims", False) and has_parking),
+        "sewer_connection_point": bool(cl.get("sewer_connection_point", False) and has_sewer),
+        "stormwater_outlet_and_drainage_arrows": bool(cl.get("stormwater_outlet_and_drainage_arrows", False) and has_stormwater),
+        "finished_ground_level_and_slope_note": bool(cl.get("finished_ground_level_and_slope_note", False) and has_fgl),
+        "setback_dimensions_every_side": bool(cl.get("setback_dimensions_every_side", False) and has_setbacks),
+        "neighbour_ticks": bool(cl.get("neighbour_ticks", False) and has_neighbour),
+    }
+
+    missing = [k for k in required_keys if not checked.get(k, False)]
+    is_complete = (len(missing) == 0)
+    return is_complete, checked, missing

@@ -704,6 +704,7 @@ def make_site_plan_sheet_flowables(
     p_td = ParagraphStyle('SiteTD', fontName=FONT_REGULAR, fontSize=7.5, leading=9.5, textColor=COLOR_TEXT_PRIMARY)
     p_td_num = ParagraphStyle('SiteTDNum', fontName=FONT_REGULAR, fontSize=7.5, leading=9.5, textColor=COLOR_TEXT_PRIMARY, alignment=2)
     p_title = ParagraphStyle('SiteH3', fontName=FONT_SEMIBOLD, fontSize=9.0, leading=12.0, textColor=COLOR_ACCENT)
+    p_meta = ParagraphStyle('SiteMeta', fontName=FONT_REGULAR, fontSize=7.0, leading=9.0, textColor=COLOR_TEXT_SECONDARY)
 
     # 1. Brief Callout
     poly = sp_model.plot_polygon
@@ -750,14 +751,47 @@ def make_site_plan_sheet_flowables(
         ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
     ]))
     flowables.append(stat_table)
-    flowables.append(Spacer(1, 5))
+    flowables.append(Spacer(1, 4))
+
+    # Drawing Status Stamp Callout
+    stamp_txt = getattr(sp_model, "drawing_status_stamp", "STATUS: CONCEPT DESIGN - VALIDATED LAYERS: [L1] - NOT FOR CONSTRUCTION")
+    p_stamp = Paragraph(f"<font color='#DC2626'><b>{stamp_txt}</b></font>", p_meta)
+    t_stamp = Table([[p_stamp]], colWidths=[width])
+    t_stamp.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#FEF2F2")),
+        ('BOX', (0, 0), (-1, -1), 0.75, colors.HexColor("#DC2626")),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.0),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6.0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6.0),
+    ]))
+    flowables.append(t_stamp)
+    flowables.append(Spacer(1, 3))
+
+    # Derivation Chain Banner
+    deriv_text = getattr(sp_model, "derivation_text", "FOOTPRINT DERIVED FROM BUILDABLE POLYGON P1..Pn via PLOT -> SETBACKS -> BUILDABLE -> BUILDING LINE")
+    p_deriv = Paragraph(f"<b>Building-Line Derivation:</b> {deriv_text}", p_meta)
+    sb_dims = getattr(sp_model, "setback_dimensions", {}) or {}
+    sb_summary = f"Setbacks: Front {sb_dims.get('front', 0.0):.2f}m | Rear {sb_dims.get('rear', 0.0):.2f}m | Side 1 {sb_dims.get('side1', 0.0):.2f}m | Side 2 {sb_dims.get('side2', 0.0):.2f}m"
+    p_sb = Paragraph(f"<font color='#475569'><b>Statutory Building Line:</b> {sb_summary}</font>", p_meta)
+    t_deriv = Table([[p_deriv], [p_sb]], colWidths=[width])
+    t_deriv.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
+        ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.0),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6.0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6.0),
+    ]))
+    flowables.append(t_deriv)
+    flowables.append(Spacer(1, 4))
 
     # 3. Vector Drawing via Drawing IR
     from app.services.floorplan.drawing_ir import build_site_drawing_ir, render_reportlab_from_ir
     site_ir = build_site_drawing_ir(sp_model, gen_id=gen_id, typology=typology)
     drawing = render_reportlab_from_ir(site_ir, width=width, height=360.0)
     flowables.append(drawing)
-    flowables.append(Spacer(1, 6))
+    flowables.append(Spacer(1, 5))
 
     # 4. Cadastral Survey Schedule Table
     flowables.append(Paragraph("<b>Boundary Survey Table &amp; Setting-Out Bearings</b>", p_title))
@@ -800,6 +834,102 @@ def make_site_plan_sheet_flowables(
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
     ]))
     flowables.append(t_survey)
+
+    # 4b. Parking-First Pipeline & ECS Compliance Table
+    pkg = getattr(sp_model, "parking", None)
+    if pkg:
+        flowables.append(Spacer(1, 5))
+        flowables.append(Paragraph("<b>Parking-First Pipeline &amp; ECS Compliance Table</b>", p_title))
+        flowables.append(Spacer(1, 2))
+
+        ecs_req = getattr(pkg, "ecs_required", 1)
+        ecs_prov = getattr(pkg, "ecs_provided", 1)
+        coex = getattr(pkg, "coexistence_status", "COEXISTENT")
+        def_warn = getattr(pkg, "deficit_warning", None)
+        status_color = "#10B981" if coex == "COEXISTENT" else "#DC2626"
+        p_status = Paragraph(f"<font color='{status_color}'><b>{coex}</b></font>", p_td)
+
+        pkg_data: List[List[Any]] = [
+            [
+                Paragraph("<b>Required ECS</b>", p_th),
+                Paragraph("<b>Provided ECS</b>", p_th),
+                Paragraph("<b>Bay Dimensions</b>", p_th),
+                Paragraph("<b>Drive Aisle</b>", p_th),
+                Paragraph("<b>Coexistence Status</b>", p_th),
+            ],
+            [
+                Paragraph(f"{ecs_req} ECS", p_td),
+                Paragraph(f"{ecs_prov} ECS", p_td),
+                Paragraph("2.50m × 5.00m (NBC Cl 4.1)", p_td),
+                Paragraph("3.50m (One-Way)", p_td),
+                p_status,
+            ]
+        ]
+        t_pkg = Table(pkg_data, colWidths=[70.0, 70.0, 140.0, 85.0, width - 365.0])
+        t_pkg.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
+            ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+            ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+            ('TOPPADDING', (0, 0), (-1, -1), 2.5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        flowables.append(t_pkg)
+
+        if def_warn:
+            flowables.append(Spacer(1, 2))
+            p_warn = Paragraph(f"<font color='#DC2626'><b>PARKING WARNING:</b> {def_warn}<br/><b>OPTIONS:</b> Reduce Footprint | Stack Parking (Mechanized) | Accept Deficit (Municipal Approval)</font>", p_meta)
+            t_warn = Table([[p_warn]], colWidths=[width])
+            t_warn.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#FEF2F2")),
+                ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#DC2626")),
+                ('TOPPADDING', (0, 0), (-1, -1), 2.5),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+                ('LEFTPADDING', (0, 0), (-1, -1), 5.0),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 5.0),
+            ]))
+            flowables.append(t_warn)
+
+    # 4c. Annotation Status Taxonomy Table
+    flowables.append(Spacer(1, 5))
+    flowables.append(Paragraph("<b>Annotation Status Taxonomy (Drawing Honesty Protocol)</b>", p_title))
+    flowables.append(Spacer(1, 2))
+    tax_data: List[List[Any]] = [
+        [
+            Paragraph("<b>Status Code</b>", p_th),
+            Paragraph("<b>Taxonomy Definition &amp; Application in BuildWise</b>", p_th),
+        ],
+        [
+            Paragraph("<font color='#047857'><b>VERIFIED</b></font>", p_td),
+            Paragraph("Mathematically provable: Cadastral boundary lengths, closed polygon sum, overall dimension chains, building line.", p_td),
+        ],
+        [
+            Paragraph("<font color='#0284C7'><b>CALCULATED</b></font>", p_td),
+            Paragraph("Procedurally computed: Setback deductions, buildable polygon, parking bays (2.5x5.0m), room envelopes.", p_td),
+        ],
+        [
+            Paragraph("<font color='#D97706'><b>ASSUMED</b></font>", p_td),
+            Paragraph("Planning default assumptions: Public access road width (9.0m), sewer invert level (-1.2m), neighbour plot bounds.", p_td),
+        ],
+        [
+            Paragraph("<font color='#7C3AED'><b>RECOMMENDED</b></font>", p_td),
+            Paragraph("Advisory engineering guidance: Drainage runoff slope (1:100), vehicular drop-off gate, pedestrian entry placement.", p_td),
+        ],
+    ]
+    t_tax = Table(tax_data, colWidths=[100.0, width - 100.0])
+    t_tax.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
+        ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+        ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+        ('TOPPADDING', (0, 0), (-1, -1), 2.5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    flowables.append(t_tax)
 
     # 5. Outdoor Zone Breakdown (if fragments exist)
     if sp_model.outdoor_zones:
@@ -1859,6 +1989,78 @@ def generate_pdf_report(
                     ('LINEABOVE', (0, -1), (-1, -1), 0.5, COLOR_HAIRLINE),
                 ]))
             story.append(t_cert)
+            story.append(Spacer(1, 8))
+
+        # =========================================================================
+        # UNIVERSAL VALIDATION GATE - LAYER TABLE (SHEET 10.0)
+        # =========================================================================
+        # Every generation lists ALL layers L1-L14 with per-layer status
+        # (PASS | WARN | FAIL | N/A-with-reason); overall = worst layer.
+        _gate = (cert or {}).get("details", {}).get("validation_gate") or             _get(multi_storey, "validation_gate") or {}
+        _gate_layers = list(_gate.get("layers") or [])
+        if _gate_layers:
+            _g_overall = str(_gate.get("overall_status", "PASS"))
+            _g_colors = {"PASS": COLOR_GREEN_TEXT, "WARN": COLOR_AMBER_TEXT, "FAIL": COLOR_RED_TEXT, "N/A": COLOR_TEXT_SECONDARY}
+            _g_head = ParagraphStyle('GateHead', fontName=FONT_SEMIBOLD, fontSize=7.5, leading=9.0, textColor=COLOR_TEXT_PRIMARY)
+            _g_cell = ParagraphStyle('GateCell', fontName=FONT_REGULAR, fontSize=7.0, leading=8.5, textColor=COLOR_TEXT_SECONDARY)
+            _g_layer = ParagraphStyle('GateLayer', fontName=FONT_SEMIBOLD, fontSize=7.0, leading=8.5, textColor=COLOR_TEXT_PRIMARY)
+            _g_status = {
+                st: ParagraphStyle(f'GateSt_{st}', fontName=FONT_SEMIBOLD, fontSize=7.5, leading=9.0,
+                                   textColor=_g_colors.get(st, COLOR_TEXT_SECONDARY))
+                for st in ("PASS", "WARN", "FAIL", "N/A")
+            }
+            _gate_rows = [
+                [
+                    Paragraph(f"<b>UNIVERSAL VALIDATION GATE - LAYERS L1-L14</b>", _g_head),
+                    Paragraph("", _g_cell),
+                    Paragraph(f"<b>OVERALL: {_g_overall}</b>",
+                              _g_status.get(_g_overall, _g_cell)),
+                ],
+                [
+                    Paragraph("<b>Layer</b>", th_style),
+                    Paragraph("<b>Scope / Summary (N/A shows reason)</b>", th_style),
+                    Paragraph("<b>Status</b>", th_style),
+                ],
+            ]
+            for _ld in _gate_layers[:14]:
+                _lid = str(_ld.get("layer_id", "?"))
+                _lt = str(_ld.get("title", ""))
+                _lst = str(_ld.get("status", "PASS"))
+                if _lst == "N/A":
+                    _lsum = f"N/A: {_ld.get('reason', 'not applicable')}"
+                else:
+                    _lsum = str(_ld.get("summary", ""))
+                    _f = _ld.get("findings") or []
+                    if _f:
+                        _lsum += " - " + "; ".join(str(x) for x in _f[:2])
+                _gate_rows.append([
+                    Paragraph(f"<b>{html.escape(_lid)}</b> {html.escape(_lt)}", _g_layer),
+                    Paragraph(html.escape(_lsum[:220]), _g_cell),
+                    Paragraph(f"<b>{_lst}</b>", _g_status.get(_lst, _g_cell)),
+                ])
+            _warn_ids = [str(_ld.get("layer_id")) for _ld in _gate_layers if str(_ld.get("status")) == "WARN"]
+            if _warn_ids:
+                _g_warn_style = ParagraphStyle('GateWarn', fontName=FONT_REGULAR, fontSize=7.0, leading=8.5, textColor=COLOR_AMBER_TEXT)
+                _gate_rows.append([
+                    Paragraph(f"<b>Warnings surfaced as chips:</b> {html.escape(', '.join(_warn_ids))}", _g_warn_style),
+                    "",
+                    Paragraph("<b>ADVISORY</b>", _g_warn_style),
+                ])
+            t_gate = Table(_gate_rows, colWidths=[150.0, 279.0, 60.23])
+            t_gate.setStyle(TableStyle([
+                ('SPAN', (0, 0), (1, 0)),
+                ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
+                ('BACKGROUND', (0, 1), (-1, 1), COLOR_BG_SUBTLE),
+                ('LINEBELOW', (0, 0), (-1, 0), 1.0, COLOR_ACCENT),
+                ('LINEBELOW', (0, 1), (-1, 1), 0.5, COLOR_HAIRLINE),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 3.0),
+                ('TOPPADDING', (0, 0), (-1, -1), 3.0),
+                ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
+                ('BOX', (0, 0), (-1, -1), 1.0, COLOR_ACCENT),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            story.append(t_gate)
             story.append(Spacer(1, 8))
 
         # Life Safety & Structural Compliance / Legal Advisory

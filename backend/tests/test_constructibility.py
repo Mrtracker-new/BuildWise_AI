@@ -145,7 +145,7 @@ def test_stair_geometry_computations(floor_height_m: float):
     - Dogleg: 2 flights + mid-landing
     - Total plan run = treads_per_flight x T + landing_depth
     - Box size fits declared stair run and flights
-    - Headroom >= 2.0m
+    - Headroom >= 2.20m (NBC 2016 Cl 12.18.3 residential clear headroom)
     """
     stair = compute_stair_geometry(floor_height_m=floor_height_m)
 
@@ -178,8 +178,9 @@ def test_stair_geometry_computations(floor_height_m: float):
     assert stair.stair_box_depth_m >= stair.stair_run_m + stair.landing_depth_m - 0.001
     assert stair.stair_box_width_m >= (2.0 * stair.flight_width_m) + stair.stair_well_m - 0.001
 
-    # 8. Headroom requirement
-    assert stair.headroom_min_m >= 2.0
+    # 8. Headroom requirement (NBC 2016: >= 2.20m clear, never 2.0m)
+    assert stair.headroom_min_m >= 2.20
+    assert stair.headroom_note == "HEADROOM >= 2.20m CLEAR"
 
 
 # =============================================================================

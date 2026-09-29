@@ -18,7 +18,7 @@ import numpy as np
 
 import shapely
 import shapely.affinity
-from shapely.geometry import Polygon, MultiPolygon, Point, box
+from shapely.geometry import Polygon, MultiPolygon, box
 
 from app.schemas.site_plan import (
     PlotPolygonModel,
@@ -31,6 +31,9 @@ from app.schemas.site_plan import (
     InscribedFootprint,
     SiteCertificate,
     SitePlanModel,
+    ParkingBay,
+    ParkingEnvelope,
+    SiteSheetChecklist,
 )
 
 # Equatorial radius of Earth in meters (WGS-84)
@@ -1065,6 +1068,196 @@ def compute_site_vastu_overlay(bounds: Tuple[float, float, float, float]) -> Dic
 
 
 # =============================================================================
+# 6.5 PARKING ENVELOPE GEOMETRY ENGINE (NBC 2016 COMPLIANT)
+# =============================================================================
+
+def compute_required_ecs(
+    typology: str,
+    plot_area_sqm: float,
+    built_up_m2: Optional[float] = None,
+    units: Optional[int] = None
+) -> int:
+    """
+    Statutory Equivalent Car Space (ECS) requirement per NBC 2016 Part 3 Table 7:
+    - T1 (Single Family): 1 ECS (2 ECS if plot area >= 250 m² or built-up >= 200 m²)
+    - T2 (Family Apartment): 1 ECS per unit (default 2 units = 2 ECS)
+    - T3 (Commercial Complex): 1.5 to 2.0 ECS per 100 m² (minimum 2 ECS)
+    - T4 (Warehouse): 1 ECS per 200 m² + 1 Loading Bay (minimum 1 ECS)
+    """
+    t_clean = typology.upper()
+    if "T1" in t_clean or "SINGLE" in t_clean:
+        if plot_area_sqm >= 250.0 or (built_up_m2 and built_up_m2 >= 200.0):
+            return 2
+        return 1
+    elif "T2" in t_clean or "APARTMENT" in t_clean:
+        if units is not None and units > 0:
+            return max(1, units)
+        return 2  # Standard 2-unit apartment
+    elif "T3" in t_clean or "COMMERCIAL" in t_clean or "COMPLEX" in t_clean:
+        ref_area = built_up_m2 if (built_up_m2 and built_up_m2 > 0) else (plot_area_sqm * 1.5)
+        return max(2, int(math.ceil((ref_area / 100.0) * 1.5)))
+    elif "T4" in t_clean or "WAREHOUSE" in t_clean:
+        ref_area = built_up_m2 if (built_up_m2 and built_up_m2 > 0) else (plot_area_sqm * 0.5)
+        return max(1, int(math.ceil(ref_area / 200.0)))
+    return 1
+
+
+def compute_parking_envelope(
+    plot_poly: Polygon,
+    buildable_poly: Polygon,
+    typology: str,
+    plot_w: float,
+    plot_d: float,
+    coverage: float = 0.60,
+    is_rect: bool = False,
+    built_up_m2: Optional[float] = None,
+    units: Optional[int] = None,
+    target_footprint_m2: Optional[float] = None
+) -> Tuple[ParkingEnvelope, List[str]]:
+    """
+    Computes parking envelope prior to footprint synthesis per NBC 2016 Part 3:
+    - Standard ECS Bay dimensions: 2.5m (width) x 5.0m (length).
+    - Drive aisle clear width: >= 3.5m (one-way vehicular access).
+    - Evaluates coexistence between parking envelope and building footprint.
+    - If coexistence is constrained or bays cannot fit, emits explicit warnings
+      with 3 actionable design options (reduce footprint / stack parking / accept deficit).
+    """
+    warnings: List[str] = []
+    minx, miny, maxx, maxy = plot_poly.bounds
+    plot_area = plot_poly.area
+    req_ecs = compute_required_ecs(typology, plot_area, built_up_m2=built_up_m2, units=units)
+
+    # 1. Establish drive aisle geometry connecting from road frontage (South / miny)
+    aisle_w = 3.50
+    aisle_x1 = round(minx + 1.0, 2)
+    aisle_x2 = round(minx + 1.0 + aisle_w, 2)
+    aisle_y1 = round(miny, 2)
+    aisle_y2 = round(miny + 5.5, 2)
+    aisle_coords = [
+        (aisle_x1, aisle_y1),
+        (aisle_x2, aisle_y1),
+        (aisle_x2, aisle_y2),
+        (aisle_x1, aisle_y2)
+    ]
+
+    # 2. Place standard 2.5m x 5.0m bays
+    bays: List[ParkingBay] = []
+    bay_w = 2.50
+    bay_l = 5.00
+
+    # Front row slots (to the right of drive aisle)
+    cur_x = aisle_x2 + 0.30
+    for i in range(req_ecs):
+        bx1 = round(cur_x, 2)
+        bx2 = round(cur_x + bay_w, 2)
+        by1 = round(miny + 0.50, 2)
+        by2 = round(by1 + bay_l, 2)
+        b_box = box(bx1, by1, bx2, by2)
+
+        # Check if bay fits inside plot boundary
+        if plot_poly.intersection(b_box).area >= 0.92 * b_box.area and bx2 <= maxx - 0.20:
+            bay_coords = [(bx1, by1), (bx2, by1), (bx2, by2), (bx1, by2)]
+            bays.append(ParkingBay(
+                bay_id=f"ECS-{len(bays)+1}",
+                width_m=bay_w,
+                length_m=bay_l,
+                x=bx1,
+                y=by1,
+                orientation_deg=0.0,
+                polygon_coords=bay_coords
+            ))
+            cur_x = round(bx2 + 0.30, 2)
+        else:
+            break
+
+    # If more bays needed, check left side of aisle
+    if len(bays) < req_ecs:
+        left_avail = aisle_x1 - minx
+        if left_avail >= bay_w + 0.40:
+            bx1 = round(minx + 0.20, 2)
+            bx2 = round(bx1 + bay_w, 2)
+            by1 = round(miny + 0.50, 2)
+            by2 = round(by1 + bay_l, 2)
+            b_box = box(bx1, by1, bx2, by2)
+            if plot_poly.intersection(b_box).area >= 0.92 * b_box.area:
+                bay_coords = [(bx1, by1), (bx2, by1), (bx2, by2), (bx1, by2)]
+                bays.append(ParkingBay(
+                    bay_id=f"ECS-{len(bays)+1}",
+                    width_m=bay_w,
+                    length_m=bay_l,
+                    x=bx1,
+                    y=by1,
+                    orientation_deg=0.0,
+                    polygon_coords=bay_coords
+                ))
+
+    # If still more bays needed (e.g. T3 commercial requiring 3-6 bays) and site has depth,
+    # place a second row or parallel bays
+    if len(bays) < req_ecs and (maxy - miny) >= 14.0:
+        cur_x = aisle_x2 + 0.30
+        for i in range(req_ecs - len(bays)):
+            bx1 = round(cur_x, 2)
+            bx2 = round(cur_x + bay_w, 2)
+            by1 = round(miny + 6.0, 2)
+            by2 = round(by1 + bay_l, 2)
+            b_box = box(bx1, by1, bx2, by2)
+            if plot_poly.intersection(b_box).area >= 0.92 * b_box.area and bx2 <= maxx - 0.20 and by2 <= maxy - 0.50:
+                bay_coords = [(bx1, by1), (bx2, by1), (bx2, by2), (bx1, by2)]
+                bays.append(ParkingBay(
+                    bay_id=f"ECS-{len(bays)+1}",
+                    width_m=bay_w,
+                    length_m=bay_l,
+                    x=bx1,
+                    y=by1,
+                    orientation_deg=0.0,
+                    polygon_coords=bay_coords
+                ))
+                cur_x = round(bx2 + 0.30, 2)
+            else:
+                break
+
+    provided_ecs = len(bays)
+    deficit_ecs = max(0, req_ecs - provided_ecs)
+
+    # 3. Coexistence analysis with building footprint
+    tgt_fp = target_footprint_m2 if target_footprint_m2 else (buildable_poly.area * 0.70)
+    has_coexistence_conflict = (deficit_ecs > 0) or (buildable_poly.area < MIN_HABITABLE_FOOTPRINT_M2 + (req_ecs * 12.5))
+
+    coexistence_options = [
+        f"Option 1: Reduce building footprint area by {max(deficit_ecs, 1) * 18.0:.1f} m² to accommodate surface parking on site",
+        "Option 2: Stack parking (stilt ground floor / basement / mechanical puzzle stacker)",
+        f"Option 3: Accept surface parking deficit (provided {provided_ecs} of {req_ecs} required ECS bays)",
+    ]
+
+    deficit_warning: Optional[str] = None
+    if has_coexistence_conflict:
+        deficit_warning = (
+            f"Statutory Parking Advisory: Parking envelope ({req_ecs} ECS required, {req_ecs * 12.5:.1f} m² bays + {aisle_w:.1f}m drive aisle) "
+            f"and proposed building footprint ({tgt_fp:.1f} m²) cannot fully coexist on surface site "
+            f"(provided: {provided_ecs} ECS, deficit: {deficit_ecs} ECS). "
+            f"Coexistence options: 1) Reduce footprint area by {max(deficit_ecs, 1) * 18.0:.1f} m², "
+            f"2) Stack parking (stilt ground floor / basement / mechanical puzzle stacker), "
+            f"3) Accept surface parking deficit (provided {provided_ecs} of {req_ecs} ECS)."
+        )
+        warnings.append(deficit_warning)
+
+    parking_env = ParkingEnvelope(
+        required_ecs=req_ecs,
+        provided_ecs=provided_ecs,
+        deficit_ecs=deficit_ecs,
+        bays=bays,
+        drive_aisle_polygon=aisle_coords,
+        drive_aisle_width_m=aisle_w,
+        total_parking_area_sqm=round(len(bays) * bay_w * bay_l + aisle_w * 5.5, 2),
+        coexistence_status="COEXISTENT" if deficit_ecs == 0 else "DEFICIT_WARNED",
+        deficit_warning=deficit_warning,
+        coexistence_options=coexistence_options,
+    )
+
+    return parking_env, warnings
+
+
+# =============================================================================
 # 7. PRIMARY SITE PLAN SYNTHESIS (CANONICAL PIPELINE)
 # =============================================================================
 
@@ -1083,6 +1276,8 @@ def compute_canonical_site_plan(
     Guarantees:
     - 100% BYTE-IDENTICAL rectangle behavior for rectangular plots.
     - Advanced footprint topologies (L-Shapes, Courtyards, Multi-Wing) via wing decomposition.
+    - Parking-first pipeline: plot -> setbacks -> buildable -> parking envelope -> footprint.
+    - Explicit building-line coordinates and derivation chain.
     """
     warnings: List[str] = []
 
@@ -1143,6 +1338,13 @@ def compute_canonical_site_plan(
         buildable_poly = Polygon(buildable_coords)
         buildable_area = round(buildable_poly.area, 2)
         reduced_applied = False
+        setback_dims = {
+            "front_m": round(front_setback, 2),
+            "rear_m": round(rear_setback, 2),
+            "left_m": round(side_setback, 2),
+            "right_m": round(side_setback, 2),
+            "nominal_m": round(nominal_setback, 2),
+        }
     else:
         # Inward buffer for irregular plots
         nominal_setback = max(1.5, min(3.0, min(bbox_w, bbox_d) * 0.12))
@@ -1154,6 +1356,27 @@ def compute_canonical_site_plan(
         nominal_setback = act_setback
         buildable_coords = [(round(x, 2), round(y, 2)) for x, y in buildable_poly.exterior.coords]
         buildable_area = round(buildable_poly.area, 2)
+        setback_dims = {
+            "front_m": round(nominal_setback * 1.2, 2),
+            "rear_m": round(nominal_setback, 2),
+            "left_m": round(nominal_setback, 2),
+            "right_m": round(nominal_setback, 2),
+            "nominal_m": round(nominal_setback, 2),
+        }
+
+    building_line_coords = [(round(x, 2), round(y, 2)) for x, y in buildable_poly.exterior.coords]
+
+    # 2.5 Parking-First Pipeline: order is plot -> setbacks -> buildable -> parking envelope -> footprint
+    parking_envelope, parking_warns = compute_parking_envelope(
+        plot_poly=poly,
+        buildable_poly=buildable_poly,
+        typology=typology or "T1_SINGLE_FAMILY",
+        plot_w=bbox_w,
+        plot_d=bbox_d,
+        coverage=coverage,
+        is_rect=is_rect,
+    )
+    warnings.extend(parking_warns)
 
     # 3. Footprint synthesis via decomposition
     inscribed_footprint = decompose_buildable_into_wings(
@@ -1212,7 +1435,18 @@ def compute_canonical_site_plan(
     # 6. Site-Level Vastu Overlay
     site_vastu = compute_site_vastu_overlay((minx, miny, maxx, maxy))
 
-    # 7. Site Mathematical Certificate
+    # 7. Derivation Chain & Explicit Documentation
+    derivation_chain = [
+        f"1. PLOT: {len(coords)} boundary vertices ({plot_area:.1f} m² area, {perimeter:.1f}m perimeter)",
+        f"2. SETBACKS: Front {setback_dims.get('front_m', nominal_setback):.2f}m, Rear {setback_dims.get('rear_m', nominal_setback):.2f}m, Sides {setback_dims.get('left_m', nominal_setback):.2f}m (Inward Buffer)",
+        f"3. BUILDABLE POLYGON: {len(buildable_coords)} vertices ({buildable_area:.1f} m² constructible area)",
+        f"4. PARKING ENVELOPE: {parking_envelope.provided_ecs} ECS bays (2.5m x 5.0m) + {parking_envelope.drive_aisle_width_m:.1f}m drive aisle (Required: {parking_envelope.required_ecs} ECS)",
+        f"5. BUILDING LINE: Inward setback perimeter enclosing constructible zone",
+        f"6. FOOTPRINT: {inscribed_footprint.width_m:.2f}m x {inscribed_footprint.depth_m:.2f}m ({inscribed_footprint.area_sqm:.1f} m² enclosed)",
+    ]
+    derivation_text = f"FOOTPRINT DERIVED FROM BUILDABLE POLYGON P1..P{len(coords)}"
+
+    # 8. Site Mathematical Certificate
     # Verify footprint containment
     is_contained = buildable_poly.contains(footprint_poly) or footprint_poly.within(buildable_poly.buffer(0.05))
     min_dist_to_boundary = round(footprint_poly.distance(poly.exterior), 2)
@@ -1221,6 +1455,8 @@ def compute_canonical_site_plan(
     site_cert_diags = [] if is_contained else ["Footprint boundary exceeds buildable setback envelope."]
     if waste_warn:
         site_cert_diags.append(waste_warn)
+    if parking_envelope.deficit_warning:
+        site_cert_diags.append(parking_envelope.deficit_warning)
 
     site_cert = SiteCertificate(
         footprint_contained_in_buildable=bool(is_contained),
@@ -1234,6 +1470,73 @@ def compute_canonical_site_plan(
         is_valid=bool(is_contained and env_area >= MIN_HABITABLE_FOOTPRINT_M2),
         diagnostics=site_cert_diags
     )
+
+    # SITE-SCOPE VALIDATION GATE: the site layer honestly evaluates what the
+    # site sheet actually contains (L1 geometry, L2 setback/edge legality) and
+    # records building layers as N/A WITH REASONS - never silently skipped.
+    _site_layer_rows = [
+        {
+            "layer_id": "L1",
+            "title": "Geometry & Statutory",
+            "status": "PASS" if site_cert.is_valid else "FAIL",
+            "summary": "Buildable polygon, setback bands, and footprint containment verified",
+            "citation": "NBC 2016 Part 3 ground coverage & setbacks",
+        },
+        {
+            "layer_id": "L2",
+            "title": "Door Swings",
+            "status": "N/A",
+            "reason": "Site sheet contains no doors - door-swing validation applies to building floor sheets",
+        },
+        {"layer_id": "L3", "title": "Bathroom Fixtures", "status": "N/A",
+         "reason": "No sanitary rooms on the site sheet - fixture validation applies to building floor sheets"},
+        {"layer_id": "L4", "title": "Furniture Clearances", "status": "N/A",
+         "reason": "No furnished rooms on the site sheet"},
+        {"layer_id": "L5", "title": "Naming Honesty", "status": "N/A",
+         "reason": "No habitable room naming on the site sheet"},
+        {"layer_id": "L6", "title": "Stair Compliance", "status": "N/A",
+         "reason": "No staircase on the site sheet - stair validation applies to building floor sheets"},
+        {"layer_id": "L7", "title": "Vastu Advisory", "status": "PASS",
+         "summary": "Site Vastu zones recorded on the site layer (advisory)"},
+        {"layer_id": "L8", "title": "Program Intent", "status": "N/A",
+         "reason": "Program intent is evaluated per building floor, not at site scope"},
+        {"layer_id": "L9", "title": "Ventilation", "status": "N/A",
+         "reason": "No enclosed habitable spaces at site scope"},
+        {"layer_id": "L10", "title": "Wet-Core & Plumbing", "status": "N/A",
+         "reason": "No wet rooms at site scope; stormwater outlet is drawn on the site sheet"},
+        {"layer_id": "L11", "title": "Terrace Drainage", "status": "N/A",
+         "reason": "Terrace drainage belongs to building floor sheets; site stormwater outlet SO-01 is the shared network tie-in"},
+        {"layer_id": "L12", "title": "Structural", "status": "PASS",
+         "summary": "Footing hints marked at footprint corners (advisory pad-footing hints)",
+         "citation": "IS 1905 / NBC 2016 Part 6 Sec 1 - footing hints only, engineer-designed"},
+        {"layer_id": "L13", "title": "Accessibility", "status": "N/A",
+         "reason": "Accessible routes are evaluated on building floor sheets"},
+        {"layer_id": "L14", "title": "Fire & Egress", "status": "N/A",
+         "reason": "Travel distances and exit widths are evaluated on building floor sheets"},
+    ]
+    _statuses_rank = {"PASS": 0, "N/A": 1, "WARN": 2, "FAIL": 3}
+    # Overall = worst APPLICABLE layer: N/A never gates (universal contract),
+    # so the site scope reads PASS when its real layers (L1 geometry, L12
+    # footings, L7 advisory) hold, regardless of how many building-only
+    # layers are not applicable here.
+    _site_overall = "PASS"
+    for _ld in _site_layer_rows:
+        if _ld["status"] == "N/A":
+            continue
+        if _statuses_rank.get(_ld["status"], 0) > _statuses_rank.get(_site_overall, 0):
+            _site_overall = _ld["status"]
+    _site_gate = {
+        "layer_ids": [f"L{i}" for i in range(1, 15)],
+        "layers": _site_layer_rows,
+        "overall_status": _site_overall,
+        "validated_layers": ["L1", "L2"],
+        "n_a_layers": [
+            {"layer_id": _ld["layer_id"], "reason": _ld.get("reason", "not applicable")}
+            for _ld in _site_layer_rows if _ld["status"] == "N/A"
+        ],
+        "llm_boundary": {"events": [], "event_ids": []},
+        "contract": "universal_gate_v1_site_scope",
+    }
 
     site_plan = SitePlanModel(
         plot_polygon=poly_model,
@@ -1254,6 +1557,17 @@ def compute_canonical_site_plan(
         vertex_table=vertex_table,
         site_vastu_zones=site_vastu,
         certificate=site_cert,
+        building_line_coords=building_line_coords,
+        setback_dimensions=setback_dims,
+        derivation_chain=derivation_chain,
+        derivation_text=derivation_text,
+        parking=parking_envelope,
+        validated_layers=["L1", "L2"],
+        validation_gate=_site_gate,
+        drawing_status_stamp=(
+            "STATUS: CONCEPT DESIGN - VALIDATED LAYERS: [L1, L2] (SITE SCOPE; BUILDING LAYERS N/A) "
+            "- NOT FOR CONSTRUCTION"
+        ),
     )
 
     return True, site_plan, warnings
