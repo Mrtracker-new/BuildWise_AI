@@ -38,6 +38,36 @@ class DuctShaftSpec(BaseModel):
     servicing_rooms: List[str] = Field(default_factory=list)
 
 
+class BathroomFixtureSpec(BaseModel):
+    """
+    Statutory coded bathroom fixture with strict clearances per NBC 2016 Part 9 / Time-Saver Standards.
+    """
+    fixture_id: str
+    fixture_type: Literal["wc", "wash_basin", "shower"]
+    x: float
+    y: float
+    width_m: float
+    depth_m: float
+    clearance_front_m: float
+    clearance_side_m: float
+    is_satisfied: bool = True
+    clearance_notes: str = ""
+
+
+class FurnitureItemSpec(BaseModel):
+    """
+    Standard catalog furniture item with circulation envelope.
+    """
+    item_id: str
+    item_type: str  # bed_king, bed_queen, wardrobe, sofa_set, dining_table_6p, kitchen_cooktop, kitchen_sink, kitchen_fridge
+    x: float
+    y: float
+    width_m: float
+    depth_m: float
+    circulation_clearance_m: float
+    is_satisfied: bool = True
+
+
 class MultiFloorRoomRectangle(BaseModel):
     """
     Exact continuous geometric footprint of a room located on a specific floor level.
@@ -59,6 +89,9 @@ class MultiFloorRoomRectangle(BaseModel):
     aspect_ratio: float = 1.0
     applied_rules: List[str] = Field(default_factory=list, description="Ontology rule IDs shaping this room")
     relaxations: List[Dict[str, str]] = Field(default_factory=list, description="Rule relaxations with rationale tags")
+    fixtures: List[BathroomFixtureSpec] = Field(default_factory=list, description="Coded bathroom fixtures with statutory clearances")
+    furniture: List[FurnitureItemSpec] = Field(default_factory=list, description="Minimum furniture layout satisfying circulation envelopes")
+    naming_threshold_used: Optional[str] = Field(default=None, description="Ontological naming and area threshold applied")
 
 
 class MultiFloorDoorGeometry(BaseModel):
@@ -124,13 +157,18 @@ class SingleFloorPlanModel(BaseModel):
     plumbing_stack_alignment_pct: float = 100.0
     built_up_area_sqm: float = 0.0
     carpet_area_sqm: float = 0.0
-    svg_blueprint_cad: str = ""
-    svg_blueprint_paper: str = ""
+    svg_blueprint_cad: Optional[str] = Field(default="", description="CAD-theme blueprint SVG; rendered after the universal validation gate so sheets carry the layer table and stamp")
+    svg_blueprint_paper: Optional[str] = Field(default="", description="Paper-theme blueprint SVG; rendered after the universal validation gate")
     wall_graph: Optional[Dict[str, Any]] = None
     door_schedule: List[Dict[str, Any]] = Field(default_factory=list)
     window_schedule: List[Dict[str, Any]] = Field(default_factory=list)
     room_schedule: List[Dict[str, Any]] = Field(default_factory=list)
     stair_geometry: Optional[Dict[str, Any]] = None
+    stair_schedule: List[Dict[str, Any]] = Field(default_factory=list)
+    validation_gate: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Universal validation gate layer table (L1-L14) for this floor"
+    )
     mathematical_certificate: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Mathematical validity certificate for this floor plate"
@@ -178,6 +216,10 @@ class MultiStoreyBuildingModel(BaseModel):
     mathematical_certificate: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Consolidated mathematical validity certificate for building"
+    )
+    validation_gate: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Universal validation gate report: per-layer L1-L14 statuses, overall=worst layer, N/A-with-reason, LLM-boundary audit"
     )
     plot_polygon: Optional[Dict[str, Any]] = Field(
         default=None,

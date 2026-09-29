@@ -38,7 +38,9 @@ from app.schemas.multi_floor_plan import (
     StructuralGridSpec,
     ExtractedClientConstraints,
     SpatialAdjacencyConstraint,
-    OrientationPreferenceConstraint
+    OrientationPreferenceConstraint,
+    BathroomFixtureSpec,
+    FurnitureItemSpec,
 )
 
 __all__ = [
@@ -74,7 +76,9 @@ __all__ = [
     "StructuralGridSpec",
     "ExtractedClientConstraints",
     "SpatialAdjacencyConstraint",
-    "OrientationPreferenceConstraint"
+    "OrientationPreferenceConstraint",
+    "BathroomFixtureSpec",
+    "FurnitureItemSpec"
 ]
 
 

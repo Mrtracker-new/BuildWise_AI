@@ -57,6 +57,18 @@ class FloorPlanRequest(BaseModel):
         default=None,
         description="Per-floor terrace band on simple rectangular plate: floor_index -> {edge: N|S|E|W, depth_m}"
     )
+    design_intent: Optional[Literal["maximize_enclosed", "passive_ventilation"]] = Field(
+        default=None,
+        description="L8 program intent: maximize_enclosed (default) or passive_ventilation (terrace ratio advisory enforced)"
+    )
+    include_service_layer: Optional[bool] = Field(
+        default=True,
+        description="Draw service layer (shafts, soil/waste/vent stacks, inspection, RWP, terrace drainage) on sheets; validation always runs L9-L10 regardless"
+    )
+    include_structural_sheet: Optional[bool] = Field(
+        default=True,
+        description="Draw structural layer (column grid bubbles, beams, feasibility notes) on sheets; validation always runs L12 regardless"
+    )
 
     @model_validator(mode="before")
     @classmethod

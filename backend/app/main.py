@@ -580,6 +580,15 @@ async def create_generative_floorplan(
             )
 
         return response
+    except ValueError as e:
+        # Client-fixable design-constraint violations (RULE-FP-*, Hard Constraint
+        # Violation, vertical stacking) are bad requests (422), not server faults.
+        msg = str(e)
+        if "Hard Constraint Violation" in msg or "RULE-FP-" in msg:
+            raise HTTPException(status_code=422, detail=f"Floor plan constraint violation: {msg}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Floor plan generation error: {msg}")
     except Exception as e:
         import traceback
         traceback.print_exc()

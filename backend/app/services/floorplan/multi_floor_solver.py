@@ -14,7 +14,6 @@ Key Architectural Invariants Enforced:
 4. Graph Reachability: BFS graph connectivity from vertical core to 100% of rooms.
 """
 
-import time
 import math
 from typing import List, Dict, Optional, Tuple, Set, Any
 from collections import deque
@@ -31,13 +30,7 @@ from app.schemas.multi_floor_plan import (
     ExtractedClientConstraints,
 )
 from app.schemas.floorplan import FloorPlanRequest
-from app.services.floorplan.grid_model import ROOM_CATALOG, get_room_catalog_entry
-from app.services.floorplan.constraints import (
-    is_bath_or_wc,
-    is_kitchen_room,
-    is_bedroom_room,
-    is_puja_room,
-)
+from app.services.floorplan.constraints import is_bath_or_wc
 
 
 # =====================================================================
@@ -564,6 +557,7 @@ class MultiFloorSolver:
             door_schedule=wall_graph_obj.door_schedule,
             window_schedule=wall_graph_obj.window_schedule,
             room_schedule=wall_graph_obj.room_schedule,
+            stair_schedule=wall_graph_obj.stair_schedule,
             stair_geometry=wall_graph_obj.stair_geometry.to_dict() if wall_graph_obj.stair_geometry else None,
         )
 
