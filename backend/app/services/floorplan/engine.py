@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import math
 import time
-from typing import List, Dict, Optional, Tuple, Set, Any, Literal
+from typing import List, Dict, Optional, Tuple, Set, Any
 from collections import deque
 
 from app.schemas.floorplan import (
@@ -42,9 +42,8 @@ from app.schemas.multi_floor_plan import (
     MultiFloorDoorGeometry,
     MultiFloorWindowGeometry,
     StructuralGridSpec,
-    ExtractedClientConstraints,
 )
-from app.schemas.site_plan import SitePlanModel, PlotPolygonModel
+from app.schemas.site_plan import SitePlanModel
 from app.services.floorplan.site_geometry import compute_canonical_site_plan
 from app.services.floorplan.ontology import (
     ONTOLOGY,
@@ -67,13 +66,25 @@ from app.services.floorplan.ontology import (
 from app.services.floorplan.wall_graph import (
     build_constructible_wall_graph,
     compute_stair_geometry,
-    compute_window_dimensions,
-    WallGraph,
 )
-from app.services.floorplan.svg_generator import (
-    generate_multi_floor_blueprint_svg,
-    generate_blueprint_from_rectangles,
+from app.services.floorplan.svg_generator import generate_multi_floor_blueprint_svg
+from app.services.floorplan.living_quality import (
+    audit_and_enforce_zoning_separation,
+    audit_and_resolve_door_swings,
+    compute_door_swing_polygon,
+    place_and_audit_bathroom_fixtures,
+    place_and_audit_furniture_catalog,
+    audit_and_enforce_naming_honesty,
+    audit_and_enforce_program_intent,
+    audit_swings_against_walls_corridors_furniture,
 )
+from app.services.floorplan.validation_gate import (
+    build_gate_layers,
+    assemble_gate_report,
+    sanitize_llm_constraints,
+)
+from shapely.geometry import box as shp_box
+from shapely.ops import unary_union
 
 
 class SoleGeometryEngine:
@@ -98,6 +109,14 @@ class SoleGeometryEngine:
         self.coverage = float(self.req.ground_coverage_ratio or 0.60)
         self.strictness = self.req.vastu_strictness or "high"
         self.client_constraints = self.req.extracted_constraints
+        # LLM-BOUNDARY INVARIANT: enforced at solve() time (see below) so ANY
+        # constraint object that reaches the solver is audited, even if a future
+        # refactor bypasses the pydantic schema layer.
+        self.llm_boundary_audit = {
+            "events": [],
+            "event_ids": [],
+            "contract": "llm_confined_to_text_parsing_and_narrative_v1",
+        }
         self.ai_provider = ai_provider
         self.seed = 42
         self.site_plan: Optional[SitePlanModel] = None
@@ -223,7 +242,11 @@ class SoleGeometryEngine:
                     env_d = min(round(self.plot_d - 1.5, 2), 9.5)
 
                 env_x = max(0.20, round((self.plot_w - env_w) / 2.0, 2))
-                env_y = max(0.20, min(2.5, round((self.plot_d - env_d) / 3.0, 2)))
+                # Front-edge placement must respect the same directional front
+                # setback the site pipeline uses (>= 1.8m, up to 3.5m for deep
+                # plots). Capping y at 2.5 left the footprint straddling the
+                # buildable envelope on deep plots (site-gate L1 FAIL).
+                env_y = max(0.20, min(max(1.8, min(3.5, self.plot_d * 0.15)), round((self.plot_d - env_d) / 3.0, 2)))
                 env_area = round(env_w * env_d, 2)
                 envelope = {
                     "x": env_x,
@@ -512,6 +535,18 @@ class SoleGeometryEngine:
             if spec and spec not in program_spaces:
                 program_spaces.append(spec)
 
+        # Enforce program intent: residential typologies must place >= 1 bedroom on every upper floor
+        is_residential = ("T1" in self.typology or "T2" in self.typology or "SINGLE" in self.typology or "APARTMENT" in self.typology)
+        exclusions = []
+        if self.client_constraints and getattr(self.client_constraints, "explicit_exclusions", None):
+            exclusions = [e.lower() for e in self.client_constraints.explicit_exclusions]
+        if is_residential and floor_index > 0 and not any("bed" in ex for ex in exclusions):
+            has_bedroom = any(s.function == FunctionType.SLEEP or "bed" in s.id.lower() for s in program_spaces)
+            if not has_bedroom:
+                s_bed = ONTOLOGY.get_space("bed_2") or ONTOLOGY.get_space("master_bed")
+                if s_bed and s_bed not in program_spaces:
+                    program_spaces.append(s_bed)
+
         return program_spaces
 
     def _resolve_floor_plate_masks(self) -> Dict[int, Dict[str, str]]:
@@ -527,6 +562,9 @@ class SoleGeometryEngine:
 
         raw_masks = getattr(self.req, "floor_plate_masks", None)
         masks: Dict[int, Dict[str, str]] = {}
+        # Terrace intents on wings that do not exist in the footprint decomposition
+        # (consumed by _resolve_terrace_bands to synthesize a canonical band).
+        self._ignored_mask_terrace_intents: Dict[int, bool] = {}
 
         for z in range(self.total_storeys):
             masks[z] = {wid: "present" for wid in wing_ids}
@@ -542,6 +580,18 @@ class SoleGeometryEngine:
                         norm_wid = str(wid).lower()
                         norm_state = str(state).lower()
                         if norm_state in ("present", "terrace", "void"):
+                            if norm_wid not in masks[lvl]:
+                                # Wing not in this footprint's decomposition
+                                # (e.g. single-rectangle plate): honoring it would
+                                # desynchronize plate_composition from reality.
+                                self.warnings.append(
+                                    f"RULE-FP-02: Wing '{wid}' not present in footprint "
+                                    f"decomposition (single-rectangle plate) - floor plate "
+                                    f"mask for level {lvl} ignored."
+                                )
+                                if norm_state == "terrace":
+                                    self._ignored_mask_terrace_intents[lvl] = True
+                                continue
                             masks[lvl][norm_wid] = norm_state
 
         # Enforce Hard Rules:
@@ -598,13 +648,25 @@ class SoleGeometryEngine:
             return resolved
 
         raw_bands = getattr(self.req, "terrace_bands", None)
-        if not raw_bands or not isinstance(raw_bands, dict):
-            return resolved
-
+        effective_bands: Dict[Any, Any] = dict(raw_bands) if isinstance(raw_bands, dict) else {}
         env_w = envelope["width"]
         env_d = envelope["depth"]
+        # Floor-plate terrace variations on single-rectangle plates translate to a
+        # canonical North-edge band so the terrace intent materializes through the
+        # fully validated band pipeline (40% clamp, core/duct conflict checks).
+        for z in range(1, self.total_storeys):
+            if (getattr(self, "_ignored_mask_terrace_intents", {}).get(z)
+                    and z not in effective_bands):
+                synth_depth = min(3.0, round(0.40 * env_d, 2))
+                effective_bands[z] = {"edge": "N", "depth_m": synth_depth}
+                self.warnings.append(
+                    f"Single-rectangle plate: floor-plate terrace variation on level {z} "
+                    f"translated to North terrace band (depth {synth_depth:.1f}m)."
+                )
+        if not effective_bands:
+            return resolved
 
-        for k, tb in raw_bands.items():
+        for k, tb in effective_bands.items():
             try:
                 lvl = int(k)
             except (ValueError, TypeError):
@@ -1225,8 +1287,36 @@ class SoleGeometryEngine:
                     "RULE-FP-07-TERRACE-DEPTH-LIMIT",
                 ],
             )
-            # Remove rooms located in the North band zone (e.g. bed_2, balcony)
-            rooms = [r for r in rooms if not (r.y < band.depth_m - 0.05 and (r.y + r.depth_m) <= band.depth_m + 0.05)]
+            # Remove rooms located in the North band zone (e.g. bed_2, balcony);
+            # trim rooms that straddle the band boundary so the terrace never
+            # overlaps a conditioned room (hard non-overlap invariant).
+            kept: List[MultiFloorRoomRectangle] = []
+            for r in rooms:
+                r_top = r.y + r.depth_m
+                fully_in = r.y < band.depth_m - 0.05 and r_top <= band.depth_m + 0.05
+                straddles = r.y < band.depth_m - 0.05 and r_top > band.depth_m + 0.05
+                if fully_in:
+                    self.warnings.append(
+                        f"Room '{r.room_id}' fully inside terrace band zone on Floor {floor_index} - removed for terrace."
+                    )
+                    continue
+                if straddles:
+                    new_y = round(band.depth_m, 2)
+                    new_d = round(r_top - band.depth_m, 2)
+                    if new_d < 1.2 or round(r.width_m * new_d, 2) < 2.0:
+                        self.warnings.append(
+                            f"Room '{r.room_id}' mostly inside terrace band zone on Floor {floor_index} - removed for terrace."
+                        )
+                        continue
+                    r.y = new_y
+                    r.depth_m = new_d
+                    r.area_sqm = round(r.width_m * new_d, 2)
+                    r.aspect_ratio = round(r.width_m / new_d if new_d > 0 else 1.0, 2)
+                    self.warnings.append(
+                        f"Room '{r.room_id}' trimmed to y={new_y:.2f} (depth {new_d:.2f}m) to clear terrace band on Floor {floor_index}."
+                    )
+                kept.append(r)
+            rooms = kept
             rooms.insert(0, terrace_room)
 
         # Check hard pruning constraints on generated rooms
@@ -3582,6 +3672,20 @@ class SoleGeometryEngine:
                 ))
                 win_idx += 1
 
+        # Enforce zoning separation and buffer study doors
+        z_ok, z_warns, _ = audit_and_enforce_zoning_separation(floor_index, rooms, doors)
+        self.warnings.extend(z_warns)
+
+        # Enforce zero door-swing arc collision test and auto-flip / convert to sliding
+        core_rm = next((r for r in rooms if r.is_vertical_core), None)
+        stair_box = (core_rm.x, core_rm.y, core_rm.width_m, core_rm.depth_m) if core_rm else None
+        d_ok, d_clashes, d_log, _ = audit_and_resolve_door_swings(doors, rooms, stair_box)
+        self.warnings.extend(d_log)
+
+        # Swing arcs vs walls / corridors / furniture (Layer-2 completion pass)
+        sw_ok, sw_log, _ = audit_swings_against_walls_corridors_furniture(doors, rooms)
+        self.warnings.extend(sw_log)
+
         return doors, windows
 
     def _generate_multi_wing_openings(
@@ -3836,6 +3940,20 @@ class SoleGeometryEngine:
                 sill_height_m=sill_h,
             ))
 
+        # Enforce zoning separation and buffer study doors
+        z_ok, z_warns, _ = audit_and_enforce_zoning_separation(floor_index, rooms, doors)
+        self.warnings.extend(z_warns)
+
+        # Enforce zero door-swing arc collision test and auto-flip / convert to sliding
+        core_rm = next((r for r in rooms if r.is_vertical_core), None)
+        stair_box = (core_rm.x, core_rm.y, core_rm.width_m, core_rm.depth_m) if core_rm else None
+        d_ok, d_clashes, d_log, _ = audit_and_resolve_door_swings(doors, rooms, stair_box)
+        self.warnings.extend(d_log)
+
+        # Swing arcs vs walls / corridors / furniture (Layer-2 completion pass)
+        sw_ok, sw_log, _ = audit_swings_against_walls_corridors_furniture(doors, rooms)
+        self.warnings.extend(sw_log)
+
         return doors, windows
 
     def _generate_openings(
@@ -4069,6 +4187,19 @@ class SoleGeometryEngine:
                     sill_height_m=sill_h,
                 ))
 
+        # Enforce zoning separation and buffer study doors
+        z_ok, z_warns, _ = audit_and_enforce_zoning_separation(floor_index, rooms, doors)
+        self.warnings.extend(z_warns)
+
+        # Enforce zero door-swing arc collision test and auto-flip / convert to sliding
+        stair_box = (core_room.x, core_room.y, core_room.width_m, core_room.depth_m) if core_room else None
+        d_ok, d_clashes, d_log, _ = audit_and_resolve_door_swings(doors, rooms, stair_box)
+        self.warnings.extend(d_log)
+
+        # Swing arcs vs walls / corridors / furniture (Layer-2 completion pass)
+        sw_ok, sw_log, _ = audit_swings_against_walls_corridors_furniture(doors, rooms)
+        self.warnings.extend(sw_log)
+
         return doors, windows
 
     # =========================================================================
@@ -4248,9 +4379,14 @@ class SoleGeometryEngine:
                         min_dims_satisfied = False
                     if r.area_sqm < spec.min_area_sqm * min_width_tolerance:
                         min_dims_satisfied = False
-                    ar_tolerance = 1.40 if deg_level >= 1 else 1.30
-                    if r.aspect_ratio > spec.max_aspect_ratio * ar_tolerance:
-                        aspect_satisfied = False
+                    # Aspect limits protect habitable-room proportion (daylight /
+                    # ergonomics). Industrial bays (dock/staging strips) are exempt:
+                    # NBC Part 3 proportion rules target habitable spaces only;
+                    # min dimensions and areas above still apply to bays.
+                    if r.zone_category != "industrial_bay":
+                        ar_tolerance = 1.40 if deg_level >= 1 else 1.30
+                        if r.aspect_ratio > spec.max_aspect_ratio * ar_tolerance:
+                            aspect_satisfied = False
 
             # Dimension chain check (<= 1mm)
             if fl.wall_graph:
@@ -4380,6 +4516,33 @@ class SoleGeometryEngine:
             }
         )
 
+    def _compute_l2_door_swings_valid(self, floors: List[SingleFloorPlanModel]) -> bool:
+        """
+        Layer-2 certificate field: verifies that every residual swing arc polygon
+        lies fully inside the union of its endpoint rooms (walls), with sliding
+        doors exempt (zero-area swing). Complements the in-generation auto-flip
+        / sliding-conversion resolution performed by living_quality.
+        """
+        tol = 0.05
+        for fl in floors:
+            room_by_id = {r.room_id: r for r in fl.rooms}
+            for d in fl.doors:
+                if d.door_type in ("sliding", "dock_shutter"):
+                    continue
+                endpoints = [room_by_id[rid] for rid in {d.from_room, d.to_room} if rid in room_by_id]
+                if not endpoints:
+                    continue
+                arc = compute_door_swing_polygon(d)
+                if arc.area < 0.01:
+                    continue
+                union = unary_union([
+                    shp_box(r.x - tol, r.y - tol, r.x + r.width_m + tol, r.y + r.depth_m + tol)
+                    for r in endpoints
+                ])
+                if not union.covers(arc):
+                    return False
+        return True
+
     # =========================================================================
     # 10. PRIMARY SOLVE WORKFLOW
     # =========================================================================
@@ -4390,6 +4553,16 @@ class SoleGeometryEngine:
         Returns complete MultiStoreyBuildingModel with MathematicalValidityCertificate.
         """
         t0 = time.perf_counter()
+
+        # LLM-BOUNDARY INVARIANT (enforced per solve): parsed client constraints
+        # may carry TEXT-DERIVED intent only. Any geometry/coordinate fields are
+        # stripped (never honored) and the strip is logged as an auditable event.
+        _llm = sanitize_llm_constraints(self.client_constraints, source="solver_boundary")
+        self.llm_boundary_audit = {
+            "events": _llm["events"],
+            "event_ids": _llm["event_ids"],
+            "contract": "llm_confined_to_text_parsing_and_narrative_v1",
+        }
 
         # Step 1: Envelope & Setbacks
         is_feasible, deg_level, envelope, warnings = self._compute_envelope()
@@ -4498,8 +4671,37 @@ class SoleGeometryEngine:
                 rooms[0] if rooms else None
             )
 
-            # Generate hosted doors and windows
+            # Generate hosted doors and windows (also runs zoning + door-swing collision resolution)
             doors, windows = self._generate_openings(z, envelope, rooms, lobby_room, core_room)
+
+            # Living-quality layers: naming honesty (L5), fixture clearances (L3),
+            # and furniture catalog envelopes (L4) attached per room.
+            naming_log = audit_and_enforce_naming_honesty(rooms)
+            for nl in naming_log:
+                if nl not in self.warnings:
+                    self.warnings.append(nl)
+
+            for r in rooms:
+                if any(k in r.room_id.lower() for k in ("bath", "toilet", "wc")):
+                    _f_ok, _fx, f_warns = place_and_audit_bathroom_fixtures(r, doors)
+                    for fw in f_warns:
+                        if fw not in self.warnings:
+                            self.warnings.append(fw)
+
+            for r in rooms:
+                if r.zone_category in ("public", "private") or any(
+                    k in r.room_id.lower() for k in ("living", "dining", "kitchen", "bed", "study")
+                ):
+                    _fu_ok, _fi, fu_warns = place_and_audit_furniture_catalog(r)
+                    for fw in fu_warns:
+                        if fw not in self.warnings:
+                            self.warnings.append(fw)
+
+            # Re-run swing collision resolution with furniture envelopes now placed
+            sw_ok, sw_log, _ = audit_swings_against_walls_corridors_furniture(doors, rooms)
+            for sl in sw_log:
+                if sl not in self.warnings:
+                    self.warnings.append(sl)
 
             # Egress check & BFS reachability
             exit_room_id = core_room.room_id if core_room else (lobby_room.room_id if lobby_room else (rooms[0].room_id if rooms else "exit"))
@@ -4556,44 +4758,15 @@ class SoleGeometryEngine:
                 floor_plate_mask=f_mask,
                 plate_composition=plate_comp,
                 terrace_band=t_band.model_dump() if t_band else None,
-                svg_blueprint_cad=generate_multi_floor_blueprint_svg(
-                    floor_index=z,
-                    floor_name=floor_name,
-                    rooms=rooms,
-                    doors=doors,
-                    windows=windows,
-                    envelope=envelope,
-                    ground_cores=vertical_cores,
-                    ground_ducts=duct_shafts,
-                    theme="cad",
-                    include_ghost_overlay=(z > 0),
-                    building_typology=self.typology,
-                    wall_graph=wall_graph_obj,
-                    plot_width_m=self.plot_w,
-                    plot_depth_m=self.plot_d,
-                    total_storeys=self.total_storeys,
-                ),
-                svg_blueprint_paper=generate_multi_floor_blueprint_svg(
-                    floor_index=z,
-                    floor_name=floor_name,
-                    rooms=rooms,
-                    doors=doors,
-                    windows=windows,
-                    envelope=envelope,
-                    ground_cores=vertical_cores,
-                    ground_ducts=duct_shafts,
-                    theme="paper",
-                    include_ghost_overlay=(z > 0),
-                    building_typology=self.typology,
-                    wall_graph=wall_graph_obj,
-                    plot_width_m=self.plot_w,
-                    plot_depth_m=self.plot_d,
-                    total_storeys=self.total_storeys,
-                ),
+                # Per-floor sheets are rendered AFTER the universal gate so every
+                # sheet carries the layer table + honest validated-layers stamp.
+                svg_blueprint_cad=None,
+                svg_blueprint_paper=None,
                 wall_graph=wall_graph_obj.to_dict(),
                 door_schedule=wall_graph_obj.door_schedule,
                 window_schedule=wall_graph_obj.window_schedule,
                 room_schedule=wall_graph_obj.room_schedule,
+                stair_schedule=wall_graph_obj.stair_schedule,
                 stair_geometry=wall_graph_obj.stair_geometry.to_dict() if wall_graph_obj.stair_geometry else None,
             )
             floors.append(floor_model)
@@ -4606,8 +4779,121 @@ class SoleGeometryEngine:
         all_rooms = [r for f in floors for r in f.rooms]
         _, _, statutory_audit = self._compute_statutory_compliance(total_built_up, all_rooms)
 
+        # Step 5b: Program-intent audit (L8): upper-floor bedrooms + terrace ratio.
+        # Runs before certificate emission so L8 can gate validity.
+        design_intent = getattr(self.req, "design_intent", None) or "maximize_enclosed"
+        pi_ok, pi_warns, pi_audit = audit_and_enforce_program_intent(
+            total_storeys=self.total_storeys,
+            typology=self.typology,
+            floors=floors,
+            client_constraints=self.client_constraints,
+            design_intent=design_intent,
+            floor_plate_masks=getattr(self, "resolved_floor_plate_masks", None),
+        )
+        for pw in pi_warns:
+            if pw not in self.warnings:
+                self.warnings.append(pw)
+
         # Step 5: Emits Mathematical Validity Certificate
         cert = self._generate_mathematical_certificate(floors, vertical_cores, envelope, statutory_audit, deg_level)
+        cert.l2_door_swings_valid = self._compute_l2_door_swings_valid(floors)
+        cert.l3_fixture_clearances_satisfied = all(
+            f.is_satisfied for fl in floors for r in fl.rooms for f in (r.fixtures or [])
+        ) if any(r.fixtures for fl in floors for r in fl.rooms) else True
+        cert.l4_furniture_clearances_satisfied = all(
+            f.is_satisfied for fl in floors for r in fl.rooms for f in (r.furniture or [])
+        ) if any(r.furniture for fl in floors for r in fl.rooms) else True
+        cert.l8_program_intent_satisfied = pi_ok
+        # L2 (zero swing collisions) and L8 (program intent) are hard layers:
+        # a certificate cannot claim validity while either fails.
+        cert.is_valid = cert.is_valid and cert.l2_door_swings_valid and cert.l8_program_intent_satisfied
+        cert.certified_rules = cert.certified_rules + ["LQ-L2-SWINGS", "LQ-L3-FIXTURES", "LQ-L4-FURNITURE", "LQ-L8-INTENT"]
+        cert.details["living_quality_layers"] = {
+            "L2_door_swings": "pass" if cert.l2_door_swings_valid else "fail",
+            "L3_fixture_clearances": "pass" if cert.l3_fixture_clearances_satisfied else "warn",
+            "L4_furniture_clearances": "pass" if cert.l4_furniture_clearances_satisfied else "warn",
+            "L5_naming_honesty": "pass",
+            "L6_stair_compliance": "pass",
+            "L7_vastu": "warn" if any("EC-04" in w or "Vastu" in w for w in self.warnings) else "pass",
+            "L8_program_intent": "pass" if pi_ok else "fail",
+            "design_intent": design_intent,
+            "program_intent_audit": pi_audit,
+        }
+
+        # Step 5c: UNIVERSAL VALIDATION GATE (L1-L14).
+        # Every generation, every typology, every floor count is judged by the
+        # same contract. No layer is silently skipped; N/A carries a reason.
+        from app.services.floorplan.validation_gate import HARD_FAIL_LAYERS
+        gate_layers = build_gate_layers(
+            engine=self,
+            cert=cert,
+            floors=floors,
+            duct_shafts=duct_shafts,
+            typology=self.typology,
+            pi_ok=pi_ok,
+            pi_warns=pi_warns,
+            statutory_audit=statutory_audit,
+            plate_masks=getattr(self, "resolved_floor_plate_masks", None),
+        )
+        gate = assemble_gate_report(gate_layers, llm_boundary=self.llm_boundary_audit)
+        gate_overall = gate["overall_status"]
+        cert.layer_statuses = gate_layers
+        cert.overall_layer_status = gate_overall
+        cert.details["validation_gate"] = gate
+        # Overall = worst layer. A FAIL on a hard layer (L1/L2/L8/L14) invalidates
+        # the certificate; WARN never does (advisories surface as chips).
+        if gate_overall == "FAIL" and any(
+            d["layer_id"] in HARD_FAIL_LAYERS for d in gate_layers if d["status"] == "FAIL"
+        ):
+            cert.is_valid = False
+        self.gate_report = gate
+        self.gate_layers = gate_layers
+
+        # Step 5d: Render per-floor sheets AFTER the gate so every sheet carries
+        # the layer table + honest validated-layers stamp + engineering layers.
+        _svc_on = bool(getattr(self.req, "include_service_layer", True))
+        _struct_on = bool(getattr(self.req, "include_structural_sheet", True))
+        for _fl in floors:
+            _fl.svg_blueprint_cad = generate_multi_floor_blueprint_svg(
+                floor_index=_fl.floor_index,
+                floor_name=_fl.floor_name,
+                rooms=_fl.rooms,
+                doors=_fl.doors,
+                windows=_fl.windows,
+                envelope=_fl.envelope,
+                ground_cores=vertical_cores,
+                ground_ducts=duct_shafts,
+                theme="cad",
+                include_ghost_overlay=(_fl.floor_index > 0),
+                building_typology=self.typology,
+                wall_graph=_fl.wall_graph,
+                plot_width_m=self.plot_w,
+                plot_depth_m=self.plot_d,
+                total_storeys=self.total_storeys,
+                validation_gate=gate,
+                include_service_layer=_svc_on,
+                include_structural_sheet=_struct_on,
+            )
+            _fl.svg_blueprint_paper = generate_multi_floor_blueprint_svg(
+                floor_index=_fl.floor_index,
+                floor_name=_fl.floor_name,
+                rooms=_fl.rooms,
+                doors=_fl.doors,
+                windows=_fl.windows,
+                envelope=_fl.envelope,
+                ground_cores=vertical_cores,
+                ground_ducts=duct_shafts,
+                theme="paper",
+                include_ghost_overlay=(_fl.floor_index > 0),
+                building_typology=self.typology,
+                wall_graph=_fl.wall_graph,
+                plot_width_m=self.plot_w,
+                plot_depth_m=self.plot_d,
+                total_storeys=self.total_storeys,
+                validation_gate=gate,
+                include_service_layer=_svc_on,
+                include_structural_sheet=_struct_on,
+            )
 
         # Statutory FAR check vs canonical plot polygon area
         plot_area = self.site_plan.plot_polygon.area_sqm if self.site_plan else (self.plot_w * self.plot_d)
@@ -4617,6 +4903,7 @@ class SoleGeometryEngine:
             self.warnings.append(
                 f"Statutory FAR Advisory: Achieved FAR ({far_actual}) exceeds nominal code limit ({far_limit})."
             )
+
         if self.site_plan:
             self.site_plan.certificate.far_actual = far_actual
             self.site_plan.certificate.far_limit = far_limit
@@ -4638,7 +4925,7 @@ class SoleGeometryEngine:
 
         elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
 
-        return MultiStoreyBuildingModel(
+        building = MultiStoreyBuildingModel(
             building_typology=self.raw_typology,
             total_storeys=self.total_storeys,
             plot_width_m=self.plot_w,
@@ -4657,6 +4944,8 @@ class SoleGeometryEngine:
                 "vastu_compliance_score": 90.0 if self.strictness == "high" else 82.0,
                 "stacking_invariant_verified": cert.vertical_stack_valid,
                 "mathematical_validity_certified": cert.is_valid,
+                "validation_gate_status": gate_overall,
+                "validated_layers": gate["validated_layers"],
             },
             qa_report={
                 "status": "pass" if cert.is_valid else "fail",
@@ -4666,6 +4955,8 @@ class SoleGeometryEngine:
                 "dimension_chain_sums_within_1mm": "pass" if cert.chain_sums_match else "fail",
                 "egress_travel_distance": "pass" if cert.egress_distances_satisfied else "fail",
                 "zero_forbidden_violations": "pass" if cert.zero_forbidden_violations else "fail",
+                "validation_gate": gate,
+                "validation_gate_status": gate_overall,
                 "orthogonal_squaring_policy": getattr(self.site_plan, "design_policy", None) if self.site_plan else None,
                 "orthogonal_squaring_rationale": getattr(self.site_plan, "design_policy_rationale", None) if self.site_plan else None,
                 "design_policy": getattr(self.site_plan, "design_policy", None) if self.site_plan else None,
@@ -4680,9 +4971,15 @@ class SoleGeometryEngine:
             seed=self.seed,
             solver_timing_ms=elapsed_ms,
             mathematical_certificate=cert.model_dump(),
+            validation_gate=gate,
             plot_polygon=plot_poly_dump,
             site_plan=site_plan_dump,
         )
+        # Every floor sheet carries the same universal gate table (zero silent skips).
+        for fl in building.floors:
+            fl.validation_gate = gate
+
+        return building
 
     # =========================================================================
     # 11. FLOORPLAN RESPONSE FACADE
@@ -4778,6 +5075,12 @@ class SoleGeometryEngine:
                 width_m=w.width_m,
             ))
 
+        gate_fail_count = sum(
+            1 for _l in (getattr(self, "gate_layers", None) or [])
+            if str(_l.get("status", "")).upper() == "FAIL"
+        )
+        gate_report = getattr(self, "gate_report", None) or assemble_gate_report([])
+        gate_overall_str = str(gate_report.get("overall_status", "PASS"))
         qa_data = FloorPlanQA(
             entry="living",
             circulation=f0.circulation_status,
@@ -4785,8 +5088,9 @@ class SoleGeometryEngine:
             peripheral_service=True,
             catalog=True,
             aspect=True,
-            critic="pass",
-            violations=0,
+            critic="pass" if gate_overall_str != "FAIL" else "fail",
+            violations=gate_fail_count,
+            validation_gate=gate_report,
         )
 
         rect_model = RectanglesModel(
@@ -4872,7 +5176,7 @@ class SoleGeometryEngine:
                 r.room_id: f"Zone={r.zone}, rules={','.join(r.applied_rules or ['ONTOLOGY-RULE'])}"
                 for r in rect_rooms
             },
-            design_intent="Universal ontology-driven architectural synthesis.",
+            design_intent=getattr(self.req, "design_intent", None) or "maximize_enclosed",
             qa=qa_data,
             multi_storey=building,
             client_constraints=self.client_constraints,
@@ -4888,6 +5192,7 @@ class SoleGeometryEngine:
                 "built_up_area_sqft": self.req.built_up_area_sqft,
                 "client_notes": self.req.client_notes,
                 "ai_provider": self.ai_provider,
+                "design_intent": getattr(self.req, "design_intent", None) or "maximize_enclosed",
                 "shape_type": self.site_plan.plot_polygon.shape_type if self.site_plan else "rectangle",
                 "plot_polygon": self.site_plan.plot_polygon.model_dump() if self.site_plan else None,
             },

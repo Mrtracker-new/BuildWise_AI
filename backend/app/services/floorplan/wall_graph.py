@@ -175,8 +175,12 @@ class StairGeometry:
     stair_run_m: float
     stair_box_depth_m: float
     stair_box_width_m: float
-    headroom_min_m: float = 2.0
-    headroom_note: str = "HEADROOM >= 2.0m CLEAR"
+    landing_width_m: float = 0.0
+    risers_per_flight: int = 0
+    handrail_side: str = "Inner well & outer wall"
+    travel_direction: str = "UP"
+    headroom_min_m: float = 2.20
+    headroom_note: str = "HEADROOM >= 2.20m CLEAR"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -188,13 +192,17 @@ class StairGeometry:
             "tread_depth_m": self.tread_depth_m,
             "blondel_sum_mm": round((2.0 * self.riser_height_m + self.tread_depth_m) * 1000.0, 1),
             "flight_count": self.flight_count,
+            "risers_per_flight": self.risers_per_flight,
             "treads_per_flight": self.treads_per_flight,
             "flight_width_m": self.flight_width_m,
             "landing_depth_m": self.landing_depth_m,
+            "landing_width_m": self.landing_width_m or self.stair_box_width_m,
             "stair_well_m": self.stair_well_m,
             "stair_run_m": self.stair_run_m,
             "stair_box_depth_m": self.stair_box_depth_m,
             "stair_box_width_m": self.stair_box_width_m,
+            "handrail_side": self.handrail_side,
+            "travel_direction": self.travel_direction,
             "headroom_min_m": self.headroom_min_m,
             "headroom_note": self.headroom_note,
         }
@@ -203,24 +211,32 @@ class StairGeometry:
 def compute_stair_geometry(
     floor_height_m: float = 3.0,
     typology: str = "T1_SINGLE_FAMILY",
-    max_riser_m: float = 0.175
+    max_riser_m: float = 0.175,
+    floor_index: int = 0,
+    total_storeys: int = 1,
 ) -> StairGeometry:
     """
-    Computes precise dogleg staircase geometry:
-    - Risers N = ceil(H / 175mm)
+    Computes precise dogleg staircase geometry per NBC 2016 Part 3 Cl 12.18 / Table 7:
+    - Risers N = ceil(H / 175mm), R <= 190mm (residential)
     - R = H / N
-    - Tread T in [250mm, 300mm] satisfying 2R + T in [600mm, 650mm]
-    - Dogleg: 2 flights + mid-landing; run = treads_per_flight * T + landing
+    - Tread T >= 250mm satisfying Blondel's formula 2R + T in [600mm, 650mm]
+    - Flight width >= 1.0m residential (>= 1.25m multi-family / commercial)
+    - Risers per flight <= 12 per NBC Part 3
+    - Landing depth >= flight width
+    - Headroom >= 2.20m clear throughout
     - Hard assertion: N * R == floor_height_m within 1mm (0.001m).
     """
     H = floor_height_m
-    N = int(math.ceil(round(H / max_riser_m, 6)))
+    # Max statutory riser: 190mm residential
+    clamped_max_riser = min(0.190, max_riser_m)
+    N = int(math.ceil(round(H / clamped_max_riser, 6)))
     R = H / N
+    assert R <= 0.190, f"Riser {R*1000:.1f}mm exceeds NBC statutory maximum 190mm"
 
     # Verify hard invariant: N * R == H within 1mm
     assert abs(N * R - H) <= 0.001, f"Stair riser sum {N * R} != floor height {H}"
 
-    # Solve for optimal ergonomic tread T in [0.250, 0.300] satisfying 2R + T in [0.600, 0.650]
+    # Solve for optimal ergonomic tread T >= 0.250 satisfying 2R + T in [0.600, 0.650]
     two_r = 2.0 * R
     target_blondel = 0.625  # Midpoint of 600-650mm
     ideal_t = target_blondel - two_r
@@ -228,18 +244,24 @@ def compute_stair_geometry(
 
     blondel_check = round(2.0 * R + T, 3)
     if not (0.600 <= blondel_check <= 0.650):
-        # Nudge T to satisfy Blondel
         if blondel_check < 0.600:
             T = max(0.250, min(0.300, round(0.600 - two_r, 3)))
         elif blondel_check > 0.650:
             T = max(0.250, min(0.300, round(0.650 - two_r, 3)))
 
-    # Flights calculation
+    assert T >= 0.250, f"Tread {T*1000:.1f}mm is below NBC statutory minimum 250mm"
+
+    # Flights calculation (<= 12 risers per flight)
     flight_count = 2
-    risers_per_flight = N // 2
+    risers_per_flight = int(math.ceil(N / flight_count))
+    if risers_per_flight > 12:
+        # For very high floor-to-floor (e.g. > 4.5m), scale flights
+        flight_count = 3 if math.ceil(N / 3) <= 12 else 4
+        risers_per_flight = int(math.ceil(N / flight_count))
+    assert risers_per_flight <= 12, f"Risers per flight ({risers_per_flight}) exceeds NBC maximum of 12"
     treads_per_flight = max(1, risers_per_flight - 1)
 
-    # Flight width per typology statutory minimum
+    # Flight width per typology statutory minimum (NBC 2016 Part 3 Cl 12.18.1)
     typ_upper = typology.upper()
     if "T2" in typ_upper or "T3" in typ_upper or "COMMERCIAL" in typ_upper or "MULTI" in typ_upper:
         flight_width = 1.25
@@ -250,13 +272,25 @@ def compute_stair_geometry(
         landing_depth = 1.20
         stair_well = 0.15
     else:
-        flight_width = 1.00  # T1 Single Family
+        flight_width = 1.00  # T1 Single Family >= 1.0m
         landing_depth = 1.00
         stair_well = 0.15
+
+    # Landing depth must be >= flight width
+    assert landing_depth >= flight_width, f"Landing depth {landing_depth}m < flight width {flight_width}m"
 
     flight_run = round(treads_per_flight * T, 3)
     stair_box_depth = round(flight_run + landing_depth, 3)
     stair_box_width = round(2.0 * flight_width + stair_well, 3)
+    landing_width = stair_box_width
+
+    # Travel direction annotation per floor
+    if floor_index == 0:
+        travel_dir = "UP"
+    elif floor_index >= total_storeys - 1:
+        travel_dir = "DN"
+    else:
+        travel_dir = "UP / DN"
 
     return StairGeometry(
         floor_height_m=H,
@@ -264,16 +298,43 @@ def compute_stair_geometry(
         riser_height_m=round(R, 5),
         tread_depth_m=round(T, 3),
         flight_count=flight_count,
+        risers_per_flight=risers_per_flight,
         treads_per_flight=treads_per_flight,
         flight_width_m=flight_width,
         landing_depth_m=landing_depth,
+        landing_width_m=landing_width,
         stair_well_m=stair_well,
         stair_run_m=flight_run,
         stair_box_depth_m=stair_box_depth,
         stair_box_width_m=stair_box_width,
-        headroom_min_m=2.0,
-        headroom_note="HEADROOM >= 2.0m CLEAR",
+        handrail_side="Inner Well (950mm)",
+        travel_direction=travel_dir,
+        headroom_min_m=2.20,
+        headroom_note="HEADROOM >= 2.20m CLEAR",
     )
+
+
+def compute_stair_schedule_rows(stair_geom: StairGeometry) -> List[Dict[str, Any]]:
+    """
+    Formats the Stair Schedule table rows for floor sheet drawing IR and tabular display.
+    """
+    if not stair_geom:
+        return []
+    d = stair_geom.to_dict() if hasattr(stair_geom, "to_dict") else stair_geom
+    return [
+        {
+            "flight_width_m": f"{d.get('flight_width_m', 1.0):.2f} m",
+            "tread_depth_mm": f"{int(round(d.get('tread_depth_mm', 250)))} mm",
+            "riser_height_mm": f"{d.get('riser_height_mm', 166.7):.1f} mm",
+            "risers_per_flight": f"{d.get('risers_per_flight', 9)} (Treads: {d.get('treads_per_flight', 8)})",
+            "landing_dims": f"{d.get('landing_width_m', 2.15):.2f} x {d.get('landing_depth_m', 1.00):.2f} m",
+            "floor_to_floor": f"{d.get('floor_height_m', 3.0):.2f} m",
+            "headroom": f">= {d.get('headroom_min_m', 2.20):.2f} m",
+            "handrail_side": d.get("handrail_side", "Inner Well (950mm)"),
+            "travel_dir": d.get("travel_direction", "UP"),
+        }
+    ]
+
 
 
 # =============================================================================
@@ -524,6 +585,7 @@ class WallGraph:
     door_schedule: List[Dict[str, Any]] = field(default_factory=list)
     window_schedule: List[Dict[str, Any]] = field(default_factory=list)
     room_schedule: List[Dict[str, Any]] = field(default_factory=list)
+    stair_schedule: List[Dict[str, Any]] = field(default_factory=list)
 
     def assert_dimension_chains(self) -> None:
         """
@@ -559,6 +621,7 @@ class WallGraph:
             "door_schedule": list(self.door_schedule),
             "window_schedule": list(self.window_schedule),
             "room_schedule": list(self.room_schedule),
+            "stair_schedule": list(self.stair_schedule),
         }
 
 
@@ -1620,6 +1683,15 @@ def build_constructible_wall_graph(
         room_num = f"{floor_index * 100 + idx}"
         orig_r = next((x for x in raw_rooms if _val(x, "room_id") == r.room_id), None)
         canonical_area = round(float(_val(orig_r, "area_sqm", r.area_sqm)), 2) if orig_r else r.area_sqm
+        # Naming-honesty class threshold used (from living-quality layer metadata)
+        naming_threshold = None
+        if orig_r is not None:
+            naming_threshold = _val(orig_r, "naming_threshold_used", None)
+        fixture_count = 0
+        furniture_count = 0
+        if orig_r is not None:
+            fixture_count = len(_val(orig_r, "fixtures", []) or [])
+            furniture_count = len(_val(orig_r, "furniture", []) or [])
         room_schedule.append({
             "room_no": room_num,
             "room_number": idx,
@@ -1631,6 +1703,9 @@ def build_constructible_wall_graph(
             "area_sqm": canonical_area,
             "finish_zone": r.finish_zone,
             "zone": r.zone,
+            "naming_threshold_used": naming_threshold,
+            "fixture_count": fixture_count,
+            "furniture_count": furniture_count,
         })
 
     wg = WallGraph(
@@ -1645,6 +1720,7 @@ def build_constructible_wall_graph(
         door_schedule=door_schedule,
         window_schedule=window_schedule,
         room_schedule=room_schedule,
+        stair_schedule=compute_stair_schedule_rows(stair_geom),
     )
 
     # Hard assert dimension chains on emission
