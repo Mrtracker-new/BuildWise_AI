@@ -277,6 +277,10 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   const [strictness, setStrictness] = useState<'high' | 'medium' | 'low'>('high');
   const [floorPlateMasks, setFloorPlateMasks] = useState<Record<number, Record<string, 'present' | 'terrace' | 'void'>>>({});
   const [terraceBands, setTerraceBands] = useState<Record<number, { edge: 'none' | 'N' | 'S' | 'E' | 'W'; depth_m: number }>>({});
+  const [designIntent, setDesignIntent] = useState<'maximize_enclosed' | 'passive_ventilation'>('maximize_enclosed');
+  // Phase-2 engineering drawing toggles (service layer + structural sheet).
+  const [includeServiceLayer, setIncludeServiceLayer] = useState(true);
+  const [includeStructuralSheet, setIncludeStructuralSheet] = useState(true);
 
   // Initialize floorPlateMasks when activeFloors or activeTypology changes
   useEffect(() => {
@@ -368,6 +372,9 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
           } : undefined,
           terrace_bands: activeBandsPayload,
           floor_plate_masks: siteMode === 'irregular' ? floorPlateMasks : undefined,
+          design_intent: designIntent,
+          include_service_layer: includeServiceLayer,
+          include_structural_sheet: includeStructuralSheet,
         })
       : (
         (floorPlan.multi_storey && floorPlan.multi_storey.total_storeys !== activeFloors) ||
@@ -432,6 +439,9 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       plot_polygon: plotPoly,
       floor_plate_masks: siteMode === 'irregular' ? floorPlateMasks : undefined,
       terrace_bands: activeBandsPayload,
+      design_intent: designIntent,
+      include_service_layer: includeServiceLayer,
+      include_structural_sheet: includeStructuralSheet,
     };
 
     try {
@@ -455,6 +465,9 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         prevailing_wind_direction_degrees: prevailingWindDirectionDegrees,
         terrace_bands: req.terrace_bands,
         floor_plate_masks: req.floor_plate_masks,
+        design_intent: req.design_intent,
+        include_service_layer: req.include_service_layer,
+        include_structural_sheet: req.include_structural_sheet,
       };
       const freshPlan: FloorPlanResponse = {
         ...resp,
@@ -1059,6 +1072,84 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         </div>
       )}
 
+      {/* Design Intent Toggle (feeds solver scoring weights) */}
+      <div className="space-y-2 p-3 rounded-[12px] bg-[var(--fill)] border border-[var(--hairline)]">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <Icon name="layers" size={14} className="text-[var(--accent)]" />
+            <span className="text-[12px] font-semibold text-[var(--text-1)]">Design Intent</span>
+          </div>
+          <span className="text-[10px] text-[var(--text-3)] font-mono">L8 PROGRAM INTENT</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            data-testid="design-intent-maximize"
+            type="button"
+            onClick={() => setDesignIntent('maximize_enclosed')}
+            className={`px-3 py-2 rounded-[8px] text-[11px] font-semibold border transition-colors ${
+              designIntent === 'maximize_enclosed'
+                ? 'bg-[var(--accent)] text-white border-[var(--accent)]'
+                : 'bg-[var(--card-bg-subtle)] text-[var(--text-2)] border-[var(--hairline)] hover:border-[var(--accent)]'
+            }`}
+            title="Solver prioritizes enclosed conditioned area; terrace ratio advisory capped at 35%"
+          >
+            Maximize Enclosed Area
+          </button>
+          <button
+            data-testid="design-intent-passive"
+            type="button"
+            onClick={() => setDesignIntent('passive_ventilation')}
+            className={`px-3 py-2 rounded-[8px] text-[11px] font-semibold border transition-colors ${
+              designIntent === 'passive_ventilation'
+                ? 'bg-[var(--accent)] text-white border-[var(--accent)]'
+                : 'bg-[var(--card-bg-subtle)] text-[var(--text-2)] border-[var(--hairline)] hover:border-[var(--accent)]'
+            }`}
+            title="Solver prioritizes passive ventilation / terrace / garden; terrace ratio advisory relaxed to 45%"
+          >
+            Passive Ventilation / Terrace / Garden
+          </button>
+        </div>
+        <p className="text-[10px] text-[var(--text-3)]">
+          {designIntent === 'passive_ventilation'
+            ? 'Terraces and open-to-sky zones score higher; terrace ratio advisory relaxed to 45%.'
+            : 'Enclosed conditioned area scores higher; terrace ratio advisory enforced at 35% with conversion suggestion.'}
+        </p>
+      </div>
+
+      {/* Engineering Drawing Toggles (Service / Structural) */}
+      <div className="space-y-2 p-3 rounded-[12px] bg-[var(--fill)] border border-[var(--hairline)]">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <Icon name="layers" size={14} className="text-[var(--accent)]" />
+            <span className="text-[12px] font-semibold text-[var(--text-1)]">Engineering Drawing Layers</span>
+          </div>
+          <span className="text-[10px] text-[var(--text-3)] font-mono">L9-L14</span>
+        </div>
+        <div className="space-y-1.5">
+          <label className="flex items-center justify-between gap-2 cursor-pointer" data-testid="toggle-service-layer">
+            <span className="text-[11px] text-[var(--text-2)]">Service layer (shafts, soil/waste/vent pipes, inspection, rainwater, terrace drainage)</span>
+            <input
+              type="checkbox"
+              checked={includeServiceLayer}
+              onChange={(e) => setIncludeServiceLayer(e.target.checked)}
+              className="accent-[var(--accent)] shrink-0"
+            />
+          </label>
+          <label className="flex items-center justify-between gap-2 cursor-pointer" data-testid="toggle-structural-sheet">
+            <span className="text-[11px] text-[var(--text-2)]">Structural layer (column grid bubbles, beams, STRUCTURAL FEASIBILITY notes)</span>
+            <input
+              type="checkbox"
+              checked={includeStructuralSheet}
+              onChange={(e) => setIncludeStructuralSheet(e.target.checked)}
+              className="accent-[var(--accent)] shrink-0"
+            />
+          </label>
+        </div>
+        <p className="text-[10px] text-[var(--text-3)]">
+          Validation always runs all layers L1-L14 regardless of drawing toggles - toggles affect what is drawn, never what is checked.
+        </p>
+      </div>
+
       {/* Axis-Aligned Terrace Bands (Simple Rectangular Plots) */}
       {activeFloors > 1 && siteMode === 'rectangle' && (
         <div className="space-y-2 p-3 rounded-[12px] bg-[var(--fill)] border border-[var(--hairline)]">
@@ -1494,6 +1585,54 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                     </div>
                   ))}
                 </div>
+
+                {/* UNIVERSAL VALIDATION GATE - LAYER TABLE (L1-L14) */}
+                {(() => {
+                  const gate = (cert.details && cert.details.validation_gate) || floorPlan.qa?.validation_gate;
+                  if (!gate || !Array.isArray(gate.layers) || gate.layers.length === 0) return null;
+                  const chipCls: Record<string, string> = {
+                    PASS: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
+                    WARN: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
+                    FAIL: 'bg-rose-500/15 text-rose-700 dark:text-rose-300',
+                    'N/A': 'bg-slate-500/15 text-slate-600 dark:text-slate-300',
+                  };
+                  return (
+                    <div className="pt-2 border-t border-emerald-500/20 space-y-1.5" data-testid="validation-gate-layer-table">
+                      <div className="flex items-center justify-between text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">
+                        <span>Validation Gate - Layers L1-L14</span>
+                        <span className={`font-mono text-[10px] px-1.5 py-0.2 rounded ${chipCls[gate.overall_status] || chipCls.PASS}`}>
+                          OVERALL: {gate.overall_status}
+                        </span>
+                      </div>
+                      <div className="space-y-1">
+                        {gate.layers.map((ld: any) => (
+                          <div
+                            key={ld.layer_id}
+                            className="p-1.5 px-2 rounded-[6px] bg-white/60 dark:bg-black/20 border border-[var(--hairline)] flex items-center justify-between gap-2 text-[11px]"
+                            title={ld.citation || undefined}
+                          >
+                            <span className="font-medium text-[var(--text-1)] truncate">
+                              <span className="font-mono text-[10px] text-[var(--text-3)] mr-1">{ld.layer_id}</span>
+                              {ld.status === 'N/A' ? `N/A: ${ld.reason || 'not applicable'}` : (ld.summary || ld.title)}
+                            </span>
+                            <span className={`font-bold px-1.5 py-0.2 rounded shrink-0 font-mono text-[10px] ${chipCls[ld.status] || chipCls['N/A']}`}>
+                              {ld.status}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      {(gate.layers.filter((ld: any) => ld.status === 'WARN').length > 0) && (
+                        <div className="flex flex-wrap gap-1 pt-1" data-testid="validation-gate-warn-chips">
+                          {gate.layers.filter((ld: any) => ld.status === 'WARN').map((ld: any) => (
+                            <span key={ld.layer_id} className="px-1.5 py-0.2 rounded-full bg-amber-500/15 text-amber-800 dark:text-amber-200 text-[10px] font-semibold">
+                              ⚠ {ld.layer_id} {ld.title}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Certified Rule IDs list */}
                 <div className="text-[11px] text-[var(--text-2)] flex items-baseline gap-1.5 flex-wrap">

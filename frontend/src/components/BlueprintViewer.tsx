@@ -475,11 +475,11 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
       <div className="flex items-center justify-between gap-2 px-3.5 py-2 border-b border-[var(--hairline)] bg-[var(--fill)]/30">
         <div className="flex items-center gap-2">
           {/* Mode Selector: CAD vs Paper */}
-          <div className="flex items-center bg-[var(--fill)] rounded-[8px] p-0.5">
+          <div className="flex items-center bg-[var(--fill)] rounded-[9px] p-[3px] shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
             <button
               type="button"
               onClick={() => setMode('cad')}
-              className={`px-2 py-1 rounded-[6px] text-[11px] font-semibold transition-all cursor-pointer ${
+              className={`h-6 px-2.5 rounded-[7px] text-[11px] font-semibold flex items-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
                 mode === 'cad'
                   ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
                   : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
@@ -490,7 +490,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
             <button
               type="button"
               onClick={() => setMode('paper')}
-              className={`px-2 py-1 rounded-[6px] text-[11px] font-semibold transition-all cursor-pointer ${
+              className={`h-6 px-2.5 rounded-[7px] text-[11px] font-semibold flex items-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
                 mode === 'paper'
                   ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
                   : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
@@ -513,12 +513,12 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                   ? 'Hide F0 Core Ghost Overlay'
                   : 'Show F0 Core Ghost Overlay (Verifying vertical stacking alignment)'
               }
-              className={`h-7 px-2.5 rounded-[8px] text-[11px] font-semibold flex items-center gap-1.5 transition-all cursor-pointer select-none ${
+              className={`h-7 px-2.5 rounded-[9px] text-[11px] font-semibold flex items-center gap-1.5 transition-all duration-150 ease-out cursor-pointer select-none active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 disabled:active:scale-100 ${
                 activeFloorIndex === 0
                   ? 'opacity-50 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)]'
                   : showGhostOverlay
-                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 shadow-xs'
-                  : 'bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)]'
+                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.12),0_1px_3px_rgba(245,158,11,0.15)]'
+                  : 'bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--fill-hover)]'
               }`}
             >
               <Icon
@@ -531,40 +531,42 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
           )}
         </div>
 
-        {/* Zoom Controls & Expand Action */}
+        {/* Zoom Controls & Expand Action (segmented cluster) */}
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleZoomOut}
-            disabled={zoom <= 0.75}
-            title="Zoom Out"
-            aria-label="Zoom Out"
-            className="w-7 h-7 rounded-[8px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] disabled:opacity-40 text-[var(--text-1)] flex items-center justify-center transition-colors cursor-pointer"
-          >
-            <Icon name="minus" size={14} />
-          </button>
-          <span className="font-mono text-[12px] text-[var(--text-2)] tabular-nums min-w-[36px] text-center font-medium select-none">
-            {Math.round(zoom * 100)}%
-          </span>
-          <button
-            type="button"
-            onClick={handleZoomIn}
-            disabled={zoom >= 2.5}
-            title="Zoom In"
-            aria-label="Zoom In"
-            className="w-7 h-7 rounded-[8px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] disabled:opacity-40 text-[var(--text-1)] flex items-center justify-center transition-colors cursor-pointer"
-          >
-            <Icon name="plus" size={14} />
-          </button>
-          <button
-            type="button"
-            onClick={handleReset}
-            title="Reset Zoom & Pan"
-            aria-label="Reset View"
-            className="w-7 h-7 rounded-[8px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-1)] flex items-center justify-center transition-colors cursor-pointer"
-          >
-            <Icon name="refresh" size={14} />
-          </button>
+          <div className="flex items-center gap-0.5 bg-[var(--fill)] rounded-[9px] p-[3px] shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
+            <button
+              type="button"
+              onClick={handleZoomOut}
+              disabled={zoom <= 0.75}
+              title="Zoom Out"
+              aria-label="Zoom Out"
+              className="w-6 h-6 rounded-[6px] hover:bg-[var(--fill-hover)] disabled:opacity-40 disabled:hover:bg-transparent text-[var(--text-1)] flex items-center justify-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
+            >
+              <Icon name="minus" size={14} />
+            </button>
+            <span className="font-mono text-[12px] text-[var(--text-2)] tabular-nums min-w-[38px] text-center font-semibold select-none">
+              {Math.round(zoom * 100)}%
+            </span>
+            <button
+              type="button"
+              onClick={handleZoomIn}
+              disabled={zoom >= 2.5}
+              title="Zoom In"
+              aria-label="Zoom In"
+              className="w-6 h-6 rounded-[6px] hover:bg-[var(--fill-hover)] disabled:opacity-40 disabled:hover:bg-transparent text-[var(--text-1)] flex items-center justify-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
+            >
+              <Icon name="plus" size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={handleReset}
+              title="Reset Zoom & Pan"
+              aria-label="Reset View"
+              className="w-6 h-6 rounded-[6px] hover:bg-[var(--fill-hover)] text-[var(--text-1)] flex items-center justify-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
+            >
+              <Icon name="refresh" size={14} />
+            </button>
+          </div>
 
           {/* Quick-Download PDF Dossier Button */}
           <button
@@ -578,10 +580,10 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                 : 'Export Multi-Page Architectural PDF Dossier (Cover Sheet 10.0 + Floor Sheets 10.1-10.N)'
             }
             aria-label="Export Dossier (PDF)"
-            className={`h-7 px-2.5 rounded-[8px] text-[11px] font-semibold flex items-center gap-1.5 transition-all select-none shadow-xs ${
+            className={`h-7 px-2.5 rounded-[9px] text-[11px] font-semibold flex items-center gap-1.5 transition-all duration-150 ease-out select-none ${
               isStale
                 ? 'opacity-40 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)] border border-[var(--hairline)]'
-                : 'bg-red-600/10 hover:bg-red-600/20 active:bg-red-600/25 text-red-600 dark:text-red-400 border border-red-500/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
+                : 'bg-red-500/10 hover:bg-red-500/20 active:bg-red-500/25 text-red-600 dark:text-red-400 border border-red-500/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.15),0_1px_2px_rgba(220,38,38,0.12)] cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100'
             }`}
           >
             {isExportingPdf ? (
@@ -592,7 +594,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
             ) : (
               <>
                 <Icon name="file-text" size={13} />
-                <span>Export Dossier (PDF)</span>
+                <span className="whitespace-nowrap">Export Dossier (PDF)</span>
               </>
             )}
           </button>
@@ -602,7 +604,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
             onClick={() => setIsModalOpen(true)}
             title="Open Fullscreen Blueprint Modal"
             aria-label="Open Fullscreen Blueprint"
-            className="w-7 h-7 rounded-[8px] bg-[var(--accent-tint)] text-[var(--accent)] hover:brightness-95 flex items-center justify-center transition-colors cursor-pointer"
+            className="w-7 h-7 rounded-[9px] bg-[var(--accent-tint)] text-[var(--accent)] hover:brightness-105 active:scale-[0.92] flex items-center justify-center transition-all duration-150 ease-out cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
           >
             <Icon name="maximize" size={14} />
           </button>
@@ -658,6 +660,85 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
       {/* 5. Per-Floor Room Legend & Site Policy / Wedge Legend */}
       {viewTab === 'site' && effectiveSitePlan ? (
         <div className="flex flex-col gap-2.5 p-3 border-t border-[var(--hairline)] bg-[var(--card-bg-subtle)]/30">
+          {/* Drawing Status Stamp */}
+          {effectiveSitePlan.drawing_status_stamp && (
+            <div className="p-2.5 rounded-[8px] bg-red-500/10 border border-red-500/30 text-red-600 dark:text-red-400 font-mono text-[11px] font-semibold tracking-wide flex items-center gap-2">
+              <span className="px-1.5 py-0.5 rounded bg-red-600 text-white text-[9px] font-bold tracking-wider uppercase shrink-0">
+                STATUS STAMP
+              </span>
+              <span className="truncate">{effectiveSitePlan.drawing_status_stamp}</span>
+            </div>
+          )}
+
+          {/* Derivation Chain Banner */}
+          {effectiveSitePlan.derivation_text && (
+            <div className="p-2.5 rounded-[8px] bg-[var(--card-bg)] border border-[var(--hairline)] flex flex-col gap-1 text-[11px]">
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider bg-sky-500/20 text-sky-700 dark:text-sky-300">
+                  Derivation Chain
+                </span>
+                <span className="font-mono text-[11px] text-[var(--text-1)] font-medium">
+                  {effectiveSitePlan.derivation_text}
+                </span>
+              </div>
+              {effectiveSitePlan.derivation_chain && effectiveSitePlan.derivation_chain.length > 0 && (
+                <div className="flex items-center gap-1.5 text-[10px] font-mono text-[var(--text-3)] overflow-x-auto py-0.5">
+                  {effectiveSitePlan.derivation_chain.map((step, idx) => (
+                    <React.Fragment key={idx}>
+                      <span className="px-1.5 py-0.5 rounded bg-[var(--fill)] border border-[var(--hairline)] text-[var(--text-2)] whitespace-nowrap">
+                        {step}
+                      </span>
+                      {idx < (effectiveSitePlan.derivation_chain?.length ?? 0) - 1 && <span>→</span>}
+                    </React.Fragment>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Parking Envelope & ECS Coexistence */}
+          {effectiveSitePlan.parking && (
+            <div className={`p-2.5 rounded-[8px] border text-[11px] flex flex-col gap-1.5 ${
+              effectiveSitePlan.parking.coexistence_status === 'COEXISTENT'
+                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-800 dark:text-emerald-200'
+                : 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-200'
+            }`}>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${
+                    effectiveSitePlan.parking.coexistence_status === 'COEXISTENT'
+                      ? 'bg-emerald-500/25 text-emerald-800 dark:text-emerald-200'
+                      : 'bg-amber-500/25 text-amber-800 dark:text-amber-200'
+                  }`}>
+                    Parking ({effectiveSitePlan.parking.provided_ecs}/{effectiveSitePlan.parking.required_ecs} ECS)
+                  </span>
+                  <span className="font-medium text-[var(--text-1)]">
+                    {effectiveSitePlan.parking.bays.length} Bays (2.5m x 5.0m) + Drive Aisle ({effectiveSitePlan.parking.drive_aisle_width_m}m)
+                  </span>
+                </div>
+                <span className="text-[10px] font-mono font-medium">
+                  {effectiveSitePlan.parking.total_parking_area_sqm.toFixed(1)} m²
+                </span>
+              </div>
+              {effectiveSitePlan.parking.deficit_warning && (
+                <div className="text-[11px] font-medium text-amber-700 dark:text-amber-300 flex items-start gap-1.5 bg-amber-500/10 p-2 rounded border border-amber-500/20">
+                  <Icon name="alert-triangle" size={13} className="shrink-0 text-amber-600 mt-0.5" />
+                  <div>
+                    <p className="font-semibold">{effectiveSitePlan.parking.deficit_warning}</p>
+                    {effectiveSitePlan.parking.coexistence_options && effectiveSitePlan.parking.coexistence_options.length > 0 && (
+                      <ul className="list-disc list-inside mt-1 space-y-0.5 text-[10px]">
+                        {effectiveSitePlan.parking.coexistence_options.map((opt, oIdx) => (
+                          <li key={oIdx}>{opt}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Declared Policy */}
           {effectiveSitePlan.design_policy && (
             <div className="flex flex-col gap-1 p-2.5 rounded-[10px] bg-amber-500/10 border border-amber-500/20 text-[12px]">
               <div className="flex items-center gap-2">
@@ -681,6 +762,8 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
               )}
             </div>
           )}
+
+          {/* Functional Wedges */}
           {effectiveSitePlan.wedge_zones && effectiveSitePlan.wedge_zones.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[11px] font-semibold text-[var(--text-3)] uppercase tracking-wider">
@@ -702,6 +785,42 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
               ))}
             </div>
           )}
+
+          {/* 8-Point Site Sheet Completeness Checklist */}
+          {effectiveSitePlan.checklist && (
+            <div className="flex items-center gap-2 overflow-x-auto py-1 text-[10px] font-mono border-t border-[var(--hairline)]/40 pt-2">
+              <span className="font-semibold text-[var(--text-3)] uppercase tracking-wider shrink-0">8-Pt Checklist:</span>
+              {Object.entries(effectiveSitePlan.checklist).map(([key, val]) => (
+                <span
+                  key={key}
+                  className={`px-1.5 py-0.5 rounded whitespace-nowrap border ${
+                    val
+                      ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                      : 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30'
+                  }`}
+                >
+                  {val ? '✓' : '✗'} {key.replace(/_/g, ' ')}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Annotation Status Taxonomy Legend */}
+          <div className="flex flex-wrap items-center gap-2 pt-1.5 border-t border-[var(--hairline)]/50 text-[10px]">
+            <span className="font-semibold text-[var(--text-3)] uppercase tracking-wider">Status Taxonomy:</span>
+            <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-mono font-semibold border border-emerald-500/30">
+              VERIFIED: Closed Polygon
+            </span>
+            <span className="px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-700 dark:text-blue-300 font-mono font-semibold border border-blue-500/30">
+              CALCULATED: Formula / Setback
+            </span>
+            <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 font-mono font-semibold border border-amber-500/30">
+              ASSUMED: Inferred Boundary
+            </span>
+            <span className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-700 dark:text-purple-300 font-mono font-semibold border border-purple-500/30">
+              RECOMMENDED: Best-Practice Access
+            </span>
+          </div>
         </div>
       ) : currentPlacements.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 p-3 border-t border-[var(--hairline)] bg-[var(--card-bg-subtle)]/30">
@@ -799,7 +918,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                   </div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <h3 className="text-[16px] font-semibold text-[var(--text-1)] tracking-tight">
+                      <h3 className="text-[16px] font-semibold text-[var(--text-1)] tracking-tight whitespace-nowrap">
                         {isMultiStorey && currentFloor ? `${currentFloor.floor_name}` : 'Architectural Floor Plan'}
                       </h3>
                       {isStale && (
@@ -814,7 +933,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                       )}
                       <span
                         data-testid="modal-blueprint-freshness-token"
-                        className="font-mono text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-2 py-0.5 rounded-[6px] whitespace-nowrap border border-[var(--accent)]/20"
+                        className="font-mono text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-2 py-0.5 rounded-[6px] whitespace-nowrap border border-[var(--accent)]/20 min-w-0 truncate"
                       >
                         {freshnessToken}
                       </span>
@@ -828,11 +947,11 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
 
                 <div className="flex items-center gap-2">
                   {/* Mode switcher in modal */}
-                  <div className="flex items-center bg-[var(--fill)] rounded-[8px] p-0.5 mr-1">
+                  <div className="flex items-center bg-[var(--fill)] rounded-[9px] p-[3px] mr-1 shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
                     <button
                       type="button"
                       onClick={() => setMode('cad')}
-                      className={`px-2.5 py-1 rounded-[6px] text-[12px] font-semibold transition-all cursor-pointer ${
+                      className={`h-6 px-3 rounded-[7px] text-[12px] font-semibold flex items-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
                         mode === 'cad'
                           ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
                           : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
@@ -843,7 +962,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                     <button
                       type="button"
                       onClick={() => setMode('paper')}
-                      className={`px-2.5 py-1 rounded-[6px] text-[12px] font-semibold transition-all cursor-pointer ${
+                      className={`h-6 px-3 rounded-[7px] text-[12px] font-semibold flex items-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
                         mode === 'paper'
                           ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
                           : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
@@ -866,12 +985,12 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                           ? 'Hide F0 Core Ghost Overlay'
                           : 'Show F0 Core Ghost Overlay'
                       }
-                      className={`h-8 px-2.5 rounded-[8px] text-[11px] font-semibold flex items-center gap-1.5 transition-all cursor-pointer mr-1 select-none ${
+                      className={`h-8 px-2.5 rounded-[9px] text-[11px] font-semibold flex items-center gap-1.5 transition-all duration-150 ease-out cursor-pointer mr-1 select-none active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 disabled:active:scale-100 ${
                         safeFloorIndex === 0
                           ? 'opacity-50 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)]'
                           : showGhostOverlay
-                          ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30'
-                          : 'bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)]'
+                          ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.12),0_1px_3px_rgba(245,158,11,0.15)]'
+                          : 'bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--fill-hover)]'
                       }`}
                     >
                       <Icon
@@ -883,39 +1002,41 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                     </button>
                   )}
 
-                  {/* Modal Zoom Controls */}
-                  <button
-                    type="button"
-                    onClick={handleModalZoomOut}
-                    disabled={modalZoom <= 0.5}
-                    title="Zoom Out"
-                    aria-label="Zoom Out"
-                    className="w-8 h-8 rounded-[8px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-1)] flex items-center justify-center transition-colors cursor-pointer"
-                  >
-                    <Icon name="minus" size={14} />
-                  </button>
-                  <span className="font-mono text-[12px] text-[var(--text-2)] tabular-nums min-w-[40px] text-center font-medium select-none">
-                    {Math.round(modalZoom * 100)}%
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleModalZoomIn}
-                    disabled={modalZoom >= 3.5}
-                    title="Zoom In"
-                    aria-label="Zoom In"
-                    className="w-8 h-8 rounded-[8px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-1)] flex items-center justify-center transition-colors cursor-pointer"
-                  >
-                    <Icon name="plus" size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleModalReset}
-                    title="Reset View"
-                    aria-label="Reset View"
-                    className="w-8 h-8 rounded-[8px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-1)] flex items-center justify-center transition-colors cursor-pointer mr-2"
-                  >
-                    <Icon name="refresh" size={14} />
-                  </button>
+                  {/* Modal Zoom Controls (segmented cluster) */}
+                  <div className="flex items-center gap-0.5 bg-[var(--fill)] rounded-[9px] p-[3px] mr-2 shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
+                    <button
+                      type="button"
+                      onClick={handleModalZoomOut}
+                      disabled={modalZoom <= 0.5}
+                      title="Zoom Out"
+                      aria-label="Zoom Out"
+                      className="w-7 h-6 rounded-[6px] hover:bg-[var(--fill-hover)] disabled:opacity-40 disabled:hover:bg-transparent text-[var(--text-1)] flex items-center justify-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
+                    >
+                      <Icon name="minus" size={14} />
+                    </button>
+                    <span className="font-mono text-[12px] text-[var(--text-2)] tabular-nums min-w-[40px] text-center font-semibold select-none">
+                      {Math.round(modalZoom * 100)}%
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleModalZoomIn}
+                      disabled={modalZoom >= 3.5}
+                      title="Zoom In"
+                      aria-label="Zoom In"
+                      className="w-7 h-6 rounded-[6px] hover:bg-[var(--fill-hover)] disabled:opacity-40 disabled:hover:bg-transparent text-[var(--text-1)] flex items-center justify-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
+                    >
+                      <Icon name="plus" size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleModalReset}
+                      title="Reset View"
+                      aria-label="Reset View"
+                      className="w-7 h-6 rounded-[6px] hover:bg-[var(--fill-hover)] text-[var(--text-1)] flex items-center justify-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
+                    >
+                      <Icon name="refresh" size={14} />
+                    </button>
+                  </div>
 
                   {/* Export Dossier (PDF) Button in Modal */}
                   <button
@@ -927,10 +1048,10 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                         ? 'Parameters changed — regenerate blueprint before exporting.'
                         : 'Export Multi-Page Architectural PDF Dossier'
                     }
-                    className={`h-8 px-3 rounded-[8px] text-[12px] font-semibold flex items-center gap-1.5 transition-all mr-2 select-none shadow-xs ${
+                    className={`h-8 px-3 rounded-[9px] text-[12px] font-semibold flex items-center gap-1.5 transition-all duration-150 ease-out mr-2 select-none ${
                       isStale
                         ? 'opacity-40 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)] border border-[var(--hairline)]'
-                        : 'bg-red-600/15 hover:bg-red-600/25 active:bg-red-600/30 text-red-600 dark:text-red-400 border border-red-500/25 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
+                        : 'bg-red-500/10 hover:bg-red-500/20 active:bg-red-500/25 text-red-600 dark:text-red-400 border border-red-500/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.15),0_1px_2px_rgba(220,38,38,0.15)] cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100'
                     }`}
                   >
                     {isExportingPdf ? (
@@ -941,7 +1062,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                     ) : (
                       <>
                         <Icon name="file-text" size={14} />
-                        <span>Export Dossier (PDF)</span>
+                        <span className="whitespace-nowrap">Export Dossier (PDF)</span>
                       </>
                     )}
                   </button>
@@ -956,21 +1077,20 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                         ? 'Parameters changed — regenerate blueprint before exporting.'
                         : 'Export SVG'
                     }
-                    className={`px-3.5 py-1.5 rounded-[10px] text-[12px] font-semibold flex items-center gap-1.5 transition-all select-none shadow-sm mr-2 ${
+                    className={`h-8 px-3.5 rounded-[9px] text-[12px] font-semibold flex items-center gap-1.5 transition-all duration-150 ease-out select-none mr-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/60 ${
                       isStale
                         ? 'opacity-40 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)] border border-[var(--hairline)]'
-                        : 'bg-[var(--accent)] text-white hover:brightness-95 cursor-pointer'
+                        : 'bg-[var(--accent)] text-white hover:brightness-105 active:bg-[var(--accent-press)] active:scale-[0.97] cursor-pointer shadow-[0_1px_3px_rgba(0,113,227,0.35)]'
                     }`}
                   >
-                    <Icon name="download" size={14} />
-                    <span>Export SVG</span>
+                    <Icon name="download" size={14} />                        <span className="whitespace-nowrap">Export SVG</span>
                   </button>
 
                   {/* Close Button */}
                   <button
                     type="button"
                     onClick={() => setIsModalOpen(false)}
-                    className="w-8 h-8 rounded-[10px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text-1)] flex items-center justify-center transition-colors cursor-pointer"
+                    className="w-8 h-8 rounded-[9px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text-1)] flex items-center justify-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
                     aria-label="Close modal"
                   >
                     <Icon name="x" size={16} />
@@ -1007,7 +1127,23 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
               </div>
 
               {/* Modal Footer Legend */}
-              {currentPlacements.length > 0 && (
+              {viewTab === 'site' && effectiveSitePlan ? (
+                <div className="flex flex-col gap-1.5 p-3 border-t border-[var(--hairline)] bg-[var(--fill)]/20 text-[11px]">
+                  {effectiveSitePlan.drawing_status_stamp && (
+                    <div className="font-mono text-red-600 dark:text-red-400 font-semibold truncate flex items-center gap-1.5">
+                      <span className="px-1.5 py-0.5 rounded bg-red-600 text-white text-[9px] font-bold tracking-wider uppercase">
+                        STAMP
+                      </span>
+                      <span>{effectiveSitePlan.drawing_status_stamp}</span>
+                    </div>
+                  )}
+                  {effectiveSitePlan.derivation_text && (
+                    <div className="font-mono text-[var(--text-2)] truncate">
+                      {effectiveSitePlan.derivation_text}
+                    </div>
+                  )}
+                </div>
+              ) : currentPlacements.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2 p-3 border-t border-[var(--hairline)] bg-[var(--fill)]/20">
                   <div className="flex items-center gap-1 mr-1">
                     <span className="text-[11px] font-semibold text-[var(--text-3)] uppercase tracking-wider">

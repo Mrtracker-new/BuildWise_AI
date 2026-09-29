@@ -368,6 +368,8 @@ export interface FloorPlanQA {
   critic?: string;
   violations: number;
   critic_notes?: string[];
+  validation_gate?: ValidationGateReport;
+  validation_gate_status?: 'PASS' | 'WARN' | 'FAIL';
 }
 
 export interface RectanglesModel {
@@ -437,9 +439,31 @@ export interface MultiFloorRoomRectangle {
   vastu_compliant: boolean;
   is_vertical_core?: boolean;
   requires_exterior_wall?: boolean;
-  aspect_ratio: number;
-  applied_rules?: string[];
-  relaxations?: Array<{ rule_id: string; rationale: string }>;
+  naming_threshold_used?: string;
+}
+
+export interface BathroomFixtureSpec {
+  fixture_id: string;
+  fixture_type: 'wc' | 'wash_basin' | 'shower';
+  x: number;
+  y: number;
+  width_m: number;
+  depth_m: number;
+  clearance_front_m: number;
+  clearance_side_m: number;
+  is_satisfied: boolean;
+  clearance_notes?: string;
+}
+
+export interface FurnitureItemSpec {
+  item_id: string;
+  item_type: string;
+  x: number;
+  y: number;
+  width_m: number;
+  depth_m: number;
+  circulation_clearance_m: number;
+  is_satisfied: boolean;
 }
 
 export interface MultiFloorDoorGeometry {
@@ -504,6 +528,7 @@ export interface SingleFloorPlanModel {
   door_schedule?: Array<Record<string, any>>;
   window_schedule?: Array<Record<string, any>>;
   room_schedule?: Array<Record<string, any>>;
+  stair_schedule?: Array<Record<string, any>>;
   mathematical_certificate?: MathematicalValidityCertificate;
   floor_plate_mask?: Record<string, string>;
   plate_composition?: string;
@@ -534,9 +559,41 @@ export interface MathematicalValidityCertificate {
   cores_stack_aligned?: boolean;
   sanitation_wc_count_satisfied?: boolean;
   parking_count_satisfied?: boolean;
+  l2_door_swings_valid?: boolean;
+  l3_fixture_clearances_satisfied?: boolean;
+  l4_furniture_clearances_satisfied?: boolean;
+  l8_program_intent_satisfied?: boolean;
+  layer_statuses?: ValidationGateLayer[];
+  overall_layer_status?: 'PASS' | 'WARN' | 'FAIL';
   certificate_id?: string;
   certified_rules?: string[];
   details?: Record<string, any>;
+}
+
+// ----------------------------------------------------
+// Universal Validation Gate (L1-L14)
+// ----------------------------------------------------
+
+export interface ValidationGateLayer {
+  layer_id: string;
+  title: string;
+  status: 'PASS' | 'WARN' | 'FAIL' | 'N/A';
+  summary?: string;
+  reason?: string; // mandatory when status === 'N/A'
+  findings?: string[];
+  citation?: string;
+  details?: Record<string, any>;
+}
+
+export interface ValidationGateReport {
+  layer_ids: string[];
+  layers: ValidationGateLayer[];
+  overall_status: 'PASS' | 'WARN' | 'FAIL';
+  validated_layers: string[];
+  n_a_layers?: Array<{ layer_id: string; reason: string }>;
+  llm_boundary?: { events?: Array<Record<string, any>>; event_ids?: string[]; contract?: string };
+  evaluated_at?: string;
+  contract?: string;
 }
 
 // ----------------------------------------------------
@@ -617,12 +674,54 @@ export interface WedgeZone {
   length_m: number;
 }
 
+export interface ParkingBay {
+  bay_id: string;
+  x: number;
+  y: number;
+  width_m: number;
+  length_m: number;
+  orientation_deg: number;
+}
+
+export interface ParkingEnvelope {
+  required_ecs: number;
+  provided_ecs: number;
+  bays: ParkingBay[];
+  drive_aisle_width_m: number;
+  drive_aisle_polygon: [number, number][];
+  total_parking_area_sqm: number;
+  coexistence_status: 'COEXISTENT' | 'DEFICIT_WARNED';
+  deficit_warning?: string;
+  coexistence_options: string[];
+}
+
+export interface SiteSheetChecklist {
+  road_side_and_width: boolean;
+  vehicular_gate_and_pedestrian_entry: boolean;
+  parking_bays_with_dims: boolean;
+  sewer_connection_point: boolean;
+  stormwater_outlet_and_drainage_arrows: boolean;
+  finished_ground_level_and_slope_note: boolean;
+  setback_dimensions_every_side: boolean;
+  neighbour_ticks: boolean;
+  is_complete: boolean;
+  missing_items: string[];
+}
+
 export interface SitePlanModel {
   plot_polygon: PlotPolygon;
   buildable_polygon_coords: [number, number][];
   buildable_area_sqm: number;
   nominal_setback_m: number;
   reduced_setback_applied: boolean;
+  building_line_coords?: [number, number][];
+  setback_dimensions?: Record<string, number>;
+  derivation_chain?: string[];
+  derivation_text?: string;
+  parking?: ParkingEnvelope;
+  checklist?: SiteSheetChecklist;
+  validated_layers?: string[];
+  drawing_status_stamp?: string;
   footprint: InscribedFootprint;
   outdoor_zones: OutdoorFragment[];
   wedge_zones?: WedgeZone[];
@@ -711,6 +810,9 @@ export interface FloorPlanRequest {
   plot_polygon?: PlotPolygon;
   floor_plate_masks?: Record<number | string, Record<string, 'present' | 'terrace' | 'void'>>;
   terrace_bands?: Record<number | string, TerraceBandSpec>;
+  design_intent?: 'maximize_enclosed' | 'passive_ventilation';
+  include_service_layer?: boolean;
+  include_structural_sheet?: boolean;
 }
 
 export interface RoomPlacement {
@@ -757,6 +859,9 @@ export interface FloorPlanParamsSnapshot {
   prevailing_wind_direction_degrees?: number;
   terrace_bands?: Record<number | string, TerraceBandSpec>;
   floor_plate_masks?: Record<number | string, Record<string, 'present' | 'terrace' | 'void'>>;
+  design_intent?: 'maximize_enclosed' | 'passive_ventilation';
+  include_service_layer?: boolean;
+  include_structural_sheet?: boolean;
 }
 
 export interface FloorPlanResponse {
