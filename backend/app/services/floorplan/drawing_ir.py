@@ -383,9 +383,25 @@ ROOM_ABBREV_MAP: Dict[str, str] = {
 }
 
 
+try:
+    from reportlab.pdfbase.pdfmetrics import stringWidth as _rl_string_width
+except Exception:  # pragma: no cover - reportlab guarded above too
+    _rl_string_width = None
+
+
 def _approx_text_width(text: str, fs: float) -> float:
-    """Approximate rendered text width in pixels: ≈ 0.6 * font_size * char_count."""
-    return 0.6 * fs * len(text)
+    """Rendered width in px for the bold Helvetica labels the PDF draws.
+
+    Uses ReportLab's exact metric tables when available so the collision
+    resolver and the ReportLab renderer agree; falls back to a conservative
+    0.62 * fs * len estimate otherwise (SVG backend styling is close).
+    """
+    if _rl_string_width is not None:
+        try:
+            return float(_rl_string_width(text, "Helvetica-Bold", fs))
+        except Exception:
+            pass
+    return 0.62 * fs * len(text)
 
 
 def _ellipsize_str(s: str, max_len: int) -> str:
@@ -1211,6 +1227,8 @@ def build_drawing_ir(
             dn_tip = [(fl2_cx - 0.12, s_ry + 0.45), (fl2_cx, s_ry + 0.25), (fl2_cx + 0.12, s_ry + 0.45)]
             dn_txt = (fl2_cx, landing_y - 0.35)
 
+        # Headroom note as a compact "CLr 2.20m" tag inside the mid-landing
+        # (empty band); the full sentence stays in the schedules sheet.
         stair_prim = StairPrimitive(
             layer="cores",
             boundary=(s_rx, s_ry, s_rw, s_rd),
@@ -1224,7 +1242,7 @@ def build_drawing_ir(
             dn_tip=dn_tip,
             dn_text_pos=dn_txt,
             headroom_text_pos=(s_rx + s_rw / 2.0, landing_y + landing_d / 2.0),
-            headroom_text="HEADROOM >= 2.20m CLEAR"
+            headroom_text="CLr 2.20m"
         )
         primitives.append(stair_prim)
 
@@ -1428,11 +1446,14 @@ def build_drawing_ir(
             fixed_obstacles.append(("main_entrance_cap", BBox(cap_x - cap_w / 2.0, cap_y - 8.0, cap_x + cap_w / 2.0, cap_y + 2.0)))
             fixed_obstacles.append(("main_entrance_arrow", BBox(door_x - 5.0, arr_y1, door_x + 5.0, arr_y2)))
         else:
+            # Entrance label rides the band BETWEEN the dim chains (env_d+1.05)
+            # and the grid bubbles (env_d+1.85), shifted left of bubble "2";
+            # arrow still hugs the north wall.
             arr_y1 = col_my - 8.5
             arr_y2 = col_my - 1.0
-            cap_y = col_my - 66.0
+            cap_y = col_my - 52.0
             cap_w = 72.0
-            cap_x = min(door_x, compass_cx - 22.0 - cap_w / 2.0)
+            cap_x = col_px(max(1.2, door_x_m - 1.0))
             fixed_obstacles.append(("main_entrance_cap", BBox(cap_x - cap_w / 2.0, cap_y - 8.0, cap_x + cap_w / 2.0, cap_y + 2.0)))
             fixed_obstacles.append(("main_entrance_arrow", BBox(door_x - 5.0, arr_y1, door_x + 5.0, arr_y2)))
 
@@ -1441,13 +1462,17 @@ def build_drawing_ir(
         lbw_x = col_px(0.4)
         lbw_y = col_py(0.35)
         fixed_obstacles.append(("lbw_tag", BBox(lbw_x - 2.0, lbw_y - 5.5, lbw_x + 42.0, lbw_y + 2.0)))
-    elif "T3" in bldg_typ or "T4" in bldg_typ or "COMPLEX" in bldg_typ or "WAREHOUSE" in bldg_typ:
+    else:
+        # Column-grid bubbles: numbered on TOP (outside chains), letters on the
+        # RIGHT edge; reserve their px-space obstacles to match.
         for gtag, gx_m in [("1", 0.0), ("2", env_w / 2.0), ("3", env_w)]:
             gx = col_px(gx_m)
-            fixed_obstacles.append((f"col_bubble_{gtag}", BBox(gx - 7.0, col_my - 61.0, gx + 7.0, col_my - 47.0)))
+            gy2 = col_my + (env_d - (env_d + 1.85)) * col_scale
+            fixed_obstacles.append((f"col_bubble_{gtag}", BBox(gx - 7.0, gy2 - 7.0, gx + 7.0, gy2 + 7.0)))
         for gtag, gy_m in [("A", 0.0), ("B", env_d / 2.0), ("C", env_d)]:
             gy = col_py(gy_m)
-            fixed_obstacles.append((f"col_bubble_{gtag}", BBox(col_mx - 61.0, gy - 7.0, col_mx - 47.0, gy + 7.0)))
+            gx2 = col_px(env_w + 0.60)
+            fixed_obstacles.append((f"col_bubble_{gtag}", BBox(gx2 - 7.0, gy - 7.0, gx2 + 7.0, gy + 7.0)))
 
     # Obstacle 4: Ghost Anchor Badge
     if f_idx > 0 and ghost_prim is not None and ghost_prim.anchor_badge:
@@ -1475,15 +1500,19 @@ def build_drawing_ir(
             fixed_obstacles.append(("dn_label", BBox(dn_x - 18.0, dn_y - 8.0, dn_x + 18.0, dn_y + 8.0)))
         hr_x = col_px(stair_prim.headroom_text_pos[0])
         hr_y = col_my + (env_d - stair_prim.headroom_text_pos[1]) * col_scale
-        fixed_obstacles.append(("headroom_note", BBox(hr_x - 55.0, hr_y - 8.0, hr_x + 55.0, hr_y + 8.0)))
+        fixed_obstacles.append(("headroom_note", BBox(hr_x - 18.0, hr_y - 6.0, hr_x + 18.0, hr_y + 6.0)))
 
-    # Obstacle 6: Door and Window Tags
+    # Obstacle 6: Door and Window Tags (and UNIT badges on unit doors)
     for op in primitives:
         if isinstance(op, OpeningPrimitive):
             if op.opening_type == "door":
                 dtag_x = col_px(op.tag_x)
                 dtag_y = col_my + (env_d - op.tag_y) * col_scale
                 fixed_obstacles.append((f"door_tag_{op.tag}", BBox(dtag_x - 7.0, dtag_y - 4.5, dtag_x + 7.0, dtag_y + 4.5)))
+                if op.unit_badge:
+                    ub_x = col_px(op.unit_badge["x"])
+                    ub_y = col_my + (env_d - op.unit_badge["y"]) * col_scale
+                    fixed_obstacles.append((f"unit_badge_{op.opening_id}", BBox(ub_x - 2.0, ub_y - 7.5, ub_x + 42.0, ub_y + 7.5)))
             elif op.opening_type == "window":
                 wtag_x = col_px(op.tag_x)
                 wtag_y = col_my + (env_d - op.tag_y) * col_scale
@@ -1501,8 +1530,8 @@ def build_drawing_ir(
         cx_px = rx_px + rw_px / 2.0
         cy_px = ry_px + rh_px / 2.0
 
-        avail_w = max(4.0, rw_px - 6.0)
-        avail_h = max(4.0, rh_px - 6.0)
+        avail_w = max(4.0, rw_px - 10.0)
+        avail_h = max(4.0, rh_px - 8.0)
 
         is_terrace = "terrace" in rid.lower() or str(_get(r_raw, "zone_category", "")).lower() == "terrace"
         if is_terrace:
@@ -1847,7 +1876,7 @@ def build_drawing_ir(
                 segments=seg_list
             ))
 
-    dim_offsets_x = [-0.35, -0.70, -1.05]
+    dim_offsets_x = [-0.35, -0.70, -1.45]
     chain_y_overall = DimensionChainPrimitive(
         layer="dims",
         status="VERIFIED",
@@ -1861,7 +1890,9 @@ def build_drawing_ir(
             ((-0.05, env_d), (dim_offsets_x[2] - 0.15, env_d)),
         ],
         segments=[{
-            "label": f"{env_d:.2f}m OVERALL",
+            # Compact value-only label: the long "OVERALL" variant collided with
+            # the clear-rooms chain labels beside it; chain_id carries semantics.
+            "label": f"{env_d:.2f}m",
             "length_m": env_d,
             "center_x": dim_offsets_x[2] - 0.10,
             "center_y": env_d / 2.0,
@@ -1960,6 +1991,9 @@ def build_drawing_ir(
     struct_tags = []
     # Grid bubbles now appear whenever the gate's L12 structural layer ran
     # (T1/T2/T3/T4 all have structural models); T1 keeps its LBW tag.
+    # Column bubbles ride the OUTERMOST opening dim chain lane (env_d + 1.05,
+    # x at -1.05) and the title card moved top-right, so they stay clear of
+    # the old freshness strip that used to cut through them.
     gate_l12 = next((ld for ld in gate_layers_list if str(ld.get("layer_id")) == "L12"), None)
     show_bubbles = (
         isinstance(gate_l12, dict)
@@ -1975,12 +2009,14 @@ def build_drawing_ir(
         })
     if show_bubbles and ("T2" in bldg_typ or "APARTMENT" in bldg_typ or "T3" in bldg_typ or "COMPLEX" in bldg_typ
                          or "T4" in bldg_typ or "WAREHOUSE" in bldg_typ or "T1" in bldg_typ or "SINGLE" in bldg_typ):
-        struct_tags.append({"bubble": "1", "x": 0.0, "y": env_d + 1.55})
-        struct_tags.append({"bubble": "2", "x": env_w / 2.0, "y": env_d + 1.55})
-        struct_tags.append({"bubble": "3", "x": env_w, "y": env_d + 1.55})
-        struct_tags.append({"bubble": "A", "x": -1.55, "y": env_d})
-        struct_tags.append({"bubble": "B", "x": -1.55, "y": env_d / 2.0})
-        struct_tags.append({"bubble": "C", "x": -1.55, "y": 0.0})
+        # Bubbles: numbered grid on the TOP edge, letter grid on the RIGHT edge
+        # (left side carries the vertical dim chains), fully outside all chains.
+        struct_tags.append({"bubble": "1", "x": 0.0, "y": env_d + 1.85})
+        struct_tags.append({"bubble": "2", "x": env_w / 2.0, "y": env_d + 1.85})
+        struct_tags.append({"bubble": "3", "x": env_w, "y": env_d + 1.85})
+        struct_tags.append({"bubble": "A", "x": env_w + 0.60, "y": env_d})
+        struct_tags.append({"bubble": "B", "x": env_w + 0.60, "y": env_d / 2.0})
+        struct_tags.append({"bubble": "C", "x": env_w + 0.60, "y": 0.0})
 
     entrance_dict = None
     if f_idx == 0:
@@ -1992,7 +2028,6 @@ def build_drawing_ir(
             if mx1 > 0.0 or mx2 > 0.0:
                 door_x_m = (mx1 + mx2) / 2.0
         cap_w_m = 72.0 / 36.0
-        cap_x_m = min(door_x_m, env_w + 20.0 / 36.0 - 22.0 / 36.0 - cap_w_m / 2.0)
         if is_multi_wing:
             # Main entrance is on South wall (y = 0.0) facing street frontage
             entrance_dict = {
@@ -2002,11 +2037,13 @@ def build_drawing_ir(
                 "label_pos": (door_x_m, -1.20)
             }
         else:
+            # Label rides the free band between the dim chains (env_d+1.05) and
+            # the grid bubbles (env_d+1.85) so it never collides with either.
             entrance_dict = {
                 "p1": (door_x_m, env_d + 8.5 / 36.0),
                 "p2": (door_x_m, env_d + 1.0 / 36.0),
                 "label": "MAIN ENTRY",
-                "label_pos": (cap_x_m, env_d + 66.0 / 36.0)
+                "label_pos": (max(1.2, door_x_m - 1.0), env_d + 52.0 / 36.0)
             }
 
     annot_prim = AnnotationPrimitive(
@@ -2266,8 +2303,19 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
         # POLICY pair when a design policy is attached.
         _banner_gap = _n_stamp * 12.0 + (84.0 if getattr(ir, "design_policy", None) else 64.0)
     title_block_h = 64.0 + (_banner_gap - 74.0)
-    svg_h = int(content_h + 2.0 * margin_y + title_block_h + schedules_panel_h)
-    banner_y = margin_y + content_h + 24.0
+    # Below-plot label lanes (utility tags, gates, road corridor) extend the
+    # canvas so the banner block never overlaps them.
+    _min_y_m = 0.0
+    for _p in ir.primitives:
+        if isinstance(_p, TextPrimitive):
+            _hh = (getattr(_p, "halo_h_m", 0.55) if getattr(_p, "halo", False) else 0.30)
+            _min_y_m = min(_min_y_m, _p.y - _hh / 2.0)
+        elif isinstance(_p, (PolygonPrimitive, PathPrimitive)):
+            for _pt in (_p.points or []):
+                _min_y_m = min(_min_y_m, float(_pt[1]))
+    _below_extra_px = max(0.0, (0.55 - _min_y_m) * scale)
+    svg_h = int(content_h + 2.0 * margin_y + title_block_h + schedules_panel_h + _below_extra_px)
+    banner_y = margin_y + content_h + 24.0 + _below_extra_px
     schedules_y = banner_y + max(48.0, _banner_gap)
 
     # --- Upfront sheet plan (legend wrap + scale-strip anchor) --------------
@@ -3004,25 +3052,72 @@ def render_reportlab_from_ir(
     if Drawing is None:
         raise RuntimeError("ReportLab is not installed or available.")
 
-    min_x_m = -1.40
-    max_x_m = ir.envelope_w + 0.50
-    min_y_m = -0.65
-    max_y_m = ir.envelope_d + 1.35
+    # Content-aware viewport: derive metric bounds from the drawn primitives so
+    # nothing (site road corridor, footing hints, banner lanes, vertex labels,
+    # column-grid bubbles) is clipped by a hardcoded margin again.
+    min_x_m = -2.10
+    max_x_m = ir.envelope_w + 1.05
+    min_y_m = -0.90
+    max_y_m = ir.envelope_d + 2.30
+
+    for p in ir.primitives:
+        pts_ca: List[Tuple[float, float]] = []
+        if isinstance(p, (PolygonPrimitive, PathPrimitive)):
+            pts_ca = [(float(px_), float(py_)) for px_, py_ in (p.points or [])]
+        elif isinstance(p, WallPrimitive):
+            pts_ca = [(p.x1, p.y1), (p.x2, p.y2)]
+        elif isinstance(p, DimensionChainPrimitive):
+            pts_ca = [p.main_line[0], p.main_line[1]]
+        elif isinstance(p, StairPrimitive):
+            bx_ca, by_ca, bw_ca, bh_ca = p.boundary
+            pts_ca = [(bx_ca, by_ca), (bx_ca + bw_ca, by_ca + bh_ca)]
+        elif isinstance(p, TextPrimitive):
+            hw_ca = ((p.halo_w_m if p.halo else 1.0) / 2.0) + 0.15
+            hh_ca = ((p.halo_h_m if p.halo else 0.45) / 2.0) + 0.15
+            min_x_m = min(min_x_m, p.x - hw_ca)
+            max_x_m = max(max_x_m, p.x + hw_ca)
+            min_y_m = min(min_y_m, p.y - hh_ca)
+            max_y_m = max(max_y_m, p.y + hh_ca)
+            continue
+        for px_ca, py_ca in pts_ca:
+            min_x_m = min(min_x_m, px_ca)
+            max_x_m = max(max_x_m, px_ca)
+            min_y_m = min(min_y_m, py_ca)
+            max_y_m = max(max_y_m, py_ca)
+
+    min_x_m -= 0.15
+    min_y_m -= 0.15
+    max_x_m += 0.15
+    max_y_m += 0.15
 
     span_w_m = max_x_m - min_x_m
     span_d_m = max_y_m - min_y_m
 
-    pad_pt = 14.0
+    # Reserve fixed lanes for sheet furniture so overlays never sit on the plan:
+    # top strip (freshness/status) + title badge, and one unified bottom band
+    # (scale bar + taxonomy + wall-type legend).
+    pad_pt = 12.0
+    top_reserve = 50.0
+    bot_reserve = 54.0
     avail_w = width - (2.0 * pad_pt)
-    avail_h = height - (2.0 * pad_pt)
+    avail_h = height - top_reserve - bot_reserve
 
     scale_pt = min(avail_w / max(span_w_m, 1.0), avail_h / max(span_d_m, 1.0))
-    scale_pt = max(18.0, min(36.0, scale_pt))
+    scale_pt = max(14.0, min(36.0, scale_pt))
 
     total_drawn_w = span_w_m * scale_pt
     total_drawn_h = span_d_m * scale_pt
     origin_x = (width - total_drawn_w) / 2.0 - (min_x_m * scale_pt)
-    origin_y = (height - total_drawn_h) / 2.0 - (min_y_m * scale_pt)
+    origin_y = bot_reserve + (avail_h - total_drawn_h) / 2.0 - (min_y_m * scale_pt)
+
+    def _fit_text(s: str, fs: float, max_w: float) -> str:
+        """Right-clamps a string to max_w points at Helvetica ~0.55*fs per char."""
+        if not s:
+            return s
+        if len(s) * fs * 0.55 <= max_w:
+            return s
+        keep = max(4, int(max_w / (fs * 0.55)) - 1)
+        return s[:keep].rstrip(" ,;]") + ".."
 
     def x_pt(x_m: float) -> float:
         return origin_x + (x_m * scale_pt)
@@ -3082,8 +3177,11 @@ def render_reportlab_from_ir(
                 bx, by, bw, bh = ab["badge_x"], ab["badge_y"], ab["badge_w"], ab["badge_h"]
                 lp1, lp2 = ab["leader_p1"], ab["leader_p2"]
                 drawing.add(Line(x_pt(lp1[0]), y_pt(lp1[1]), x_pt(lp2[0]), y_pt(lp2[1]), strokeColor=colors.HexColor("#9333EA"), strokeWidth=0.8))
-                drawing.add(Rect(x_pt(bx), y_pt(by), bw * scale_pt, bh * scale_pt, rx=2, ry=2, fillColor=colors.HexColor("#7E22CE"), strokeColor=None))
-                drawing.add(String(x_pt(bx + bw / 2.0), y_pt(by + bh / 2.0) - 2.5, "F0 CORE ANCHOR", textAnchor="middle", fontSize=6.0, fontName="Helvetica-Bold", fillColor=colors.white))
+                _badge_txt_w = len("F0 CORE ANCHOR") * 6.0 * 0.60 + 8.0
+                _badge_w_pt = max(bw * scale_pt, _badge_txt_w)
+                _badge_h_pt = max(bh * scale_pt, 11.0)
+                drawing.add(Rect(x_pt(bx), y_pt(by), _badge_w_pt, _badge_h_pt, rx=2, ry=2, fillColor=colors.HexColor("#7E22CE"), strokeColor=None))
+                drawing.add(String(x_pt(bx) + _badge_w_pt / 2.0, y_pt(by) + _badge_h_pt / 2.0 - 2.5, "F0 CORE ANCHOR", textAnchor="middle", fontSize=6.0, fontName="Helvetica-Bold", fillColor=colors.white))
             for dsx, dsy, dsw, dsh in g.duct_shafts:
                 drawing.add(Rect(x_pt(dsx), y_pt(dsy), dsw * scale_pt, dsh * scale_pt, fillColor=colors.HexColor("#FEF3C7"), strokeColor=colors.HexColor("#D97706"), strokeWidth=0.8, strokeDashArray=[2, 2]))
                 drawing.add(Line(x_pt(dsx), y_pt(dsy), x_pt(dsx + dsw), y_pt(dsy + dsh), strokeColor=colors.HexColor("#D97706"), strokeWidth=0.6, strokeDashArray=[2, 2]))
@@ -3190,13 +3288,21 @@ def render_reportlab_from_ir(
                 drawing.add(String(tx, ty - 2.5, str(tag_num), textAnchor="middle", fontSize=7.0, fontName="Helvetica-Bold", fillColor=colors.HexColor("#0F172A")))
             else:
                 lines = t.lines if t.lines else [t.text]
-                fs = t.font_size_pt
-                total_h_pt = len(lines) * fs * 1.25 + (t.subtext_pt * 1.25 + 3.0 if t.subtext else 0.0)
+                # Typography scales with the sheet so the collision-resolved
+                # px-space layout (36px/m) reproduces exactly at scale_pt/m.
+                # A 5pt floor keeps small-scale site labels legible.
+                _ratio = scale_pt / 36.0
+                fs = max(t.font_size_pt * _ratio, min(t.font_size_pt, 5.0))
+                sub_fs = max(t.subtext_pt * _ratio, min(t.subtext_pt, 4.5))
+                total_h_pt = len(lines) * fs * 1.25 + (sub_fs * 1.25 + 3.0 if t.subtext else 0.0)
                 top_y_pt = ty + total_h_pt / 2.0
 
                 if t.halo:
-                    hw = t.halo_w_m * scale_pt
-                    hh = t.halo_h_m * scale_pt
+                    # Halo must cover the REAL rendered text block, not just the
+                    # declared metric hint - prevents pill-vs-text overflow.
+                    _tw_pt = max([len(l) * fs * 0.55 for l in lines] + [len(t.subtext) * sub_fs * 0.55 if t.subtext else 0.0])
+                    hw = max(t.halo_w_m * scale_pt, _tw_pt + 8.0)
+                    hh = max(t.halo_h_m * scale_pt, total_h_pt + 4.0)
                     drawing.add(Rect(tx - hw / 2.0, ty - hh / 2.0, hw, hh, rx=3, ry=3, fillColor=colors.Color(1, 1, 1, alpha=0.92), strokeColor=colors.Color(0, 0, 0, alpha=0.08), strokeWidth=0.5))
 
                 curr_y = top_y_pt - fs * 0.85
@@ -3205,7 +3311,7 @@ def render_reportlab_from_ir(
                     curr_y -= fs * 1.25
                 if t.subtext:
                     curr_y -= 2.0
-                    drawing.add(String(tx, curr_y, t.subtext, textAnchor="middle", fontSize=t.subtext_pt, fontName="Helvetica", fillColor=colors.HexColor(t.subtext_color)))
+                    drawing.add(String(tx, curr_y, t.subtext, textAnchor="middle", fontSize=sub_fs, fontName="Helvetica", fillColor=colors.HexColor(t.subtext_color)))
 
     # 7. Dimension Chains Layer
     def draw_slash_tick_rl(tx: float, ty: float):
@@ -3229,23 +3335,18 @@ def render_reportlab_from_ir(
     # 8. Annotations Layer
     for annot in ir.primitives_by_layer("annotations"):
         if isinstance(annot, AnnotationPrimitive):
-            compass_x = width - 36.0
-            compass_y = height - 36.0
+            # Compass sits left of the top-right title badge, inside the reserved
+            # top strip (never over the plan).
+            compass_x = width - 40.0
+            compass_y = height - 66.0
             drawing.add(Circle(compass_x, compass_y, 14, fillColor=colors.HexColor("#F8FAFC"), strokeColor=colors.HexColor("#0F172A"), strokeWidth=1.0))
             drawing.add(Polygon([compass_x, compass_y + 11, compass_x + 4, compass_y, compass_x, compass_y + 2, compass_x - 4, compass_y], fillColor=colors.HexColor("#0F172A"), strokeColor=None))
             drawing.add(Polygon([compass_x, compass_y - 11, compass_x + 4, compass_y, compass_x, compass_y - 2, compass_x - 4, compass_y], fillColor=colors.HexColor("#94A3B8"), strokeColor=None))
             drawing.add(String(compass_x, compass_y + 14, "N", fontName="Helvetica-Bold", fontSize=8.0, textAnchor="middle", fillColor=colors.HexColor("#0F172A")))
 
-            sb_x = 36.0
-            sb_y = 16.0
-            drawing.add(String(sb_x, sb_y + 10, "GRAPHIC SCALE (METRIC)", fontName="Helvetica-Bold", fontSize=6.5, fillColor=colors.HexColor("#64748B")))
-            meter_w_pt = 1.0 * scale_pt
-            for i in range(4):
-                bx = sb_x + (i * meter_w_pt)
-                bcol = colors.HexColor("#0F172A") if i % 2 == 0 else colors.HexColor("#E2E8F0")
-                drawing.add(Rect(bx, sb_y, meter_w_pt, 4, fillColor=bcol, strokeColor=colors.HexColor("#0F172A"), strokeWidth=0.5))
-                drawing.add(String(bx, sb_y - 7, f"{i}m" if i > 0 else "0", fontName="Helvetica", fontSize=6.0, textAnchor="middle", fillColor=colors.HexColor("#64748B")))
-            drawing.add(String(sb_x + 4 * meter_w_pt, sb_y - 7, "4m", fontName="Helvetica", fontSize=6.0, textAnchor="middle", fillColor=colors.HexColor("#64748B")))
+            # Graphic scale now renders exclusively inside the unified bottom
+            # band (cell 3); the legacy free-floating bar drew underneath the
+            # wall-types cell and was removed.
 
             for stag in annot.structural_tags:
                 if "tag" in stag:
@@ -3256,47 +3357,62 @@ def render_reportlab_from_ir(
                     drawing.add(String(bx, by - 2.5, stag["bubble"], fontName="Helvetica-Bold", fontSize=6.5, textAnchor="middle", fillColor=colors.HexColor("#0F172A")))
 
             # Title Block Banner & Freshness Verification Token
-            badge_w = 290.0
+            # Anchored top-right so it can never cover the plan interior.
+            badge_w = 250.0
             badge_h = 42.0
             badge_x = width - badge_w - 12.0
-            badge_y = 10.0
-            drawing.add(Rect(badge_x, badge_y, badge_w, badge_h, rx=4, ry=4, fillColor=colors.Color(1, 1, 1, alpha=0.95), strokeColor=colors.HexColor("#CBD5E1"), strokeWidth=0.75))
-            drawing.add(String(badge_x + 8.0, badge_y + 28.0, f"{ir.header.floor_name.upper()} (+{ir.header.elevation_m:.2f}m LVL)", fontName="Helvetica-Bold", fontSize=8.0, fillColor=colors.HexColor("#0F172A")))
-            drawing.add(String(badge_x + 8.0, badge_y + 17.0, ir.header.freshness_token, fontName="Helvetica", fontSize=5.0, fillColor=colors.HexColor("#0284C7")))
-            # Stamp must fit the 290pt badge at 5pt Helvetica (~2.9pt/char):
+            badge_y = height - badge_h - 12.0
+            drawing.add(Rect(badge_x, badge_y, badge_w, badge_h, rx=4, ry=4, fillColor=colors.Color(1, 1, 1, alpha=0.96), strokeColor=colors.HexColor("#CBD5E1"), strokeWidth=0.75))
+            drawing.add(String(badge_x + 8.0, badge_y + 28.0, _fit_text(f"{ir.header.floor_name.upper()} (+{ir.header.elevation_m:.2f}m LVL)", 8.0, badge_w - 16.0), fontName="Helvetica-Bold", fontSize=8.0, fillColor=colors.HexColor("#0F172A")))
+            drawing.add(String(badge_x + 8.0, badge_y + 17.0, _fit_text(ir.header.freshness_token, 5.0, badge_w - 16.0), fontName="Helvetica", fontSize=5.0, fillColor=colors.HexColor("#0284C7")))
+            # Stamp must fit the badge at 5pt Helvetica (~2.9pt/char):
             # ellipsize the layer list middle but ALWAYS keep the legal tail.
             _stamp_full = ir.drawing_status_stamp
-            if len(_stamp_full) > 92:
+            if len(_stamp_full) > 80:
                 _tail = " - NOT FOR CONSTRUCTION"
-                _stamp_badge = _stamp_full[:92 - len(_tail) - 2].rstrip(" ,]") + ".." + _tail
+                _stamp_badge = _stamp_full[:80 - len(_tail) - 2].rstrip(" ,]") + ".." + _tail
             else:
                 _stamp_badge = _stamp_full
             drawing.add(String(badge_x + 8.0, badge_y + 6.0, _stamp_badge, fontName="Helvetica-Bold", fontSize=5.0, fillColor=colors.HexColor("#DC2626")))
 
-            # Drawing Header Top Freshness Verification Line
-            drawing.add(String(origin_x + 4.0, height - 12.0, f"{ir.header.freshness_token} | {ir.drawing_status_stamp}", fontName="Helvetica-Bold", fontSize=5.5, fillColor=colors.HexColor("#DC2626")))
+            # Drawing Header Top Freshness Verification Line (width-clamped so it
+            # can never run off-sheet or through the compass/badge).
+            drawing.add(String(12.0, height - 5.0, _fit_text(f"{ir.header.freshness_token} | {ir.drawing_status_stamp}", 5.5, width - 24.0), fontName="Helvetica-Bold", fontSize=5.5, fillColor=colors.HexColor("#DC2626")))
 
-            # Wall Type Specification Legend
-            leg_w = 200.0
-            leg_h = 32.0
-            leg_x = 14.0
-            leg_y = height - leg_h - 14.0
-            drawing.add(Rect(leg_x, leg_y, leg_w, leg_h, rx=3, ry=3, fillColor=colors.Color(1, 1, 1, alpha=0.92), strokeColor=colors.HexColor("#E2E8F0"), strokeWidth=0.5))
-            drawing.add(String(leg_x + 6.0, leg_y + 22.0, "WALL TYPES (NBC 2016 COMPLIANT):", fontName="Helvetica-Bold", fontSize=5.5, fillColor=colors.HexColor("#334155")))
-            drawing.add(Line(leg_x + 6.0, leg_y + 14.0, leg_x + 22.0, leg_y + 14.0, strokeColor=colors.HexColor("#0F172A"), strokeWidth=2.4))
-            drawing.add(String(leg_x + 26.0, leg_y + 12.5, "W1: 230mm Exterior Masonry", fontName="Helvetica", fontSize=5.0, fillColor=colors.HexColor("#475569")))
-            drawing.add(Line(leg_x + 6.0, leg_y + 6.0, leg_x + 22.0, leg_y + 6.0, strokeColor=colors.HexColor("#475569"), strokeWidth=1.4))
-            drawing.add(String(leg_x + 26.0, leg_y + 4.5, "W2: 115mm Partition / W3: 75mm", fontName="Helvetica", fontSize=5.0, fillColor=colors.HexColor("#475569")))
-
-            # Annotation Status Taxonomy Legend Box
-            tax_w = 200.0
-            tax_h = 32.0
-            tax_x = 14.0
-            tax_y = 10.0
-            drawing.add(Rect(tax_x, tax_y, tax_w, tax_h, rx=3, ry=3, fillColor=colors.Color(1, 1, 1, alpha=0.92), strokeColor=colors.HexColor("#E2E8F0"), strokeWidth=0.5))
-            drawing.add(String(tax_x + 6.0, tax_y + 22.0, "ANNOTATION STATUS TAXONOMY:", fontName="Helvetica-Bold", fontSize=5.5, fillColor=colors.HexColor("#0F172A")))
-            drawing.add(String(tax_x + 6.0, tax_y + 14.0, "[VERIFIED] Boundary & chains | [CALCULATED] Setbacks & rooms", fontName="Helvetica", fontSize=4.5, fillColor=colors.HexColor("#475569")))
-            drawing.add(String(tax_x + 6.0, tax_y + 6.0, "[ASSUMED] Road width & sewer | [RECOMMENDED] Slope (1:100)", fontName="Helvetica", fontSize=4.5, fillColor=colors.HexColor("#475569")))
+            # Unified bottom reference band: wall types + taxonomy + graphic scale
+            # in ONE reserved lane (never overlaps the plan or the title badge).
+            band_x = 12.0
+            band_w = width - 24.0
+            band_h = 44.0
+            band_y = 6.0
+            drawing.add(Rect(band_x, band_y, band_w, band_h, rx=4, ry=4, fillColor=colors.Color(1, 1, 1, alpha=0.96), strokeColor=colors.HexColor("#E2E8F0"), strokeWidth=0.5))
+            # Cell 1: Wall types
+            drawing.add(String(band_x + 6.0, band_y + 30.0, "WALL TYPES (NBC 2016):", fontName="Helvetica-Bold", fontSize=5.5, fillColor=colors.HexColor("#334155")))
+            drawing.add(Line(band_x + 6.0, band_y + 21.0, band_x + 20.0, band_y + 21.0, strokeColor=colors.HexColor("#0F172A"), strokeWidth=2.2))
+            drawing.add(String(band_x + 23.0, band_y + 19.5, "W1: 230mm Ext.", fontName="Helvetica", fontSize=5.0, fillColor=colors.HexColor("#475569")))
+            drawing.add(Line(band_x + 6.0, band_y + 10.0, band_x + 20.0, band_y + 10.0, strokeColor=colors.HexColor("#475569"), strokeWidth=1.3))
+            drawing.add(String(band_x + 23.0, band_y + 8.5, "W2: 115mm / W3: 75mm", fontName="Helvetica", fontSize=5.0, fillColor=colors.HexColor("#475569")))
+            # Cell 2: Annotation taxonomy
+            cell2_x = band_x + 118.0
+            drawing.add(Line(cell2_x, band_y + 4.0, cell2_x, band_y + band_h - 4.0, strokeColor=colors.HexColor("#E2E8F0"), strokeWidth=0.5))
+            drawing.add(String(cell2_x + 6.0, band_y + 30.0, "ANNOTATION TAXONOMY:", fontName="Helvetica-Bold", fontSize=5.5, fillColor=colors.HexColor("#0F172A")))
+            drawing.add(String(cell2_x + 6.0, band_y + 21.0, "[VERIFIED] Boundary & chains", fontName="Helvetica", fontSize=4.8, fillColor=colors.HexColor("#475569")))
+            drawing.add(String(cell2_x + 6.0, band_y + 14.0, "[CALCULATED] Setbacks & rooms", fontName="Helvetica", fontSize=4.8, fillColor=colors.HexColor("#475569")))
+            drawing.add(String(cell2_x + 6.0, band_y + 7.0, "[ASSUMED] Road & sewer | [RECOMMENDED] Slope 1:100", fontName="Helvetica", fontSize=4.8, fillColor=colors.HexColor("#475569")))
+            # Cell 3: Graphic scale
+            cell3_x = band_x + band_w - 118.0
+            drawing.add(Line(cell3_x, band_y + 4.0, cell3_x, band_y + band_h - 4.0, strokeColor=colors.HexColor("#E2E8F0"), strokeWidth=0.5))
+            drawing.add(String(cell3_x + 6.0, band_y + 30.0, "GRAPHIC SCALE (METRIC)", fontName="Helvetica-Bold", fontSize=5.5, fillColor=colors.HexColor("#64748B")))
+            meter_w_pt = 1.0 * scale_pt
+            meter_w_pt = min(meter_w_pt, 22.0)
+            sb_x = cell3_x + 6.0
+            sb_y = band_y + 14.0
+            for i in range(4):
+                bx = sb_x + (i * meter_w_pt)
+                bcol = colors.HexColor("#0F172A") if i % 2 == 0 else colors.HexColor("#E2E8F0")
+                drawing.add(Rect(bx, sb_y, meter_w_pt, 4, fillColor=bcol, strokeColor=colors.HexColor("#0F172A"), strokeWidth=0.5))
+                drawing.add(String(bx, sb_y - 7, f"{i}m" if i > 0 else "0", fontName="Helvetica", fontSize=5.5, textAnchor="middle", fillColor=colors.HexColor("#64748B")))
+            drawing.add(String(sb_x + 4 * meter_w_pt, sb_y - 7, "4m", fontName="Helvetica", fontSize=5.5, textAnchor="middle", fillColor=colors.HexColor("#64748B")))
 
     return drawing
 
@@ -3527,6 +3643,10 @@ def build_site_drawing_ir(
         ))
 
     # 3. Dims & Text: Edge labels (length + bearing) & vertex markers
+    # Edge labels sit OUTSIDE the boundary so they never collide with the
+    # setback band, parking aisle, or building-line annotation lanes.
+    cen_x = sum(float(v[0]) for v in vertices) / max(n_v, 1)
+    cen_y = sum(float(v[1]) for v in vertices) / max(n_v, 1)
     for e in edges:
         idx = int(_get(e, "edge_index", 1)) - 1
         p1 = vertices[idx % n_v]
@@ -3536,18 +3656,35 @@ def build_site_drawing_ir(
         dx = float(p2[0]) - float(p1[0])
         dy = float(p2[1]) - float(p1[1])
         L = math.hypot(dx, dy)
-        nx = (-dy / L) * 0.70 if L > 0 else 0.0
-        ny = (dx / L) * 0.70 if L > 0 else 0.0
+        if L > 0:
+            nx = (-dy / L) * 1.05 if L > 0 else 0.0
+            ny = (dx / L) * 1.05 if L > 0 else 0.0
+        else:
+            nx = 0.0
+            ny = 0.0
+        # Point the normal AWAY from the polygon centroid (outward).
+        if (mx + nx - cen_x) * nx + (my + ny - cen_y) * ny < 0:
+            nx, ny = -nx, -ny
+        # Vertical lane clamps: the top edge's outward label would sit under
+        # the title badge, and the front edge's would hit the gate/utility
+        # pills - clamp both into free lanes.
+        lbl_y = my + ny
+        if lbl_y > bbox_d + 0.55:
+            lbl_y = round(bbox_d + 0.55, 2)
+        elif lbl_y < -0.90:
+            lbl_y = round(-1.95, 2)
         length_val = float(_get(e, "length_m", L))
         bearing_val = str(_get(e, "bearing_dms", ""))
         primitives.append(TextPrimitive(
             x=round(mx + nx, 2),
-            y=round(my + ny, 2),
+            y=lbl_y,
             text=f"{length_val:.2f}m",
             subtext=bearing_val,
             font_size_pt=6.5,
             font_weight="bold",
             halo=True,
+            halo_w_m=2.2,
+            halo_h_m=0.75,
             layer="text"
         ))
 
@@ -3555,14 +3692,24 @@ def build_site_drawing_ir(
         vid = str(_get(vt, "id", "P"))
         vx = float(_get(vt, "x_m", 0.0))
         vy = float(_get(vt, "y_m", 0.0))
+        # Vertex tags nudge inward off the boundary so the vertex bubble and
+        # coordinate text never sit on top of the boundary stroke itself.
+        _in_x = 0.0
+        _in_y = 0.0
+        if cen_x > 0.0:
+            _in_x = 0.75 if vx < cen_x else (-0.75 if vx > cen_x else 0.0)
+        if cen_y > 0.0:
+            _in_y = 0.75 if vy < cen_y else (-0.75 if vy > cen_y else 0.0)
         primitives.append(TextPrimitive(
-            x=round(vx, 2),
-            y=round(vy, 2),
+            x=round(vx + _in_x, 2),
+            y=round(vy + _in_y, 2),
             text=vid,
             subtext=f"({vx:.1f}, {vy:.1f})",
             font_size_pt=6.5,
             font_weight="bold",
             halo=True,
+            halo_w_m=1.5,
+            halo_h_m=0.7,
             layer="text"
         ))
 
@@ -3680,63 +3827,68 @@ def build_site_drawing_ir(
             layer="text"
         ))
 
-    # 3. Derivation Banner & Building-Line Truth
+    # 3. Derivation Banner & Building-Line Truth - compact single line; the
+    # full chain renders in the report callout + title block, so an on-plan
+    # second line would only collide with the neighbour tick below it.
     primitives.append(TextPrimitive(
-        x=round(bbox_w / 2.0, 2),
-        y=round(bbox_d + 0.50, 2),
-        text="FOOTPRINT DERIVED FROM BUILDABLE POLYGON P1..Pn",
-        subtext="DERIVATION CHAIN: PLOT -> SETBACKS -> BUILDABLE -> BUILDING LINE [VERIFIED]",
-        font_size_pt=8.0,
+        x=round(bbox_w * 0.30, 2),
+        y=round(bbox_d + 0.85, 2),
+        text="FOOTPRINT DERIVED FROM BUILDABLE POLYGON P1..Pn [VERIFIED]",
+        font_size_pt=7.5,
         font_weight="bold",
         halo=True,
         halo_w_m=9.5,
-        halo_h_m=0.8,
+        halo_h_m=0.6,
         layer="text",
         status="VERIFIED"
     ))
 
     # 4. Mandatory Site Sheet Checklist Items (8 Criteria)
+    # Organized into dedicated horizontal lanes BELOW the plot so adjacent
+    # items never stack on each other:
+    #   lane -0.50 : road corridor (inside plot frontage)
+    #   lane -1.15 : gate pair (left) + sewer/stormwater (kept apart)
+    #   lane -1.95 : drainage direction + parking envelope
+    #   lane -2.75 : policy banner
     # Item 1: Road side & width (ASSUMED)
     primitives.append(TextPrimitive(
         x=round(bbox_w / 2.0, 2),
         y=-0.50,
-        text="PUBLIC ACCESS ROAD (WIDTH: 9.00m)",
-        subtext="FRONT ACCESS CORRIDOR [ASSUMED]",
+        text="PUBLIC ACCESS ROAD (WIDTH: 9.00m) [ASSUMED]",
         font_size_pt=7.0,
         font_weight="bold",
         halo=True,
         halo_w_m=7.0,
-        halo_h_m=0.7,
+        halo_h_m=0.6,
         layer="text",
         status="ASSUMED"
     ))
 
-    # Item 2: Vehicular gate & pedestrian entry (RECOMMENDED)
-    gate_vx = min(2.5, bbox_w * 0.25)
-    gate_px = min(bbox_w - 2.0, max(5.0, bbox_w * 0.70))
+    # Item 2: Vehicular gate & pedestrian entry (RECOMMENDED) - single-line
+    # pills, split left/right in the same lane.
+    gate_vx = round(bbox_w * 0.18, 2)
+    gate_px = round(bbox_w * 0.84, 2)
     primitives.append(TextPrimitive(
         x=round(gate_vx, 2),
-        y=0.0,
-        text="VEHICULAR GATE (3.50m CLEAR)",
-        subtext="PRIMARY DRIVEWAY ACCESS [RECOMMENDED]",
+        y=round(-1.15, 2),
+        text="VEHICULAR GATE 3.50m [RECOMMENDED]",
         font_size_pt=6.5,
         font_weight="bold",
         halo=True,
-        halo_w_m=5.0,
-        halo_h_m=0.65,
+        halo_w_m=5.5,
+        halo_h_m=0.6,
         layer="text",
         status="RECOMMENDED"
     ))
     primitives.append(TextPrimitive(
         x=round(gate_px, 2),
-        y=0.0,
-        text="PEDESTRIAN ENTRY (1.20m CLEAR)",
-        subtext="BARRIER-FREE WALKWAY [RECOMMENDED]",
+        y=round(-1.15, 2),
+        text="PEDESTRIAN ENTRY 1.20m [RECOMMENDED]",
         font_size_pt=6.5,
         font_weight="bold",
         halo=True,
-        halo_w_m=5.0,
-        halo_h_m=0.65,
+        halo_w_m=5.5,
+        halo_h_m=0.6,
         layer="text",
         status="RECOMMENDED"
     ))
@@ -3764,29 +3916,27 @@ def build_site_drawing_ir(
                 status="CALCULATED"
             ))
         primitives.append(TextPrimitive(
-            x=round(bbox_w / 2.0, 2),
-            y=1.2,
-            text="DRIVE AISLE (3.50m CLEAR)",
-            subtext="CIRCULATION AISLE [CALCULATED]",
-            font_size_pt=6.5,
-            font_weight="bold",
-            halo=True,
-            halo_w_m=4.5,
-            halo_h_m=0.6,
-            layer="text",
-            status="CALCULATED"
-        ))
+        x=round(bbox_w / 2.0, 2),
+        y=1.85,
+        text="DRIVE AISLE 3.50m CLEAR [CALCULATED]",
+        font_size_pt=6.5,
+        font_weight="bold",
+        halo=True,
+        halo_w_m=4.5,
+        halo_h_m=0.55,
+        layer="text",
+        status="CALCULATED"
+    ))
     else:
         primitives.append(TextPrimitive(
             x=round(bbox_w / 2.0, 2),
-            y=1.2,
-            text="PARKING ENVELOPE (ECS BAY 2.50m x 5.00m + 3.50m AISLE)",
-            subtext="PARKING RESERVED AT FRONT SETBACK [CALCULATED]",
+            y=1.85,
+            text="PARKING ENVELOPE: ECS BAY 2.50x5.00m + 3.50m AISLE [CALCULATED]",
             font_size_pt=6.5,
             font_weight="bold",
             halo=True,
             halo_w_m=8.5,
-            halo_h_m=0.65,
+            halo_h_m=0.55,
             layer="text",
             status="CALCULATED"
         ))
@@ -3807,60 +3957,57 @@ def build_site_drawing_ir(
             status="CALCULATED"
         ))
 
-    # Item 4: Sewer connection point (ASSUMED)
+    # Item 4: Sewer connection point (ASSUMED) - single-line pill, row 2 left.
     primitives.append(TextPrimitive(
-        x=0.80,
-        y=0.35,
-        text="SEWER CONNECTION POINT (MH-01)",
-        subtext="INVERT LEVEL -1.20m TO MUNICIPAL MAIN [ASSUMED]",
+        x=round(bbox_w * 0.20, 2),
+        y=round(-2.60, 2),
+        text="SEWER MH-01 INVERT -1.20m [ASSUMED]",
         font_size_pt=6.5,
         font_weight="bold",
         halo=True,
-        halo_w_m=5.5,
-        halo_h_m=0.65,
+        halo_w_m=6.5,
+        halo_h_m=0.6,
         layer="text",
         status="ASSUMED"
     ))
 
-    # Item 5: Stormwater outlet & drainage arrows (RECOMMENDED)
+    # Item 5: Stormwater outlet & drainage arrows (RECOMMENDED) - row 2 right.
     primitives.append(TextPrimitive(
-        x=round(bbox_w - 1.50, 2),
-        y=0.35,
-        text="STORMWATER OUTLET (SWO-01)",
-        subtext="DISCHARGE TO STREET SWALE [RECOMMENDED]",
+        x=round(bbox_w * 0.82, 2),
+        y=round(-1.95, 2),
+        text="STORMWATER SWO-01 [RECOMMENDED]",
+        font_size_pt=6.5,
+        font_weight="bold",
+        halo=True,
+        halo_w_m=6.5,
+        halo_h_m=0.6,
+        layer="text",
+        status="RECOMMENDED"
+    ))
+    primitives.append(TextPrimitive(
+        x=round(bbox_w * 0.82, 2),
+        y=round(-1.95, 2),
+        text="DRAINAGE FLOW >> SLOPE 1:100 [RECOMMENDED]",
         font_size_pt=6.5,
         font_weight="bold",
         halo=True,
         halo_w_m=5.5,
-        halo_h_m=0.65,
-        layer="text",
-        status="RECOMMENDED"
-    ))
-    primitives.append(TextPrimitive(
-        x=round(bbox_w - 1.50, 2),
-        y=round(bbox_d / 2.0, 2),
-        text="DRAINAGE DIRECTION ──►",
-        subtext="SURFACE RUNOFF SLOPE 1:100 [RECOMMENDED]",
-        font_size_pt=6.5,
-        font_weight="bold",
-        halo=True,
-        halo_w_m=4.5,
-        halo_h_m=0.65,
+        halo_h_m=0.55,
         layer="text",
         status="RECOMMENDED"
     ))
 
-    # Item 6: Finished ground level & slope note (RECOMMENDED)
+    # Item 6: Finished ground level & slope note (RECOMMENDED) - compact pill
+    # on the upper-LEFT so it clears the rear-setback pill on the right.
     primitives.append(TextPrimitive(
-        x=round(bbox_w / 2.0, 2),
+        x=round(bbox_w * 0.24, 2),
         y=round(bbox_d - 0.40, 2),
-        text="FINISHED GROUND LEVEL (FGL): +0.15m",
-        subtext="CROSS-FALL SLOPE 1:100 TO DRAINAGE OUTLET [RECOMMENDED]",
+        text="FGL +0.15m [RECOMMENDED]",
         font_size_pt=6.5,
         font_weight="bold",
         halo=True,
-        halo_w_m=8.5,
-        halo_h_m=0.65,
+        halo_w_m=3.4,
+        halo_h_m=0.55,
         layer="text",
         status="RECOMMENDED"
     ))
@@ -3880,102 +4027,95 @@ def build_site_drawing_ir(
         status="CALCULATED"
     ))
     primitives.append(TextPrimitive(
-        x=round(bbox_w / 2.0, 2),
-        y=round(bbox_d - sb_rear / 2.0, 2),
-        text=f"REAR SETBACK: {sb_rear:.2f}m",
-        subtext="NBC 2016 REAR CLEARANCE [CALCULATED]",
+        x=round(bbox_w * 0.29, 2),
+        y=round(bbox_d - sb_rear / 2.0 - 0.40, 2),
+        text=f"REAR SETBACK {sb_rear:.2f}m [CALCULATED]",
         font_size_pt=6.5,
         font_weight="bold",
         halo=True,
         halo_w_m=4.5,
-        halo_h_m=0.65,
+        halo_h_m=0.55,
         layer="text",
         status="CALCULATED"
     ))
+    # Side setback tags: compact two-line pills in the OPPOSITE side bands,
+    # clear of the parking-bay row and the neighbour pills (bbox_d/2 lane).
     primitives.append(TextPrimitive(
         x=round(sb_s1 / 2.0, 2),
-        y=round(bbox_d / 2.0, 2),
-        text=f"SIDE 1 SETBACK: {sb_s1:.2f}m",
-        subtext="NBC 2016 SIDE CLEARANCE [CALCULATED]",
+        y=round(bbox_d * 0.70, 2),
+        text="SIDE 1 SETBACK:",
+        subtext=f"{sb_s1:.2f}m [CALCULATED]",
+        subtext_pt=6.0,
         font_size_pt=6.5,
         font_weight="bold",
         halo=True,
-        halo_w_m=4.5,
-        halo_h_m=0.65,
+        halo_w_m=2.2,
+        halo_h_m=1.0,
         layer="text",
         status="CALCULATED"
     ))
     primitives.append(TextPrimitive(
         x=round(bbox_w - sb_s2 / 2.0, 2),
-        y=round(bbox_d / 2.0, 2),
-        text=f"SIDE 2 SETBACK: {sb_s2:.2f}m",
-        subtext="NBC 2016 SIDE CLEARANCE [CALCULATED]",
+        y=round(bbox_d * 0.36, 2),
+        text="SIDE 2 SETBACK:",
+        subtext=f"{sb_s2:.2f}m [CALCULATED]",
+        subtext_pt=6.0,
         font_size_pt=6.5,
         font_weight="bold",
         halo=True,
-        halo_w_m=4.5,
-        halo_h_m=0.65,
+        halo_w_m=2.2,
+        halo_h_m=1.0,
         layer="text",
         status="CALCULATED"
     ))
 
-    # Item 8: Neighbour ticks (ASSUMED)
+    # Item 8: Neighbour ticks (ASSUMED) - compact single-line labels hugging the
+    # boundary, replacing the old wide two-line pills that collided with edges.
     primitives.append(TextPrimitive(
-        x=round(bbox_w / 2.0, 2),
-        y=round(bbox_d + 0.15, 2),
-        text="ADJOINING PROPERTY (REAR)",
-        subtext="NEIGHBOUR BOUNDARY [ASSUMED]",
+        x=round(bbox_w * 0.60, 2),
+        y=round(bbox_d + 0.30, 2),
+        text="ADJOINING PROPERTY (REAR) [ASSUMED]",
         font_size_pt=6.0,
         font_weight="semibold",
         halo=True,
-        halo_w_m=4.5,
-        halo_h_m=0.6,
+        halo_w_m=5.5,
+        halo_h_m=0.55,
         layer="text",
         status="ASSUMED"
     ))
     primitives.append(TextPrimitive(
-        x=-0.25,
-        y=round(bbox_d / 2.0, 2),
-        text="ADJOINING PROPERTY (SIDE 1)",
-        subtext="NEIGHBOUR BOUNDARY [ASSUMED]",
+        x=round(-0.25, 2),
+        y=round(bbox_d * 0.33, 2),
+        text="ADJOINING PROPERTY (SIDE 1) [ASSUMED]",
+        subtext="NEIGHBOUR BOUNDARY",
         font_size_pt=6.0,
         font_weight="semibold",
         halo=True,
         halo_w_m=4.5,
-        halo_h_m=0.6,
+        halo_h_m=0.8,
         layer="text",
         status="ASSUMED"
     ))
     primitives.append(TextPrimitive(
         x=round(bbox_w + 0.25, 2),
         y=round(bbox_d / 2.0, 2),
-        text="ADJOINING PROPERTY (SIDE 2)",
-        subtext="NEIGHBOUR BOUNDARY [ASSUMED]",
+        text="ADJOINING PROPERTY (SIDE 2) [ASSUMED]",
+        subtext="NEIGHBOUR BOUNDARY",
         font_size_pt=6.0,
         font_weight="semibold",
         halo=True,
         halo_w_m=4.5,
-        halo_h_m=0.6,
+        halo_h_m=0.8,
         layer="text",
         status="ASSUMED"
     ))
 
-    # Declared Design Policy & Rationale Text
+    # Declared Design Policy: intentionally NOT duplicated as on-plan text -
+    # it already renders in the SVG/PDF banner block, the title-block payload,
+    # and the report's Declared Design Policy callout. Duplicating it here
+    # caused overlapping label stacks on the site sheet.
     design_policy = _get(site_plan, "design_policy", None)
     design_policy_rationale = _get(site_plan, "design_policy_rationale", None)
-    if design_policy:
-        primitives.append(TextPrimitive(
-            x=1.0,
-            y=round(bbox_d - 1.2, 2),
-            text=f"POLICY: {design_policy}",
-            subtext=f"Rationale: {design_policy_rationale}" if design_policy_rationale else "",
-            font_size_pt=6.5,
-            font_weight="bold",
-            halo=True,
-            halo_w_m=8.0,
-            halo_h_m=0.8,
-            layer="text"
-        ))
 
     # 5. Annotations: Compass, scale bar, and title block
     shape_label = str(_get(plot_poly, "shape_type", "SITE")).replace("_", "-").upper()
@@ -4009,7 +4149,6 @@ def build_site_drawing_ir(
                     x=round(cx, 2),
                     y=round(cy, 2),
                     text=f"F{fi + 1}",
-                    subtext="PAD FOOTING (HINT)",
                     font_size_pt=6.0,
                     font_weight="bold",
                     color="#B45309",
@@ -4028,6 +4167,39 @@ def build_site_drawing_ir(
     site_gate = _get(site_plan, "validation_gate", None) or {}
     site_gate_layers = list(site_gate.get("layers") or [])
     site_gate_overall = str(site_gate.get("overall_status", "PASS"))
+
+    # --- Label declutter pass -------------------------------------------------
+    # Site sheets carry many one/two-line pill labels placed lane-by-lane; when
+    # a plot is tight, two pills can still land on the same spot. This greedy
+    # pass nudges overlapping TEXT labels horizontally (then vertically) until
+    # every pair is clear, preserving all checklist content.
+    _DEC_TOL = 0.35  # meters of required clearance between pill edges
+
+    def _pill_box(tp: TextPrimitive) -> Tuple[float, float, float, float]:
+        w = (tp.halo_w_m if tp.halo else 1.2)
+        h = (tp.halo_h_m if tp.halo else 0.5)
+        return (tp.x - w / 2.0, tp.y - h / 2.0, tp.x + w / 2.0, tp.y + h / 2.0)
+
+    _text_prims = [p for p in primitives if isinstance(p, TextPrimitive)]
+    for _i in range(len(_text_prims)):
+        for _step in range(14):
+            _moved = False
+            _box_i = _pill_box(_text_prims[_i])
+            for _j in range(len(_text_prims)):
+                if _j == _i:
+                    continue
+                _box_j = _pill_box(_text_prims[_j])
+                _overlap_x = (_box_i[0] + _DEC_TOL < _box_j[2]) and (_box_j[0] + _DEC_TOL < _box_i[2])
+                _overlap_y = (_box_i[1] + _DEC_TOL < _box_j[3]) and (_box_j[1] + _DEC_TOL < _box_i[3])
+                if _overlap_x and _overlap_y:
+                    # Nudge the lower-priority (later) label horizontally first.
+                    _dx = 0.9 if _text_prims[_i].x <= _text_prims[_j].x else -0.9
+                    _text_prims[_i].x = round(_text_prims[_i].x + _dx, 2)
+                    _text_prims[_i].halo_w_m = max(1.0, _text_prims[_i].halo_w_m)
+                    _box_i = _pill_box(_text_prims[_i])
+                    _moved = True
+            if not _moved:
+                break
 
     header = SheetHeaderInfo(
         gen_id=str(gen_id),
