@@ -35,6 +35,29 @@ const CUSTOM_LAYER_IDS = new Set([
   'water-bodies-line',
 ]);
 
+// Duration of the animated cross-fade when switching map modes (ms).
+const STYLE_FADE_MS = 650;
+
+// Paint property that controls opacity for each MapLibre layer type. Animating these
+// (instead of flipping `visibility`) is what makes mode switches cross-fade smoothly.
+const PAINT_OPACITY_PROPS: Record<string, string[]> = {
+  background: ['background-opacity'],
+  circle: ['circle-opacity'],
+  fill: ['fill-opacity'],
+  'fill-extrusion': ['fill-extrusion-opacity'],
+  heatmap: ['heatmap-opacity'],
+  line: ['line-opacity'],
+  raster: ['raster-opacity'],
+  symbol: ['icon-opacity', 'text-opacity'],
+  hillshade: ['hillshade-exaggeration'],
+};
+
+const isStreetLineLayer = (layer: { type: string; id: string }) =>
+  layer.type === 'line' &&
+  (layer.id.startsWith('road_') ||
+    layer.id.startsWith('bridge_') ||
+    layer.id.startsWith('highway_'));
+
 const EMPTY_GEOJSON_COLLECTION: FeatureCollection = {
   type: 'FeatureCollection',
   features: [],
@@ -104,6 +127,14 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const entranceShaftGeoJsonRef = useRef<FeatureCollection>(EMPTY_GEOJSON_COLLECTION);
   const entranceHeadGeoJsonRef = useRef<FeatureCollection>(EMPTY_GEOJSON_COLLECTION);
   const footprintCornersLatLngRef = useRef<{ lat: number; lng: number }[]>([]);
+  // Animated mode switching: per-style-load cache of each base layer's authored paint
+  // opacity so fades restore the exact original value (some are expressions), plus a
+  // deferred pass that flips visibility off only after a fade-out completes.
+  const originalPaintOpacitiesRef = useRef<Map<string, any>>(new Map());
+  const styleFadeCleanupRef = useRef<{
+    timer: ReturnType<typeof setTimeout>;
+    mode: MapStyleMode;
+  } | null>(null);
 
   // Default coordinate: Center of India (Nagpur / Central Plateau)
   const defaultLat = 20.5937;
@@ -132,43 +163,25 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   };
 
   /**
-   * Hybrid Logic Filter (map mode compositing):
-   * - Standard: every base style layer visible; 3D buildings on with an auto camera tilt
-   *   once zoomed past the extrusion minzoom (top-down views hide building height).
-   * - Satellite: hide ALL base layers (fills, lines, symbols, raster, background) and show
-   *   the Esri imagery raster instead. 3D buildings are hidden so grey extrusion slabs never
-   *   ghost over the photography; vector street lines are re-projected on top instead.
-   * - Terrain: same full base hide; OpenTopoMap raster + DEM-driven 3D relief + hillshade,
-   *   with building extrusions draped over the relief (Apple Maps "3D city" style).
-   * Custom overlay layers (footprint, entrance, canopy, water) are never touched.
+   * Animated mode switching (Apple Maps behaviour): base layers cross-fade over
+   * STYLE_FADE_MS while the camera pitches/levels, instead of snapping.
+   *
+   * How it works:
+   * 1. Compute the target opacity (0 or authored) for every base layer in the new mode.
+   * 2. Layers keep `visibility: 'visible'` for the whole animation so MapLibre
+   *    interpolates paint values on-GPU with zero flicker; a deferred pass flips
+   *    visibility off only once a fade-out has completed.
+   * 3. Custom overlays (footprint, entrance, canopy, water) are never touched.
    */
   const applyMapStyleVisibility = (map: maplibregl.Map, mode: MapStyleMode) => {
     const style = map.getStyle();
     if (!style || !style.layers) return;
 
-    if (map.getLayer('satellite-layer')) {
-      map.setLayoutProperty('satellite-layer', 'visibility', mode === 'satellite' ? 'visible' : 'none');
-    }
-    if (map.getLayer('terrain-layer')) {
-      map.setLayoutProperty('terrain-layer', 'visibility', mode === 'terrain' ? 'visible' : 'none');
-    }
-    if (map.getLayer('hillshade-layer')) {
-      map.setLayoutProperty('hillshade-layer', 'visibility', mode === 'terrain' ? 'visible' : 'none');
-    }
-    // Building extrusions live in Standard (vector) and Terrain (relief) views — never over imagery.
-    if (map.getLayer('3d-buildings')) {
-      map.setLayoutProperty(
-        '3d-buildings',
-        'visibility',
-        mode === 'satellite' ? 'none' : 'visible'
-      );
-    }
-
+    const orig = originalPaintOpacitiesRef.current;
+    const fadeTargets: { layerId: string; type: string; target: number }[] = [];
     const hasVectorStreets = Boolean(map.getLayer('vector-street-lines'));
 
     for (const layer of style.layers) {
-      if (CUSTOM_LAYER_IDS.has(layer.id)) continue;
-
       // Liberty ships its own building-3d extrusion that would ghost over imagery — kill it.
       if (layer.id === 'building-3d') {
         try {
@@ -179,29 +192,121 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         continue;
       }
 
+      // Dedicated raster/3D layers we injected: fade by mode. (Must be handled BEFORE
+      // the CUSTOM_LAYER_IDS guard below, which only exists to protect user overlays.)
+      if (layer.id === 'satellite-layer') {
+        fadeTargets.push({ layerId: layer.id, type: layer.type, target: mode === 'satellite' ? 1 : 0 });
+        continue;
+      }
+      if (layer.id === 'terrain-layer' || layer.id === 'hillshade-layer') {
+        fadeTargets.push({ layerId: layer.id, type: layer.type, target: mode === 'terrain' ? 1 : 0 });
+        continue;
+      }
+      if (layer.id === '3d-buildings') {
+        // Extrusions live in Standard (vector) and Terrain (relief) views — never over imagery.
+        fadeTargets.push({ layerId: layer.id, type: layer.type, target: mode === 'satellite' ? 0 : 1 });
+        continue;
+      }
+
+      // Custom overlay layers (footprint, entrance, canopy, water) are never touched.
+      if (CUSTOM_LAYER_IDS.has(layer.id)) continue;
+
+      let target: number;
+      if (mode === 'standard') {
+        target = 1;
+      } else if (mode === 'satellite') {
+        // Keep only street/road lines above imagery for Apple-style dark cartography
+        // (suppressed when the dedicated vector-street-lines overlay already covers it).
+        target = isStreetLineLayer(layer) && !hasVectorStreets ? 1 : 0;
+      } else {
+        target = 0; // terrain
+      }
+      fadeTargets.push({ layerId: layer.id, type: layer.type, target });
+    }
+
+    // Capture each layer's authored paint opacity once (per style load) so fades always
+    // restore the exact original value — some are data expressions, not plain numbers.
+    for (const ft of fadeTargets) {
+      if (orig.has(ft.layerId)) continue;
+      const props = PAINT_OPACITY_PROPS[ft.type];
+      let value: any = 1;
+      if (props) {
+        try {
+          value = (map as any).getPaintProperty(ft.layerId, props[0]);
+        } catch {
+          value = 1;
+        }
+      }
+      orig.set(ft.layerId, value ?? 1);
+    }
+
+    // Cancel any in-flight deferred pass from a rapid style switch.
+    if (styleFadeCleanupRef.current) {
+      clearTimeout(styleFadeCleanupRef.current.timer);
+      styleFadeCleanupRef.current = null;
+    }
+
+    let anyFadeOut = false;
+    for (const { layerId, type, target } of fadeTargets) {
+      const props = PAINT_OPACITY_PROPS[type];
+      if (!props) continue;
+
+      const authored = orig.get(layerId) ?? 1;
+      const toValue = target === 1 ? authored : 0;
+      // Give freshly-shown raster tiles a head start so the fade-in reveals loaded imagery.
+      const delay = target === 1 && type === 'raster' ? 100 : 0;
+
       try {
-        if (mode === 'standard') {
-          map.setLayoutProperty(layer.id, 'visibility', 'visible');
-        } else if (mode === 'satellite') {
-          // Keep only street/road casings + lines above imagery for Apple-style dark cartography.
-          const isStreetLine =
-            layer.type === 'line' &&
-            (layer.id.startsWith('road_') ||
-              layer.id.startsWith('bridge_') ||
-              layer.id.startsWith('highway_'));
-          if (isStreetLine && hasVectorStreets) {
-            map.setLayoutProperty(layer.id, 'visibility', 'none');
-          } else if (isStreetLine) {
-            map.setLayoutProperty(layer.id, 'visibility', 'visible');
-          } else {
-            map.setLayoutProperty(layer.id, 'visibility', 'none');
-          }
-        } else if (mode === 'terrain') {
-          map.setLayoutProperty(layer.id, 'visibility', 'none');
+        if (target === 1 && (map as any).getLayoutProperty(layerId, 'visibility') === 'none') {
+          map.setLayoutProperty(layerId, 'visibility', 'visible');
         }
       } catch {
-        // Ignore unmodifiable internal layer styles
+        // ignore
       }
+
+      for (const prop of props) {
+        let current: any;
+        try {
+          current = (map as any).getPaintProperty(layerId, prop);
+        } catch {
+          continue;
+        }
+        // Styles often omit opacity (implicit 1) — getPaintProperty then returns
+        // undefined, so normalize before comparing or the fade would be skipped.
+        const currentNum = typeof current === 'number' ? current : 1;
+        if (currentNum === toValue) continue;
+
+        if (target === 0) anyFadeOut = true;
+        try {
+          (map as any).setPaintProperty(layerId, `${prop}-transition`, {
+            duration: STYLE_FADE_MS,
+            delay,
+          });
+          (map as any).setPaintProperty(layerId, prop, toValue);
+        } catch {
+          // Ignore unmodifiable internal layer styles
+        }
+      }
+    }
+
+    // Deferred pass: hide layers that ended fully transparent once the fade completes.
+    if (anyFadeOut) {
+      const timer = setTimeout(() => {
+        styleFadeCleanupRef.current = null;
+        for (const { layerId, type, target } of fadeTargets) {
+          if (target !== 0) continue;
+          const props = PAINT_OPACITY_PROPS[type];
+          if (!props) continue;
+          try {
+            if ((map as any).getPaintProperty(layerId, props[0]) === 0) {
+              map.setLayoutProperty(layerId, 'visibility', 'none');
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }, STYLE_FADE_MS);
+      styleFadeCleanupRef.current = { timer, mode };
     }
   };
 
@@ -260,6 +365,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const setupCustomLayersAndSources = (map: maplibregl.Map) => {
     const style = map.getStyle();
     if (!style) return;
+
+    // Fresh style (initial load or theme switch): re-capture authored paint opacities.
+    originalPaintOpacitiesRef.current.clear();
 
     const currentTheme = themeRef.current;
     const currentMode = mapStyleRef.current;
@@ -784,6 +892,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       if (markerRef.current) {
         markerRef.current.remove();
         markerRef.current = null;
+      }
+      if (styleFadeCleanupRef.current) {
+        clearTimeout(styleFadeCleanupRef.current.timer);
+        styleFadeCleanupRef.current = null;
       }
       map.remove();
       mapInstanceRef.current = null;
