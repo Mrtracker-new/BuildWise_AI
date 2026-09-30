@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { FeatureCollection, Polygon, LineString } from 'geojson';
@@ -35,8 +35,27 @@ const CUSTOM_LAYER_IDS = new Set([
   'water-bodies-line',
 ]);
 
-// Duration of the animated cross-fade when switching map modes (ms).
-const STYLE_FADE_MS = 650;
+// Animated map-mode switching (Apple Maps feel): a quick base cross-fade with labels
+// staggered on top — outgoing labels duck out first, incoming ones arrive last.
+const STYLE_FADE_MS = 420; // base layers (fills, lines, rasters, extrusions)
+const LABEL_FADE_IN_DELAY_MS = 140; // labels wait for the base to settle
+const LABEL_FADE_MS = 280; // incoming labels fade in quickly
+const LABEL_FADE_OUT_MS = 200; // outgoing labels leave early
+const RASTER_TILE_HEAD_START_MS = 80; // let fresh raster tiles decode before revealing
+const TILE_READY_TIMEOUT_MS = 1200; // max wait for incoming raster tiles before fading anyway
+const TILE_CHECK_INTERVAL_MS = 60; // poll frequency for tile-readiness checks
+// Zoom-pulse "dive": the camera pushes in ~1/3 zoom level as the new layer fades in,
+// then settles back — one synchronized beat instead of a flat opacity swap.
+const PULSE_ZOOM_DELTA = 0.32; // zoom levels pushed in at the pulse apex
+const PULSE_IN_MS = 280; // standalone dive-in duration (no pitch change)
+const PULSE_OUT_MS = 420; // settle-back duration
+
+/** Camera ease issued by syncCameraForMode — folded into the zoom pulse when present. */
+interface CameraEaseTarget {
+  pitch: number;
+  bearing?: number;
+  duration: number;
+}
 
 // Paint property that controls opacity for each MapLibre layer type. Animating these
 // (instead of flipping `visibility`) is what makes mode switches cross-fade smoothly.
@@ -135,6 +154,22 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     timer: ReturnType<typeof setTimeout>;
     mode: MapStyleMode;
   } | null>(null);
+  // setTimeout handle for the zoom-pulse settle phase (mode-switch "dive" beat).
+  const zoomPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The zoom the camera must settle back to. Captured only when no pulse is already
+  // active, so rapid re-switches mid-dive keep returning to the ORIGINAL zoom instead
+  // of compounding upward (re-basing on mid-flight zoom would drift +Δ per volley).
+  const pulseBaseZoomRef = useRef<number | null>(null);
+  // Previous mode seen by the style effect — distinguishes real mode switches from
+  // initial mount / StrictMode remount so the pulse never fires on page load.
+  const prevMapStyleRef = useRef<MapStyleMode | null>(null);
+  // Increments per applyMapStyleVisibility run so awaited tile-readiness gates can
+  // detect when a newer switch superseded them mid-await.
+  const styleFadeRunIdRef = useRef<number>(0);
+  // Raster layers deliberately kept visible at opacity 0 as a standing tile cache.
+  // The deferred hide pass must never hide these — their residency is what makes
+  // subsequent mode switches instant.
+  const prewarmedRasterLayersRef = useRef<Set<string>>(new Set());
 
   // Default coordinate: Center of India (Nagpur / Central Plateau)
   const defaultLat = 20.5937;
@@ -162,6 +197,95 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     return el;
   };
 
+  // ---------- Raster tile readiness (polished mode switching) ----------
+
+  /**
+   * True when the layer's source has finished loading everything it needs for the
+   * current viewport (map.isSourceLoaded). A hidden layer is never "ready" — the
+   * caller must reveal it first so MapLibre actually starts fetching tiles.
+   */
+  const isLayerReady = (map: maplibregl.Map, layerId: string) => {
+    try {
+      const layer = (map as any).getLayer(layerId);
+      if (!layer) return true;
+      if ((map as any).getLayoutProperty(layerId, 'visibility') === 'none') return false;
+      return map.isSourceLoaded(layer.source);
+    } catch {
+      return true;
+    }
+  };
+
+  /**
+   * Resolves once the given raster layer has all of its viewport tiles loaded — or
+   * after TILE_READY_TIMEOUT_MS, so a slow tile server can never stall the UI.
+   */
+  const waitForRasterTiles = (map: maplibregl.Map, layerId: string) =>
+    new Promise<boolean>((resolve) => {
+      if (isLayerReady(map, layerId)) {
+        resolve(true);
+        return;
+      }
+      let settled = false;
+      const done = (ready: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearInterval(poll);
+        clearTimeout(timeout);
+        resolve(ready);
+      };
+      const poll = setInterval(() => {
+        if (isLayerReady(map, layerId)) done(true);
+      }, TILE_CHECK_INTERVAL_MS);
+      const timeout = setTimeout(() => done(false), TILE_READY_TIMEOUT_MS);
+    });
+
+  /**
+   * Kick off tile downloads for a raster mode without showing it: the layer is made
+   * visible at opacity 0 (MapLibre only fetches tiles for visible layers), rendered
+   * once, and left resident in the source cache. Runs when the camera is idle so it
+   * never races user interaction — a later switch then fades in pre-loaded imagery.
+   */
+  const prewarmRasterTiles = (map: maplibregl.Map, mode: MapStyleMode) => {
+    if (mode !== 'satellite' && mode !== 'terrain') return;
+    const layerId = mode === 'satellite' ? 'satellite-layer' : 'terrain-layer';
+    if (!map.getLayer(layerId)) return;
+    if (
+      isLayerReady(map, layerId) &&
+      prewarmedRasterLayersRef.current.has(layerId)
+    ) {
+      return; // already resident and cached
+    }
+
+    const start = () => {
+      try {
+        (map as any).setPaintProperty(layerId, 'raster-opacity-transition', {
+          duration: 0,
+          delay: 0,
+        });
+        (map as any).setPaintProperty(layerId, 'raster-opacity', 0);
+      } catch {
+        // ignore
+      }
+      try {
+        if ((map as any).getLayoutProperty(layerId, 'visibility') === 'none') {
+          map.setLayoutProperty(layerId, 'visibility', 'visible');
+        }
+      } catch {
+        // ignore
+      }
+      // Standing cache: stays visible at opacity 0 so MapLibre keeps its tiles
+      // loaded and up to date as the user pans/zooms.
+      prewarmedRasterLayersRef.current.add(layerId);
+    };
+
+    if (map.isMoving() || zoomPulseTimerRef.current !== null) {
+      // Retry once the camera rests — tiles for a moving viewport are wasted work.
+      map.once('idle', () => prewarmRasterTiles(map, mode));
+      return;
+    }
+    start();
+  };
+
   /**
    * Animated mode switching (Apple Maps behaviour): base layers cross-fade over
    * STYLE_FADE_MS while the camera pitches/levels, instead of snapping.
@@ -172,10 +296,21 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
    *    interpolates paint values on-GPU with zero flicker; a deferred pass flips
    *    visibility off only once a fade-out has completed.
    * 3. Custom overlays (footprint, entrance, canopy, water) are never touched.
+   * 4. When switching INTO a raster mode (waitForTiles), the fade is gated on the
+   *    incoming tiles being loaded — reveals imagery, never grey blanks — with a
+   *    timeout fallback and staleness detection for rapid re-switches.
    */
-  const applyMapStyleVisibility = (map: maplibregl.Map, mode: MapStyleMode) => {
+  const applyMapStyleVisibility = async (
+    map: maplibregl.Map,
+    mode: MapStyleMode,
+    waitForTiles = false
+  ) => {
     const style = map.getStyle();
     if (!style || !style.layers) return;
+
+    // Bump on EVERY invocation (not only gated ones) so a Standard switch also
+    // invalidates a stale raster-mode gate that is still awaiting tiles.
+    const runId = ++styleFadeRunIdRef.current;
 
     const orig = originalPaintOpacitiesRef.current;
     const fadeTargets: { layerId: string; type: string; target: number }[] = [];
@@ -246,15 +381,52 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       styleFadeCleanupRef.current = null;
     }
 
+    // GATE (raster modes): hold the cross-fade until the incoming imagery/topo tiles
+    // are resident, so the fade reveals loaded pixels instead of grey blanks. A hard
+    // timeout caps the wait, and a run-id check drops stale gates when the user
+    // re-switches while we were waiting.
+    if (waitForTiles && mode !== 'standard') {
+      const rasterLayerId = mode === 'satellite' ? 'satellite-layer' : 'terrain-layer';
+      if (map.getLayer(rasterLayerId)) {
+        // Reveal at opacity 0 BEFORE waiting, so MapLibre starts fetching the
+        // viewport tiles now and readiness reflects real progress.
+        try {
+          if ((map as any).getLayoutProperty(rasterLayerId, 'visibility') === 'none') {
+            map.setLayoutProperty(rasterLayerId, 'visibility', 'visible');
+          }
+          (map as any).setPaintProperty(rasterLayerId, 'raster-opacity-transition', {
+            duration: 0,
+            delay: 0,
+          });
+          (map as any).setPaintProperty(rasterLayerId, 'raster-opacity', 0);
+        } catch {
+          // ignore
+        }
+        await waitForRasterTiles(map, rasterLayerId);
+        if (runId !== styleFadeRunIdRef.current) return; // superseded by a newer switch
+      }
+    }
+
     let anyFadeOut = false;
+    let maxFadeMs = 0;
     for (const { layerId, type, target } of fadeTargets) {
       const props = PAINT_OPACITY_PROPS[type];
       if (!props) continue;
 
       const authored = orig.get(layerId) ?? 1;
       const toValue = target === 1 ? authored : 0;
+
+      // Apple Maps choreography: the base cross-fades quickly while labels hold back
+      // and arrive after the imagery settles; outgoing labels duck out early so they
+      // never linger over the incoming layer.
+      const isLabel = type === 'symbol';
+      const duration = isLabel ? (target === 1 ? LABEL_FADE_MS : LABEL_FADE_OUT_MS) : STYLE_FADE_MS;
+      let delay = isLabel && target === 1 ? LABEL_FADE_IN_DELAY_MS : 0;
       // Give freshly-shown raster tiles a head start so the fade-in reveals loaded imagery.
-      const delay = target === 1 && type === 'raster' ? 100 : 0;
+      if (target === 1 && type === 'raster') {
+        delay = Math.max(delay, RASTER_TILE_HEAD_START_MS);
+      }
+      maxFadeMs = Math.max(maxFadeMs, delay + duration);
 
       try {
         if (target === 1 && (map as any).getLayoutProperty(layerId, 'visibility') === 'none') {
@@ -279,7 +451,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         if (target === 0) anyFadeOut = true;
         try {
           (map as any).setPaintProperty(layerId, `${prop}-transition`, {
-            duration: STYLE_FADE_MS,
+            duration,
             delay,
           });
           (map as any).setPaintProperty(layerId, prop, toValue);
@@ -295,6 +467,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         styleFadeCleanupRef.current = null;
         for (const { layerId, type, target } of fadeTargets) {
           if (target !== 0) continue;
+          // Prewarmed raster layers are a standing tile cache — never hide them.
+          if (prewarmedRasterLayersRef.current.has(layerId)) continue;
           const props = PAINT_OPACITY_PROPS[type];
           if (!props) continue;
           try {
@@ -305,8 +479,16 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             // ignore
           }
         }
-      }, STYLE_FADE_MS);
+      }, maxFadeMs + 50);
       styleFadeCleanupRef.current = { timer, mode };
+    }
+
+    // Keep the other raster mode pre-warmed (visible at opacity 0, tiles resident)
+    // so the next switch is instant.
+    if (waitForTiles) {
+      for (const m of ['satellite', 'terrain'] as const) {
+        if (m !== mode) prewarmRasterTiles(map, m);
+      }
     }
   };
 
@@ -317,7 +499,79 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
    *   views make extruded blocks invisible); flattens out at street-map zooms.
    * - Satellite: level orthographic-style view over the imagery.
    */
-  const syncCameraForMode = (map: maplibregl.Map, mode: MapStyleMode) => {
+  /**
+   * Zoom-pulse "dive" (Apple Maps behaviour): as the new layer cross-fades in, the
+   * camera pushes in slightly and then settles back — one synchronized beat.
+   *
+   * Contract: the camera must always return to exactly the zoom it started at
+   * (baseZoom), so repeated switches never drift. MapLibre easeTo replaces any
+   * in-flight camera animation, so when a pitch ease is running (or about to run)
+   * the dive is FOLDED into it — zoom + pitch glide to the apex together, then the
+   * settle phase eases zoom back. If the camera is still easing at settle time,
+   * settle defers to the next idle and aborts if the user has grabbed the camera.
+   */
+  const startZoomPulse = (
+    map: maplibregl.Map,
+    pitchTarget: CameraEaseTarget | null
+  ) => {
+    if (zoomPulseTimerRef.current !== null) {
+      clearTimeout(zoomPulseTimerRef.current);
+      zoomPulseTimerRef.current = null;
+    }
+    if (pulseBaseZoomRef.current === null) {
+      // Fresh pulse (none was active): anchor the settle target at the resting zoom.
+      pulseBaseZoomRef.current = map.getZoom();
+    }
+    const baseZoom = pulseBaseZoomRef.current ?? map.getZoom();
+    const apexZoom = baseZoom + PULSE_ZOOM_DELTA;
+
+    const doSettle = () => {
+      // User grabbed the camera or zoomed themselves mid-pulse — never fight them.
+      // (Our own dive ends exactly at apexZoom, so any deviation means user intent.)
+      if (Math.abs(map.getZoom() - apexZoom) > 0.05 || map.isMoving()) {
+        pulseBaseZoomRef.current = null; // no settle ease follows; re-arm immediately
+        return;
+      }
+      map.easeTo({ zoom: baseZoom, duration: PULSE_OUT_MS });
+      // Keep the base anchor until the settle ease finishes: a switch issued mid-settle
+      // must still target the ORIGINAL zoom, not re-base on the flying camera.
+      setTimeout(() => {
+        pulseBaseZoomRef.current = null;
+      }, PULSE_OUT_MS + 80);
+    };
+    const settle = () => {
+      zoomPulseTimerRef.current = null;
+      if (map.isMoving()) {
+        // A camera ease is still in flight; settle once it rests.
+        map.once('idle', doSettle);
+        return;
+      }
+      doSettle();
+    };
+
+    if (pitchTarget) {
+      // Fold: easeTo replaces the in-flight pitch ease, so re-issue its full target
+      // (pitch + bearing + own duration) with the dive zoom added — one synchronized
+      // glide in which zoom and pitch arrive at the apex together.
+      map.easeTo({
+        zoom: apexZoom,
+        pitch: pitchTarget.pitch,
+        ...(pitchTarget.bearing !== undefined ? { bearing: pitchTarget.bearing } : {}),
+        duration: pitchTarget.duration,
+      });
+      zoomPulseTimerRef.current = setTimeout(settle, pitchTarget.duration + 60);
+    } else {
+      map.easeTo({ zoom: apexZoom, duration: PULSE_IN_MS });
+      zoomPulseTimerRef.current = setTimeout(settle, PULSE_IN_MS + 60);
+    }
+  };
+
+  const syncCameraForMode = (
+    map: maplibregl.Map,
+    mode: MapStyleMode
+  ): CameraEaseTarget | null => {
+    // Returns the camera ease this call issued (so the zoom pulse can fold into the
+    // same glide), or null when no camera ease was issued.
     const currentPitch = map.getPitch();
     if (mode === 'terrain') {
       autoTiltedRef.current = false;
@@ -335,8 +589,11 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       }
       map.setTerrain({ source: 'terrain-dem-source' });
       if (currentPitch < 1) {
-        map.easeTo({ pitch: 55, bearing: map.getBearing() === 0 ? -17.5 : map.getBearing(), duration: 900 });
+        const bearing = map.getBearing() === 0 ? -17.5 : map.getBearing();
+        map.easeTo({ pitch: 55, bearing, duration: 900 });
+        return { pitch: 55, bearing, duration: 900 };
       }
+      return null;
     } else {
       if (map.getTerrain()) {
         map.setTerrain(null);
@@ -348,13 +605,18 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         if (currentPitch < 1 && buildingZoom) {
           autoTiltedRef.current = true;
           map.easeTo({ pitch: 45, duration: 800 });
+          return { pitch: 45, duration: 800 };
         } else if (autoTiltedRef.current && !buildingZoom) {
           autoTiltedRef.current = false;
           map.easeTo({ pitch: 0, duration: 700 });
+          return { pitch: 0, duration: 700 };
         }
+        return null;
       } else if (currentPitch >= 1) {
         map.easeTo({ pitch: 0, duration: 700 });
+        return { pitch: 0, duration: 700 };
       }
+      return null;
     }
   };
 
@@ -366,15 +628,21 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     const style = map.getStyle();
     if (!style) return;
 
-    // Fresh style (initial load or theme switch): re-capture authored paint opacities.
+    // Fresh style (initial load or theme switch): re-capture authored paint opacities
+    // and re-arm the standing raster cache (layers are recreated hidden).
     originalPaintOpacitiesRef.current.clear();
+    prewarmedRasterLayersRef.current.clear();
 
     const currentTheme = themeRef.current;
     const currentMode = mapStyleRef.current;
     const accentColor = currentTheme === 'dark' ? '#0A84FF' : '#0071E3';
     const firstLayerId = style.layers?.[0]?.id;
 
-    // 1. Satellite Raster Source & Layer (ESRI World Imagery, maxzoom 19)
+    // 1. Satellite Raster Source & Layer (ESRI World Imagery)
+    // maxzoom 18, NOT 19: outside metro coverage Esri has no z19 tiles and serves
+    // grey "Map data not yet available" placeholders instead (verified via their
+    // tilemap API for rural parcels). Capping at 18 makes MapLibre overzoom the
+    // deepest REAL imagery — slightly soft when fully zoomed, never placeholder-grey.
     if (!map.getSource('satellite-source')) {
       map.addSource('satellite-source', {
         type: 'raster',
@@ -382,7 +650,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
         ],
         tileSize: 256,
-        maxzoom: 19,
+        maxzoom: 18,
         attribution: 'Esri, Maxar, Earthstar Geographics',
       });
     }
@@ -725,6 +993,12 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     // Apply the active Hybrid logic filter
     applyMapStyleVisibility(map, currentMode);
     syncCameraForMode(map, currentMode);
+    // Warm the idle raster mode's tiles so the first switch to it is instant.
+    if (currentMode !== 'standard') {
+      for (const m of ['satellite', 'terrain'] as const) {
+        if (m !== currentMode) prewarmRasterTiles(map, m);
+      }
+    }
   };
 
   // Mount MapLibre Map instance
@@ -897,6 +1171,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         clearTimeout(styleFadeCleanupRef.current.timer);
         styleFadeCleanupRef.current = null;
       }
+      if (zoomPulseTimerRef.current) {
+        clearTimeout(zoomPulseTimerRef.current);
+        zoomPulseTimerRef.current = null;
+      }
       map.remove();
       mapInstanceRef.current = null;
     };
@@ -922,8 +1200,20 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     const map = mapInstanceRef.current;
     if (!map) return;
 
-    applyMapStyleVisibility(map, mapStyle);
-    syncCameraForMode(map, mapStyle);
+    // Real switch = a previous mode was seen AND differs. The null check alone would
+    // misfire on StrictMode remounts (the ref outlives the unmounted map instance).
+    const isUserSwitch =
+      prevMapStyleRef.current !== null && prevMapStyleRef.current !== mapStyle;
+    prevMapStyleRef.current = mapStyle;
+
+    applyMapStyleVisibility(map, mapStyle, true);
+    // Camera first (its pitch ease may be running), then fold the dive beat into it —
+    // on real switches only, never on initial mount or StrictMode remount. The fade
+    // itself is gated on raster tile readiness and starts the moment tiles land.
+    const pitchTarget = syncCameraForMode(map, mapStyle);
+    if (isUserSwitch) {
+      startZoomPulse(map, pitchTarget);
+    }
   }, [mapStyle]);
 
   // Invalidate / Resize helper
@@ -1367,6 +1657,15 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     }
   }, [treeClusters, waterBodies, showTreeLayer, showWaterLayer]);
 
+  // Opening the Map Details picker signals imminent style switching: pre-warm both
+  // raster modes' tiles so whichever the user picks fades in already loaded.
+  const handleStylePickerOpen = useCallback(() => {
+    const map = mapInstanceRef.current;
+    if (!map || map._removed) return;
+    prewarmRasterTiles(map, 'satellite');
+    prewarmRasterTiles(map, 'terrain');
+  }, []);
+
   const handleResetView = () => {
     if (mapInstanceRef.current) {
       if (latitude !== null && longitude !== null) {
@@ -1416,6 +1715,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         <MapStyleSelector
           currentStyle={mapStyle}
           onStyleChange={(s) => setMapStyle(s)}
+          onOpen={handleStylePickerOpen}
         />
 
         {latitude !== null && longitude !== null && (

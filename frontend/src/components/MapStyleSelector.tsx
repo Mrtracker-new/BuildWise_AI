@@ -6,6 +6,8 @@ export type MapStyleMode = 'standard' | 'satellite' | 'terrain';
 interface MapStyleSelectorProps {
   currentStyle: MapStyleMode;
   onStyleChange: (style: MapStyleMode) => void;
+  /** Fired when the popover opens — used to pre-warm raster tiles for a snappy switch. */
+  onOpen?: () => void;
   className?: string;
 }
 
@@ -86,9 +88,16 @@ const StyleThumb: React.FC<{ mode: MapStyleMode }> = ({ mode }) => {
 export const MapStyleSelector: React.FC<MapStyleSelectorProps> = ({
   currentStyle,
   onStyleChange,
+  onOpen,
   className = '',
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+
+  // Opening the picker is the strongest signal the user is about to switch styles:
+  // give the raster modes a head start downloading tiles while they choose.
+  useEffect(() => {
+    if (isOpen) onOpen?.();
+  }, [isOpen, onOpen]);
   const containerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
