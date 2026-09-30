@@ -187,6 +187,19 @@ def _safe_int(val: Any, default: int = 0) -> int:
         return default
 
 
+def _keep_with_next(flowable: Any) -> Any:
+    """
+    Marks a flowable as keep-with-next so it never strands at the bottom of a
+    page away from its content (ReportLab honours keepWithNext on Paragraphs,
+    and platypus propagates it through KeepTogether wrappers).
+    """
+    try:
+        flowable.keepWithNext = True
+    except Exception:
+        pass
+    return flowable
+
+
 def make_pill(text: str, bg_color: colors.Color, text_color: colors.Color, width: float = 75.0) -> Table:
     """
     Renders an Apple-style tinted pill with 12% fill, rounded 4pt corners, and bold 8pt text.
@@ -300,9 +313,9 @@ def create_section_header(num_str: str, title_str: str) -> KeepTogether:
     )
     return KeepTogether([
         Spacer(1, 20),
-        header_p,
-        Spacer(1, 4),
-        HRFlowable(width="100%", thickness=0.5, color=COLOR_HAIRLINE, spaceBefore=2, spaceAfter=8)
+        _keep_with_next(header_p),
+        _keep_with_next(Spacer(1, 4)),
+        _keep_with_next(HRFlowable(width="100%", thickness=0.5, color=COLOR_HAIRLINE, spaceBefore=2, spaceAfter=8))
     ])
 
 
@@ -445,7 +458,7 @@ def make_floorplan_legend(floorplan_data: Dict[str, Any], width: float = CONTENT
         zone = str(_get(r, "zone", "General") or "General")
         chip_label = "[Core]" if is_core else f"[{zone.title()}]"
         dot_color = "#AF52DE" if is_core else ZONE_COLORS.get(zone.lower(), "#0071E3")
-        cell_p = Paragraph(f'<b>{idx}.</b> <font color="{dot_color}" size=8>●</font> <b>{html.escape(name)}</b> <font color="{COLOR_TEXT_TERTIARY.hexval()}" size=6.5>{html.escape(chip_label)}</font>', p_leg)
+        cell_p = Paragraph(f'<b>{idx}.</b> <font color="{dot_color}" size=8>•</font> <b>{html.escape(name)}</b> <font color="{COLOR_TEXT_TERTIARY.hexval()}" size=6.5>{html.escape(chip_label)}</font>', p_leg)
         cells.append(cell_p)
 
     if not cells:
@@ -494,7 +507,7 @@ def make_construction_schedules_table(
 
     # 1. Wall Type Legend
     flowables.append(Spacer(1, 4))
-    flowables.append(Paragraph("<b>Wall Type Specifications (NBC 2016 Compliant)</b>", p_title))
+    flowables.append(_keep_with_next(Paragraph("<b>Wall Type Specifications (NBC 2016 Compliant)</b>", p_title)))
     flowables.append(Spacer(1, 3))
     wall_headers = ["Wall Type", "Thickness", "Construction Specification", "Statutory Code Reference"]
     wall_data = [
@@ -504,7 +517,7 @@ def make_construction_schedules_table(
         [Paragraph("<b>W3</b>", p_td), Paragraph("75 mm", p_td), Paragraph("Toilet / MEP Shaft Lightweight Enclosure", p_td), Paragraph("IS 456 / NBC 2016", p_td)],
     ]
     w_cols = [55.0, 60.0, 240.0, width - 355.0]
-    t_wall = Table(wall_data, colWidths=w_cols)
+    t_wall = Table(wall_data, colWidths=w_cols, repeatRows=1)
     t_wall.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
         ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
@@ -574,7 +587,7 @@ def make_construction_schedules_table(
 
     # 2. Door Schedule Table
     flowables.append(Spacer(1, 8))
-    flowables.append(Paragraph("<b>Door Schedule</b>", p_title))
+    flowables.append(_keep_with_next(Paragraph("<b>Door Schedule</b>", p_title)))
     flowables.append(Spacer(1, 3))
     door_headers = ["Tag", "Size (W x H)", "Door Type Specification", "Clear Opening", "Storey Level"]
     door_table_data = [[Paragraph(h, p_th) for h in door_headers]]
@@ -592,7 +605,7 @@ def make_construction_schedules_table(
             Paragraph(d_lvl, p_td),
         ])
     d_cols = [45.0, 95.0, 165.0, 85.0, width - 390.0]
-    t_door = Table(door_table_data, colWidths=d_cols)
+    t_door = Table(door_table_data, colWidths=d_cols, repeatRows=1)
     t_door.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
         ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
@@ -607,7 +620,7 @@ def make_construction_schedules_table(
 
     # 3. Window Schedule Table
     flowables.append(Spacer(1, 8))
-    flowables.append(Paragraph("<b>Window Schedule (NBC 2016 Light &amp; Ventilation Ratios)</b>", p_title))
+    flowables.append(_keep_with_next(Paragraph("<b>Window Schedule (NBC 2016 Light &amp; Ventilation Ratios)</b>", p_title)))
     flowables.append(Spacer(1, 3))
     win_headers = ["Tag", "Size (W x H)", "Sill Level", "Lintel Level", "Code Ventilation Ratio"]
     win_table_data = [[Paragraph(h, p_th) for h in win_headers]]
@@ -625,7 +638,7 @@ def make_construction_schedules_table(
             Paragraph(w_vr, p_td),
         ])
     w_cols = [45.0, 95.0, 70.0, 70.0, width - 280.0]
-    t_win = Table(win_table_data, colWidths=w_cols)
+    t_win = Table(win_table_data, colWidths=w_cols, repeatRows=1)
     t_win.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
         ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
@@ -640,7 +653,7 @@ def make_construction_schedules_table(
 
     # 4. Room Schedule Table
     flowables.append(Spacer(1, 8))
-    flowables.append(Paragraph("<b>Room Schedule (Clear Interior Dimensions &amp; Finish Specifications)</b>", p_title))
+    flowables.append(_keep_with_next(Paragraph("<b>Room Schedule (Clear Interior Dimensions &amp; Finish Specifications)</b>", p_title)))
     flowables.append(Spacer(1, 3))
     room_headers = ["No.", "Room Name", "Clear Area", "Clear Dimensions (W x D)", "Finish Specification"]
     room_table_data = [[Paragraph(h, p_th) for h in room_headers]]
@@ -658,7 +671,7 @@ def make_construction_schedules_table(
             Paragraph(r_finish, p_td),
         ])
     r_cols = [30.0, 120.0, 75.0, 110.0, width - 335.0]
-    t_room = Table(room_table_data, colWidths=r_cols)
+    t_room = Table(room_table_data, colWidths=r_cols, repeatRows=1)
     t_room.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
         ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
@@ -794,7 +807,7 @@ def make_site_plan_sheet_flowables(
     flowables.append(Spacer(1, 5))
 
     # 4. Cadastral Survey Schedule Table
-    flowables.append(Paragraph("<b>Boundary Survey Table &amp; Setting-Out Bearings</b>", p_title))
+    flowables.append(_keep_with_next(Paragraph("<b>Boundary Survey Table &amp; Setting-Out Bearings</b>", p_title)))
     flowables.append(Spacer(1, 3))
 
     table_data: List[List[Any]] = [[
@@ -808,7 +821,7 @@ def make_site_plan_sheet_flowables(
 
     for i, v in enumerate(sp_model.vertex_table):
         edge = sp_model.edges[i] if i < len(sp_model.edges) else None
-        e_label = f"{edge.from_vertex} → {edge.to_vertex}" if edge else "—"
+        e_label = f"{edge.from_vertex} – {edge.to_vertex}" if edge else "—"
         e_len = f"{edge.length_m:.2f} m" if edge else "—"
         e_brg = edge.bearing_dms if edge else "—"
 
@@ -822,7 +835,7 @@ def make_site_plan_sheet_flowables(
         ])
 
     c_w = [45.0, 75.0, 75.0, 80.0, 75.0, width - 350.0]
-    t_survey = Table(table_data, colWidths=c_w)
+    t_survey = Table(table_data, colWidths=c_w, repeatRows=1)
     t_survey.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
         ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
@@ -839,7 +852,7 @@ def make_site_plan_sheet_flowables(
     pkg = getattr(sp_model, "parking", None)
     if pkg:
         flowables.append(Spacer(1, 5))
-        flowables.append(Paragraph("<b>Parking-First Pipeline &amp; ECS Compliance Table</b>", p_title))
+        flowables.append(_keep_with_next(Paragraph("<b>Parking-First Pipeline &amp; ECS Compliance Table</b>", p_title)))
         flowables.append(Spacer(1, 2))
 
         ecs_req = getattr(pkg, "ecs_required", 1)
@@ -894,7 +907,7 @@ def make_site_plan_sheet_flowables(
 
     # 4c. Annotation Status Taxonomy Table
     flowables.append(Spacer(1, 5))
-    flowables.append(Paragraph("<b>Annotation Status Taxonomy (Drawing Honesty Protocol)</b>", p_title))
+    flowables.append(_keep_with_next(Paragraph("<b>Annotation Status Taxonomy (Drawing Honesty Protocol)</b>", p_title)))
     flowables.append(Spacer(1, 2))
     tax_data: List[List[Any]] = [
         [
@@ -918,7 +931,7 @@ def make_site_plan_sheet_flowables(
             Paragraph("Advisory engineering guidance: Drainage runoff slope (1:100), vehicular drop-off gate, pedestrian entry placement.", p_td),
         ],
     ]
-    t_tax = Table(tax_data, colWidths=[100.0, width - 100.0])
+    t_tax = Table(tax_data, colWidths=[100.0, width - 100.0], repeatRows=1)
     t_tax.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
         ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
@@ -934,7 +947,7 @@ def make_site_plan_sheet_flowables(
     # 5. Outdoor Zone Breakdown (if fragments exist)
     if sp_model.outdoor_zones:
         flowables.append(Spacer(1, 5))
-        flowables.append(Paragraph("<b>Designated Outdoor Zones (Buildable Polygon \\ Footprint Difference)</b>", p_title))
+        flowables.append(_keep_with_next(Paragraph("<b>Designated Outdoor Zones (Buildable Polygon \\ Footprint Difference)</b>", p_title)))
         flowables.append(Spacer(1, 2))
         oz_data: List[List[Any]] = [[
             Paragraph("<b>Zone ID</b>", p_th),
@@ -955,7 +968,7 @@ def make_site_plan_sheet_flowables(
                 Paragraph(f"({cx:.2f}m, {cy:.2f}m)", p_td),
             ])
         oz_cols = [60.0, 160.0, 85.0, width - 305.0]
-        t_oz = Table(oz_data, colWidths=oz_cols)
+        t_oz = Table(oz_data, colWidths=oz_cols, repeatRows=1)
         t_oz.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
             ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
@@ -971,7 +984,7 @@ def make_site_plan_sheet_flowables(
     # 6. Functional Wedge Zones Breakdown (if wedge zones exist)
     if getattr(sp_model, "wedge_zones", None):
         flowables.append(Spacer(1, 5))
-        flowables.append(Paragraph("<b>Absorbed Functional Wedge Zones (Non-Habitable Residue)</b>", p_title))
+        flowables.append(_keep_with_next(Paragraph("<b>Absorbed Functional Wedge Zones (Non-Habitable Residue)</b>", p_title)))
         flowables.append(Spacer(1, 2))
         wdg_data: List[List[Any]] = [[
             Paragraph("<b>Wedge ID</b>", p_th),
@@ -997,7 +1010,7 @@ def make_site_plan_sheet_flowables(
                 Paragraph(pos_str, p_td),
             ])
         wdg_cols = [55.0, 160.0, 75.0, 110.0, width - 400.0]
-        t_wdg = Table(wdg_data, colWidths=wdg_cols)
+        t_wdg = Table(wdg_data, colWidths=wdg_cols, repeatRows=1)
         t_wdg.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
             ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
@@ -1141,8 +1154,25 @@ def generate_pdf_report(
         ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
     ]))
 
-    ref_chip_p = Paragraph(f"<b>Ref: {html.escape(req_id[:12])}</b>", ParagraphStyle('RefChip', fontName=FONT_REGULAR, fontSize=8.0, leading=10.0, textColor=COLOR_TEXT_SECONDARY, alignment=1))
-    ref_chip = Table([[ref_chip_p]], colWidths=[110])
+    # Ref chip: show the full request ID, sizing the chip to the rendered text
+    # (Inter, 8pt). Only ellipsize when the ID exceeds the meta column width.
+    ref_fs = 8.0
+    ref_chip_max_w = 178.0  # meta_box column is 180pt wide
+    ref_disp = f"Ref: {req_id}"
+    ref_esc = html.escape(ref_disp)
+    # The chip text renders bold (Inter-Bold); measure with the bold face so the
+    # computed chip width actually fits it on a single line.
+    ref_text_w = pdfmetrics.stringWidth(ref_esc, FONT_BOLD, ref_fs)
+    if ref_text_w + 10.0 <= ref_chip_max_w:
+        chip_w = ref_text_w + 10.0
+    else:
+        while len(ref_disp) > 8 and pdfmetrics.stringWidth(html.escape(ref_disp) + "...", FONT_BOLD, ref_fs) + 10.0 > ref_chip_max_w:
+            ref_disp = ref_disp[:-1]
+        ref_disp += "..."
+        ref_esc = html.escape(ref_disp)
+        chip_w = min(ref_chip_max_w, pdfmetrics.stringWidth(ref_esc, FONT_BOLD, ref_fs) + 10.0)
+    ref_chip_p = Paragraph(f"<b>{ref_esc}</b>", ParagraphStyle('RefChip', fontName=FONT_REGULAR, fontSize=ref_fs, leading=10.0, textColor=COLOR_TEXT_SECONDARY, alignment=1))
+    ref_chip = Table([[ref_chip_p]], colWidths=[chip_w])
     ref_chip.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), COLOR_BG_SUBTLE),
         ('ROUNDEDCORNERS', [4, 4, 4, 4]),
@@ -1305,7 +1335,7 @@ def generate_pdf_report(
                 Paragraph(html.escape(str(f.get("details", ""))), table_text)
             ])
 
-        factor_table = Table(factor_rows, colWidths=[95, 45, 70, 50, 75, 158.2])
+        factor_table = Table(factor_rows, colWidths=[95, 45, 70, 50, 75, 158.2], repeatRows=1)
         factor_table.setStyle(TableStyle([
             ('LINEBELOW', (0, 0), (-1, 0), 0.5, COLOR_HAIRLINE),
             ('LINEBELOW', (0, 1), (-1, -1), 0.5, COLOR_HAIRLINE),
@@ -1373,7 +1403,7 @@ def generate_pdf_report(
                     Paragraph(html.escape(str(item.get("recommendation_text", ""))), table_text)
                 ])
 
-            rec_table = Table(rec_rows, colWidths=[110, 75, 135, 173.2])
+            rec_table = Table(rec_rows, colWidths=[110, 75, 135, 173.2], repeatRows=1)
             rec_table.setStyle(TableStyle([
                 ('LINEBELOW', (0, 0), (-1, 0), 0.5, COLOR_HAIRLINE),
                 ('LINEBELOW', (0, 1), (-1, -1), 0.5, COLOR_HAIRLINE),
@@ -1417,7 +1447,7 @@ def generate_pdf_report(
             c_ndma = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">NDMA Flood Prone Basin</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{"Yes (Mitigation Recommended)" if flood.get("ndma_flood_prone") else "No (Low Inundation Risk)"}</b></font>', kv_style)
 
             c_gust = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Mean Annual Gust (ERA5)</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{max_gust:.1f} km/h</b></font>', kv_style)
-            c_rain = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Heavy Rain Days (≥50mm)</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{rain_days:.1f} days/yr (Cyclone: {"Yes" if storm.get("ndma_cyclone_prone") else "No"})</b></font>', kv_style)
+            c_rain = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">Heavy Rain Days (>=50mm)</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{rain_days:.1f} days/yr (Cyclone: {"Yes" if storm.get("ndma_cyclone_prone") else "No"})</b></font>', kv_style)
 
             haz_table = Table([[c_seis, c_usgs], [c_flood, c_ndma], [c_gust, c_rain]], colWidths=[246.6, 246.6])
             haz_table.setStyle(TableStyle([
@@ -1455,7 +1485,7 @@ def generate_pdf_report(
                 Paragraph(html.escape(str(r.get("mitigation_strategy", ""))), table_text)
             ])
 
-        risk_table = Table(risk_rows, colWidths=[115, 68, 145, 165.2])
+        risk_table = Table(risk_rows, colWidths=[115, 68, 145, 165.2], repeatRows=1)
         risk_table.setStyle(TableStyle([
             ('LINEBELOW', (0, 0), (-1, 0), 0.5, COLOR_HAIRLINE),
             ('LINEBELOW', (0, 1), (-1, -1), 0.5, COLOR_HAIRLINE),
@@ -1539,7 +1569,7 @@ def generate_pdf_report(
                         Paragraph(html.escape(action), table_text)
                     ])
 
-                plan_table = Table(plan_rows, colWidths=[90, 75, 78, 250.2])
+                plan_table = Table(plan_rows, colWidths=[90, 75, 78, 250.2], repeatRows=1)
                 plan_table.setStyle(TableStyle([
                     ('LINEBELOW', (0, 0), (-1, 0), 0.5, COLOR_HAIRLINE),
                     ('LINEBELOW', (0, 1), (-1, -1), 0.5, COLOR_HAIRLINE),
@@ -1648,7 +1678,7 @@ def generate_pdf_report(
             ""
         ])
 
-        cost_table = Table(cost_rows, colWidths=[120, 95, 140, 138.2])
+        cost_table = Table(cost_rows, colWidths=[120, 95, 140, 138.2], repeatRows=1)
         cost_table.setStyle(TableStyle([
             ('LINEBELOW', (0, 0), (-1, 0), 0.5, COLOR_HAIRLINE),
             ('LINEBELOW', (0, 1), (-1, -3), 0.5, COLOR_HAIRLINE),
@@ -1760,6 +1790,7 @@ def generate_pdf_report(
         th_style = ParagraphStyle('TH_Stack', fontName=FONT_SEMIBOLD, fontSize=8.0, leading=10.0, textColor=COLOR_TEXT_PRIMARY)
         td_style = ParagraphStyle('TD_Stack', fontName=FONT_REGULAR, fontSize=7.5, leading=9.5, textColor=COLOR_TEXT_PRIMARY)
         td_green = ParagraphStyle('TD_Green', fontName=FONT_SEMIBOLD, fontSize=7.5, leading=9.5, textColor=COLOR_GREEN_TEXT)
+        td_id_style = ParagraphStyle('TD_Stack_ID', fontName=FONT_SEMIBOLD, fontSize=6.8, leading=8.8, textColor=COLOR_TEXT_PRIMARY)
 
         core_headers = [
             Paragraph("<b>Core / Shaft ID</b>", th_style),
@@ -1780,7 +1811,7 @@ def generate_pdf_report(
             c_floors = _get(vc, "continuous_across_floors", []) or list(range(total_storeys))
             floors_str = f"F0 – F{total_storeys - 1} (All)" if len(c_floors) >= total_storeys else ", ".join(f"F{f}" for f in c_floors)
             core_rows.append([
-                Paragraph(f"<b>{html.escape(cid)}</b>", td_style),
+                Paragraph(f"<b>{html.escape(cid)}</b>", td_id_style),
                 Paragraph(html.escape(ctype), td_style),
                 Paragraph(f"({cx:.2f}, {cy:.2f}) m", td_style),
                 Paragraph(f"{cw:.2f} × {cd:.2f} m", td_style),
@@ -1798,7 +1829,7 @@ def generate_pdf_report(
             servicing = _get(ds, "servicing_rooms", []) or ["Wet Rooms"]
             serv_str = ", ".join(servicing[:2]) if servicing else "All Storeys"
             core_rows.append([
-                Paragraph(f"<b>{html.escape(sid)}</b>", td_style),
+                Paragraph(f"<b>{html.escape(sid)}</b>", td_id_style),
                 Paragraph(html.escape(stype), td_style),
                 Paragraph(f"({sx:.2f}, {sy:.2f}) m", td_style),
                 Paragraph(f"{sw:.2f} × {sd:.2f} m", td_style),
@@ -1816,8 +1847,8 @@ def generate_pdf_report(
                 Paragraph("<b>100% Locked</b>", td_green)
             ])
 
-        col_w_stack = [85.0, 95.0, 80.0, 80.0, 75.0, 78.23]
-        t_cores = Table(core_rows, colWidths=col_w_stack)
+        col_w_stack = [100.0, 88.0, 78.0, 78.0, 72.0, 77.23]
+        t_cores = Table(core_rows, colWidths=col_w_stack, repeatRows=1)
         t_cores.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 4.0),
@@ -1893,7 +1924,7 @@ def generate_pdf_report(
         ])
 
         col_w_level = [55.0, 95.0, 50.0, 60.0, 60.0, 55.0, 55.0, 63.23]
-        t_levels = Table(level_rows, colWidths=col_w_level)
+        t_levels = Table(level_rows, colWidths=col_w_level, repeatRows=1)
         t_levels.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 4.0),
@@ -1926,7 +1957,7 @@ def generate_pdf_report(
                 ("1. Non-Overlap &amp; Containment", "PASS" if cert.get("zero_overlap", cert.get("non_overlap", True)) and cert.get("envelope_containment", cert.get("containment", True)) else "FAIL", "REL-01 / CONT-01"),
                 ("2. Zero Forbidden Wall Pairs", "PASS" if cert.get("zero_forbidden_violations", True) else "FAIL", "REL-02 / FORBIDDEN"),
                 ("3. BFS Circulation Reachability", "PASS" if cert.get("connectivity_bfs", True) else "FAIL", "CIRC-01 / BFS-GRAPH"),
-                ("4. Dimension Chains Sum (&le;1mm)", "PASS" if cert.get("chain_sums_match", True) else "FAIL", "DIM-01 / NBC-TOLERANCE"),
+                ("4. Dimension Chains Sum (&lt;=1mm)", "PASS" if cert.get("chain_sums_match", True) else "FAIL", "DIM-01 / NBC-TOLERANCE"),
                 ("5. NBC Egress Travel Distance", "PASS" if cert.get("egress_distances_satisfied", True) else "FAIL", "NBC-03 / EGRESS-30M"),
                 ("6. Vertical Stack Alignment", "PASS" if cert.get("vertical_stack_valid", True) else "FAIL", "VERT-01..05 / CORE-STACK"),
                 ("7. Core Continuity (All Levels)", "PASS" if cert.get("core_continuity_valid", True) else "FAIL", "RULE-FP-01 / NBC-CORE"),
@@ -1968,7 +1999,7 @@ def generate_pdf_report(
                     Paragraph("<b>100% SATISFIED</b>", td_green),
                 ])
 
-            t_cert = Table(cert_rows, colWidths=[240.0, 160.0, 89.23])
+            t_cert = Table(cert_rows, colWidths=[240.0, 160.0, 89.23], repeatRows=2)
             t_cert.setStyle(TableStyle([
                 ('SPAN', (0, 0), (1, 0)),
                 ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
@@ -2032,7 +2063,20 @@ def generate_pdf_report(
                     _lsum = str(_ld.get("summary", ""))
                     _f = _ld.get("findings") or []
                     if _f:
-                        _lsum += " - " + "; ".join(str(x) for x in _f[:2])
+                        # Keep only findings that add information (skip echoes of
+                        # the summary and near-identical repeated findings).
+                        _seen_f = {_lsum.strip().lower()}
+                        _extra = []
+                        for _fx in (str(x).strip() for x in _f[:4]):
+                            if not _fx:
+                                continue
+                            _key = _fx.lower()
+                            if _key in _seen_f:
+                                continue
+                            _seen_f.add(_key)
+                            _extra.append(_fx)
+                        if _extra:
+                            _lsum += " - " + "; ".join(_extra[:2])
                 _gate_rows.append([
                     Paragraph(f"<b>{html.escape(_lid)}</b> {html.escape(_lt)}", _g_layer),
                     Paragraph(html.escape(_lsum[:220]), _g_cell),
@@ -2046,7 +2090,7 @@ def generate_pdf_report(
                     "",
                     Paragraph("<b>ADVISORY</b>", _g_warn_style),
                 ])
-            t_gate = Table(_gate_rows, colWidths=[150.0, 279.0, 60.23])
+            t_gate = Table(_gate_rows, colWidths=[150.0, 279.0, 60.23], repeatRows=2)
             t_gate.setStyle(TableStyle([
                 ('SPAN', (0, 0), (1, 0)),
                 ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
@@ -2067,7 +2111,7 @@ def generate_pdf_report(
         if not cert:
             compliance_text = (
                 "<b>NBC 2016 &amp; CPWD Structural Compliance Verification:</b><br/>"
-                "• <b>Vertical Core Continuity:</b> Staircase treads (&ge; 250mm) and risers (&le; 175mm) continuous through structural floor slabs.<br/>"
+                "• <b>Vertical Core Continuity:</b> Staircase treads (&gt;= 250mm) and risers (&lt;= 175mm) continuous through structural floor slabs.<br/>"
                 "• <b>Plumbing Wet Stack Integrity:</b> All wet wall vertical risers align directly over ground inspection chambers without horizontal offsets.<br/>"
                 "• <b>Life Safety Egress:</b> Travel distance from most remote habitable room to protected vertical core conforms to NBC 2016 Part 4 (&lt; 30m)."
             )

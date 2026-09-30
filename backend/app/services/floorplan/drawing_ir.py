@@ -3662,21 +3662,48 @@ def build_site_drawing_ir(
         else:
             nx = 0.0
             ny = 0.0
-        # Point the normal AWAY from the polygon centroid (outward).
-        if (mx + nx - cen_x) * nx + (my + ny - cen_y) * ny < 0:
+        # Point the normal AWAY from the polygon interior. For concave (e.g.
+        # L-shaped) boundaries a single centroid test misclassifies edges that
+        # face the notch, so instead probe which side of the actual edge the
+        # label would sit on: a tiny step along +n must leave the polygon
+        # interior (use the even-odd rule against the full vertex ring).
+        def _point_in_poly(px: float, py: float, ring) -> bool:
+            inside = False
+            n = len(ring)
+            j = n - 1
+            for k in range(n):
+                xi, yi = float(ring[k][0]), float(ring[k][1])
+                xj, yj = float(ring[j][0]), float(ring[j][1])
+                if (yi > py) != (yj > py):
+                    x_int = (xj - xi) * (py - yi) / ((yj - yi) or 1e-9) + xi
+                    if px < x_int:
+                        inside = not inside
+                j = k
+            return inside
+
+        probe = 0.05
+        if _point_in_poly(mx + nx * probe, my + ny * probe, vertices) == _point_in_poly(mx, my, vertices):
+            # Stepping along +n stayed inside (or on) the polygon - flip outward.
             nx, ny = -nx, -ny
-        # Vertical lane clamps: the top edge's outward label would sit under
-        # the title badge, and the front edge's would hit the gate/utility
-        # pills - clamp both into free lanes.
+        # Vertical lane clamps: the top edge's outward label sits in its own
+        # inner lane just above the boundary; the front edge's label clamps
+        # into the free centre window of the utility lane (between the
+        # drainage and stormwater pills). Clamped labels drop their bearing
+        # subtext - every bearing is listed in the Boundary Survey Table, and
+        # the compact length tag then fits its lane without collisions.
         lbl_y = my + ny
-        if lbl_y > bbox_d + 0.55:
-            lbl_y = round(bbox_d + 0.55, 2)
-        elif lbl_y < -0.90:
-            lbl_y = round(-1.95, 2)
-        length_val = float(_get(e, "length_m", L))
+        lbl_x = mx + nx
         bearing_val = str(_get(e, "bearing_dms", ""))
+        if lbl_y > bbox_d + 0.20:
+            lbl_y = round(bbox_d + 0.20, 2)
+            bearing_val = ""
+        elif lbl_y < -0.90:
+            lbl_y = round(-2.00, 2)
+            lbl_x = round(min(max(lbl_x, bbox_w * 0.44), bbox_w * 0.50), 2)
+            bearing_val = ""
+        length_val = float(_get(e, "length_m", L))
         primitives.append(TextPrimitive(
-            x=round(mx + nx, 2),
+            x=round(lbl_x, 2),
             y=lbl_y,
             text=f"{length_val:.2f}m",
             subtext=bearing_val,
@@ -3831,9 +3858,9 @@ def build_site_drawing_ir(
     # full chain renders in the report callout + title block, so an on-plan
     # second line would only collide with the neighbour tick below it.
     primitives.append(TextPrimitive(
-        x=round(bbox_w * 0.30, 2),
-        y=round(bbox_d + 0.85, 2),
-        text="FOOTPRINT DERIVED FROM BUILDABLE POLYGON P1..Pn [VERIFIED]",
+        x=round(bbox_w * 0.17, 2),
+        y=round(bbox_d + 1.00, 2),
+        text="FOOTPRINT DERIVED FROM BUILDABLE POLYGON [VERIFIED]",
         font_size_pt=7.5,
         font_weight="bold",
         halo=True,
@@ -3870,7 +3897,7 @@ def build_site_drawing_ir(
     gate_px = round(bbox_w * 0.84, 2)
     primitives.append(TextPrimitive(
         x=round(gate_vx, 2),
-        y=round(-1.15, 2),
+        y=round(-1.20, 2),
         text="VEHICULAR GATE 3.50m [RECOMMENDED]",
         font_size_pt=6.5,
         font_weight="bold",
@@ -3882,7 +3909,7 @@ def build_site_drawing_ir(
     ))
     primitives.append(TextPrimitive(
         x=round(gate_px, 2),
-        y=round(-1.15, 2),
+        y=round(-1.20, 2),
         text="PEDESTRIAN ENTRY 1.20m [RECOMMENDED]",
         font_size_pt=6.5,
         font_weight="bold",
@@ -3957,10 +3984,11 @@ def build_site_drawing_ir(
             status="CALCULATED"
         ))
 
-    # Item 4: Sewer connection point (ASSUMED) - single-line pill, row 2 left.
+    # Item 4: Sewer connection point (ASSUMED) - single-line pill, deepest
+    # lane below the utility row.
     primitives.append(TextPrimitive(
-        x=round(bbox_w * 0.20, 2),
-        y=round(-2.60, 2),
+        x=round(bbox_w * 0.14, 2),
+        y=round(-2.85, 2),
         text="SEWER MH-01 INVERT -1.20m [ASSUMED]",
         font_size_pt=6.5,
         font_weight="bold",
@@ -3971,10 +3999,12 @@ def build_site_drawing_ir(
         status="ASSUMED"
     ))
 
-    # Item 5: Stormwater outlet & drainage arrows (RECOMMENDED) - row 2 right.
+    # Item 5: Stormwater outlet & drainage arrows (RECOMMENDED) - utility row,
+    # split left/right so the two pills never share coordinates. The centre
+    # window of this lane stays free for the front edge-length tag.
     primitives.append(TextPrimitive(
-        x=round(bbox_w * 0.82, 2),
-        y=round(-1.95, 2),
+        x=round(bbox_w * 0.87, 2),
+        y=round(-2.00, 2),
         text="STORMWATER SWO-01 [RECOMMENDED]",
         font_size_pt=6.5,
         font_weight="bold",
@@ -3985,8 +4015,8 @@ def build_site_drawing_ir(
         status="RECOMMENDED"
     ))
     primitives.append(TextPrimitive(
-        x=round(bbox_w * 0.82, 2),
-        y=round(-1.95, 2),
+        x=round(bbox_w * 0.16, 2),
+        y=round(-2.00, 2),
         text="DRAINAGE FLOW >> SLOPE 1:100 [RECOMMENDED]",
         font_size_pt=6.5,
         font_weight="bold",
@@ -4027,7 +4057,7 @@ def build_site_drawing_ir(
         status="CALCULATED"
     ))
     primitives.append(TextPrimitive(
-        x=round(bbox_w * 0.29, 2),
+        x=round(bbox_w * 0.24, 2),
         y=round(bbox_d - sb_rear / 2.0 - 0.40, 2),
         text=f"REAR SETBACK {sb_rear:.2f}m [CALCULATED]",
         font_size_pt=6.5,
@@ -4071,10 +4101,13 @@ def build_site_drawing_ir(
 
     # Item 8: Neighbour ticks (ASSUMED) - compact single-line labels hugging the
     # boundary, replacing the old wide two-line pills that collided with edges.
+    # Rear neighbour tick shares the outer derivation-banner lane on the
+    # right (abbreviated so banner and tick never touch); the inner lane
+    # (bbox_d + 0.20) stays reserved for the top edge-length tag.
     primitives.append(TextPrimitive(
-        x=round(bbox_w * 0.60, 2),
-        y=round(bbox_d + 0.30, 2),
-        text="ADJOINING PROPERTY (REAR) [ASSUMED]",
+        x=round(bbox_w * 0.83, 2),
+        y=round(bbox_d + 1.00, 2),
+        text="ADJ. PROPERTY (REAR) [ASSUMED]",
         font_size_pt=6.0,
         font_weight="semibold",
         halo=True,
@@ -4083,11 +4116,13 @@ def build_site_drawing_ir(
         layer="text",
         status="ASSUMED"
     ))
+    # Side neighbour ticks render as compact two-line pills hugging the
+    # boundary; lane positions avoid the setback pills and footing tags.
     primitives.append(TextPrimitive(
         x=round(-0.25, 2),
-        y=round(bbox_d * 0.33, 2),
-        text="ADJOINING PROPERTY (SIDE 1) [ASSUMED]",
-        subtext="NEIGHBOUR BOUNDARY",
+        y=round(bbox_d * 0.16, 2),
+        text="ADJOINING PROPERTY (SIDE 1)",
+        subtext="[ASSUMED] NEIGHBOUR BOUNDARY",
         font_size_pt=6.0,
         font_weight="semibold",
         halo=True,
@@ -4098,9 +4133,9 @@ def build_site_drawing_ir(
     ))
     primitives.append(TextPrimitive(
         x=round(bbox_w + 0.25, 2),
-        y=round(bbox_d / 2.0, 2),
-        text="ADJOINING PROPERTY (SIDE 2) [ASSUMED]",
-        subtext="NEIGHBOUR BOUNDARY",
+        y=round(bbox_d * 0.24, 2),
+        text="ADJOINING PROPERTY (SIDE 2)",
+        subtext="[ASSUMED] NEIGHBOUR BOUNDARY",
         font_size_pt=6.0,
         font_weight="semibold",
         halo=True,
@@ -4174,26 +4209,44 @@ def build_site_drawing_ir(
     # pass nudges overlapping TEXT labels horizontally (then vertically) until
     # every pair is clear, preserving all checklist content.
     _DEC_TOL = 0.35  # meters of required clearance between pill edges
+    # Renderer-faithful scale estimate: render_reportlab_from_ir clamps the
+    # pt-per-meter scale to a 14pt floor and typography to 5pt (4.5pt for
+    # subtext). Estimating REAL rendered text boxes with the same floors makes
+    # the declutter pass see what the reader actually sees, instead of the
+    # optimistic halo hints.
+    _SCALE_EST = 14.0
 
     def _pill_box(tp: TextPrimitive) -> Tuple[float, float, float, float]:
-        w = (tp.halo_w_m if tp.halo else 1.2)
-        h = (tp.halo_h_m if tp.halo else 0.5)
+        _lines = tp.lines if tp.lines else [tp.text]
+        _fs = max(tp.font_size_pt * (_SCALE_EST / 36.0), min(tp.font_size_pt, 5.0))
+        _sfs = max(tp.subtext_pt * (_SCALE_EST / 36.0), min(tp.subtext_pt, 4.5))
+        _w_pt = max([len(_l) * _fs * 0.55 for _l in _lines]
+                    + [len(tp.subtext) * _sfs * 0.55 if tp.subtext else 0.0])
+        _h_pt = len(_lines) * _fs * 1.25 + (_sfs * 1.25 + 3.0 if tp.subtext else 0.0) + 4.0
+        w = max(_w_pt / _SCALE_EST, tp.halo_w_m if tp.halo else 0.0)
+        h = max(_h_pt / _SCALE_EST, tp.halo_h_m if tp.halo else 0.0)
         return (tp.x - w / 2.0, tp.y - h / 2.0, tp.x + w / 2.0, tp.y + h / 2.0)
 
     _text_prims = [p for p in primitives if isinstance(p, TextPrimitive)]
     for _i in range(len(_text_prims)):
-        for _step in range(14):
+        for _step in range(16):
             _moved = False
             _box_i = _pill_box(_text_prims[_i])
             for _j in range(len(_text_prims)):
                 if _j == _i:
                     continue
                 _box_j = _pill_box(_text_prims[_j])
-                _overlap_x = (_box_i[0] + _DEC_TOL < _box_j[2]) and (_box_j[0] + _DEC_TOL < _box_i[2])
-                _overlap_y = (_box_i[1] + _DEC_TOL < _box_j[3]) and (_box_j[1] + _DEC_TOL < _box_i[3])
+                # True-overlap test with a small epsilon: pills that merely
+                # sit close in adjacent lanes are fine (designed lanes keep
+                # them apart); only real box overlaps get nudged.
+                _eps = 0.05
+                _overlap_x = (_box_i[0] < _box_j[2] - _eps) and (_box_j[0] < _box_i[2] - _eps)
+                _overlap_y = (_box_i[1] < _box_j[3] - _eps) and (_box_j[1] < _box_i[3] - _eps)
                 if _overlap_x and _overlap_y:
-                    # Nudge the lower-priority (later) label horizontally first.
-                    _dx = 0.9 if _text_prims[_i].x <= _text_prims[_j].x else -0.9
+                    # Nudge the lower-priority (later) label AWAY from the
+                    # obstacle (moving toward it caused an oscillation that
+                    # netted zero displacement over the iterations).
+                    _dx = 0.9 if _text_prims[_i].x > _text_prims[_j].x else -0.9
                     _text_prims[_i].x = round(_text_prims[_i].x + _dx, 2)
                     _text_prims[_i].halo_w_m = max(1.0, _text_prims[_i].halo_w_m)
                     _box_i = _pill_box(_text_prims[_i])
