@@ -276,10 +276,24 @@ def build_gate_layers(
         "Room aspect ratios met under bounded degradation tolerance (industrial bays exempt)")
     l1_advisory = (not cert.min_dimensions_satisfied) or (not cert.aspect_ratios_satisfied)
     l1_status = "FAIL" if l1_broken else ("PASS" if not l1_advisory else "WARN")
+    # Zero-silent-skips: chain-sum precision must be verifiable. A
+    # solved floor without serialized dimension chains is a silent skip and
+    # invalidates the gate; when chains exist they are machine-verified in the
+    # engine (see dimension_chain_audit in cert.details).
+    chain_audit = (getattr(cert, "details", {}) or {}).get("dimension_chain_audit") or {}
+    if chain_audit.get("floors_without_chains"):
+        l1_status = "FAIL"
+        l1_findings.append(
+            "Dimension chain verification unavailable on floor(s) "
+            + ", ".join(str(z) for z in chain_audit["floors_without_chains"])
+            + " - dimension set-out not machine-verified (silent-skip guard)"
+        )
+    n_chains = int(chain_audit.get("chains_checked", 0) or 0)
     layers.append(make_layer(
         "L1", l1_status,
         summary=("All geometric & statutory invariants hold" if l1_status == "PASS"
-                 else (min_dim_note or aspect_note or "Degraded but within tolerances")),
+                 else (min_dim_note or aspect_note or "Degraded but within tolerances"))
+        + (f"; {n_chains} dimension chains verified within 1mm" if n_chains else ""),
         findings=l1_findings,
         citation="NBC 2016 Part 3 / Part 8; engine invariants REL-01, CONT-01, DIM-01, CIRC-01, VERT-01..05",
     ))
@@ -339,6 +353,23 @@ def build_gate_layers(
         findings=list(pi_warns or []),
         citation="NBC 2016 Part 3; program-intent engine rules",
     ))
+    # Terrace-ratio justification warning - when open terrace exceeds
+    # the applicable threshold, the layer must carry the conversion guidance,
+    # even where the engine's hard L8 verdict passes (passive_ventilation).
+    lq_audit = (lq or {}).get("program_intent_audit") or {}
+    ratio_pct = lq_audit.get("terrace_ratio_pct")
+    if ratio_pct is not None and not lq_audit.get("terrace_ratio_satisfied", True):
+        l8_prev = layers[-1]
+        layers[-1] = make_layer(
+            "L8", l8_prev.status,
+            summary=(f"Program intent: terrace ratio {ratio_pct}% exceeds applicable threshold - "
+                     "conversion guidance issued"),
+            findings=list(dict.fromkeys(
+                list(l8_prev.findings)
+                + [w for w in (pi_warns or []) if "Terrace Ratio" in w]
+            )),
+            citation="NBC 2016 Part 3; program-intent engine rules",
+        )
 
     # ------------------------------------------------------- L9-L14 (engineering)
     try:
@@ -402,10 +433,18 @@ def build_gate_layers(
     try:
         struct = compute_structural_model(floors, typology,
                                           getattr(engine, "structural_grid", None))
+        # Load-path continuity wording - the summary states the floor-to-floor
+        # continuity verdict explicitly (never only as a flagged-beam count).
+        n_transfer = int(struct.get("beam_count", 0) or 0)
+        load_path_note = (
+            f"load-path continuity verified floor-to-floor ({n_transfer} transfer beam(s) flagged)"
+            if n_transfer == 0 else
+            f"load-path gaps flagged: {n_transfer} transfer beam(s) required"
+        )
         layers.append(make_layer(
             "L12", _status_from_str(struct["status"]),
             summary=(f"{struct['column_count']} columns (span <= {struct['max_span_m']:.1f}m), "
-                     f"{struct['beam_count']} flagged beam(s)"),
+                     f"{load_path_note}"),
             findings=[b["note"] for b in struct["beams"]],
             citation=struct["citation"],
             details={"columns": struct["columns"][:40], "beams": struct["beams"],
@@ -480,3 +519,28 @@ def assemble_gate_report(layer_dicts: List[Dict[str, Any]],
 def build_validated_layers_stamp_list(gate: Dict[str, Any]) -> List[str]:
     """Layer ids stamped on sheets: every layer that RAN (PASS/WARN/FAIL), not N/A."""
     return [d["layer_id"] for d in (gate.get("layers") or []) if d.get("status") != "N/A"]
+
+
+# =============================================================================
+# HONEST DRAWING-STATUS STAMP (single source)
+# =============================================================================
+
+STAMP_HEAD = "STATUS: CONCEPT DESIGN - VALIDATED LAYERS: ["
+STAMP_TAIL = "] - NOT FOR CONSTRUCTION"
+
+
+def drawing_status_stamp(validated_layers: Optional[List[str]],
+                         scope_note: Optional[str] = None) -> str:
+    """Canonical honest stamp, e.g.
+    'STATUS: CONCEPT DESIGN - VALIDATED LAYERS: [L1, L2] - NOT FOR CONSTRUCTION'.
+
+    Every sheet/PDF surface must derive its stamp from this helper. The
+    sheet-wrap logic in drawing_ir._wrap_status_stamp parses exactly this
+    format (head prefix per line + legal tail on the final line); do not
+    re-word here without updating that parser.
+    """
+    layers_str = ", ".join(validated_layers or [])
+    note = f" ({scope_note})" if scope_note else ""
+    # The scope note sits AFTER the closing bracket: the sheet wrap parser
+    # treats everything inside [...] as layer ids.
+    return f"{STAMP_HEAD}{layers_str}]{note} - NOT FOR CONSTRUCTION"
