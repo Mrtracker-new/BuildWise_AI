@@ -3,8 +3,6 @@ import math
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
-import httpx
-
 from app.schemas.response import (
     RankedEntrance,
     RoomGridZone,
@@ -13,17 +11,17 @@ from app.schemas.response import (
     RoadApproach,
     VastuAdvisory
 )
-from app.utils.cache_utils import hazard_cache
+from app.services.road_service import (
+    fetch_nearest_road,
+    VASTU_CACHE_CATEGORY,
+    VASTU_CACHE_PRECISION,
+)
 from app.utils.geo_utils import (
-    haversine_distance,
-    calculate_bearing,
     azimuth_to_cardinal_8,
     get_cardinal_offsets
 )
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-DEFAULT_TIMEOUT_SECONDS = 3.5
-USER_AGENT = "BuildWise-Civil-Engineering-Engine/1.0"
 
 _VASTU_RULES: Optional[Dict[str, Any]] = None
 
@@ -49,65 +47,35 @@ FACE_ANGLES: Dict[str, float] = {
 
 async def fetch_nearest_road_approach(lat: float, lon: float) -> Tuple[RoadApproach, Optional[str]]:
     """
-    Queries OpenStreetMap Overpass API for nearest primary through residential highway within 500m.
+    Queries OpenStreetMap Overpass API for the nearest primary-through-residential
+    highway within 500m via the shared road service.
     Per Amendment 1: Never synthesize a bearing. If unreachable, returns bearing_degrees=None,
     approach_side='unknown', is_fallback=True, and user-facing warning.
     """
-    cached = hazard_cache.get(lat, lon, "osm_road_approach", precision=1)
-    if cached is not None:
-        return RoadApproach(**cached), None
-
-    query = (
-        f"[out:json][timeout:4];"
-        f"way[\"highway\"~\"^(primary|secondary|tertiary|residential|service)$\"](around:500,{lat:.5f},{lon:.5f});"
-        f"out geom;"
+    result, _cache_hit, _warning = await fetch_nearest_road(
+        lat,
+        lon,
+        cache_category=VASTU_CACHE_CATEGORY,
+        cache_precision=VASTU_CACHE_PRECISION,
     )
-    url = "https://overpass-api.de/api/interpreter"
+    if result.get("is_fallback"):
+        # Explicit unknown fallback per Amendment 1 (No fabricated geometry)
+        warning = "Road network telemetry unavailable. Approach-side alignment bonus omitted from entrance ranking."
+        fallback_approach = RoadApproach(
+            bearing_degrees=None,
+            approach_side="unknown",
+            distance_meters=None,
+            is_fallback=True
+        )
+        return fallback_approach, warning
 
-    try:
-        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
-            resp = await client.post(url, data={"data": query}, headers={"User-Agent": USER_AGENT})
-            if resp.status_code == 200:
-                data = resp.json()
-                elements = data.get("elements", [])
-
-                closest_pt = None
-                min_dist_m = float("inf")
-
-                for el in elements:
-                    geom = el.get("geometry", [])
-                    for pt in geom:
-                        pt_lat = pt.get("lat")
-                        pt_lon = pt.get("lon")
-                        if pt_lat is not None and pt_lon is not None:
-                            d = haversine_distance(lat, lon, pt_lat, pt_lon)
-                            if d < min_dist_m:
-                                min_dist_m = d
-                                closest_pt = (pt_lat, pt_lon)
-
-                if closest_pt is not None:
-                    bearing = round(calculate_bearing(lat, lon, closest_pt[0], closest_pt[1]), 1)
-                    side = azimuth_to_cardinal_8(bearing)
-                    approach_data = {
-                        "bearing_degrees": bearing,
-                        "approach_side": side,
-                        "distance_meters": round(min_dist_m, 1),
-                        "is_fallback": False
-                    }
-                    hazard_cache.set(lat, lon, "osm_road_approach", approach_data, precision=1)
-                    return RoadApproach(**approach_data), None
-    except Exception:
-        pass
-
-    # Explicit unknown fallback per Amendment 1 (No fabricated geometry)
-    warning = "Road network telemetry unavailable. Approach-side alignment bonus omitted from entrance ranking."
-    fallback_approach = RoadApproach(
-        bearing_degrees=None,
-        approach_side="unknown",
-        distance_meters=None,
-        is_fallback=True
-    )
-    return fallback_approach, warning
+    approach_data = {
+        "bearing_degrees": result["bearing_degrees"],
+        "approach_side": result["approach_side"],
+        "distance_meters": result["distance_meters"],
+        "is_fallback": False,
+    }
+    return RoadApproach(**approach_data), None
 
 
 def compute_slope_reading(
