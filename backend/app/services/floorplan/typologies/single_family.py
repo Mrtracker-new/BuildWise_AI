@@ -448,12 +448,12 @@ class T1ResidenceSolver:
 
 
 # =============================================================================
-# STAGE 3 PROTOCOL IMPLEMENTATION: T1ResidenceModule
+# T1ResidenceModule
 # =============================================================================
 
 class T1ResidenceModule:
     """
-    Stage-3 typology module for T1 Single-Family Residence.
+    Typology module for T1 Single-Family Residence.
     Implements TypologyModuleProtocol - all five classmethods.
     Catalog and statutory data pulled exclusively from ONTOLOGY.
     """

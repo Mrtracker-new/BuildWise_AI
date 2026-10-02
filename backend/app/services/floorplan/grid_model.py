@@ -223,7 +223,10 @@ ROOM_CATALOG: Dict[str, Dict[str, Any]] = {
 
 
 def normalize_room_identifier(room_id: str) -> str:
+    import re
     r = room_id.lower().strip().replace(" ", "_")
+    # Strip the per-level suffix used on solved floor plates (living_F0 -> living).
+    r = re.sub(r"_f\d+$", "", r)
     if r in ("hall", "foyer", "living_room", "family_living"):
         return "living"
     if r in ("pooja", "puja_room", "mandir", "prayer"):

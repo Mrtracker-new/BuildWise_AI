@@ -8,7 +8,7 @@ from app.schemas.floorplan import FloorPlanRequest, FloorPlanResponse
 def generate_floor_plan(req: FloorPlanRequest) -> FloorPlanResponse:
     """
     Sole geometry engine pipeline for all architectural layout generation.
-    Parameterized exclusively by Stage-1 Universal Space Semantics Ontology
+    Parameterized exclusively by the Universal Space Semantics Ontology
     and typology profiles.
     """
     from app.services.floorplan.engine import SoleGeometryEngine

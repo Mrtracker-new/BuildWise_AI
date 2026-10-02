@@ -282,12 +282,12 @@ class T2ApartmentSolver:
 
 
 # =============================================================================
-# STAGE 3 PROTOCOL IMPLEMENTATION: T2ApartmentModule
+# T2ApartmentModule
 # =============================================================================
 
 class T2ApartmentModule:
     """
-    Stage-3 typology module for T2 Family Apartment.
+    Typology module for T2 Family Apartment.
     Implements TypologyModuleProtocol - all five classmethods.
     Unit split + shared core per floor; Vastu medium weight.
     """
@@ -297,6 +297,10 @@ class T2ApartmentModule:
     # T2 space IDs in UNIVERSAL_SPACE_CATALOG (shared core + per-unit spaces)
     _SHARED_CORE_IDS = ["t2_stair", "lift_core", "floor_lobby"]
     _UNIT_IDS = ["apt_unit_1", "apt_unit_2"]
+    # Unit aggregates are PROGRAM concepts, not ontology spaces - the
+    # solver emits their leaf rooms (t2_unitA_living / t2_unitB_bed / ...) and
+    # never places "apt_unit_N" as geometry.
+    _COMPOSITE_IDS = ["apt_unit_1", "apt_unit_2"]
     _GROUND_IDS = ["floor_lobby", "apt_unit_1", "apt_unit_2", "guard_house"]
     _UPPER_IDS = ["floor_lobby", "apt_unit_1", "apt_unit_2"]
 

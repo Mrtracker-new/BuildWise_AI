@@ -259,12 +259,12 @@ class T3ComplexSolver:
 
 
 # =============================================================================
-# STAGE 3 PROTOCOL IMPLEMENTATION: T3ComplexModule
+# T3ComplexModule
 # =============================================================================
 
 class T3ComplexModule:
     """
-    Stage-3 typology module for T3 Large Commercial Complex.
+    Typology module for T3 Large Commercial Complex.
     Implements TypologyModuleProtocol - all five classmethods.
     Core-loop corridor + unit mix; Vastu weight LOW (0.3).
     """
@@ -275,6 +275,10 @@ class T3ComplexModule:
                    "sanitary_block", "server_room", "electrical_room"]
     _UPPER_IDS = ["spine_corridor", "open_office", "private_office",
                   "meeting_room", "sanitary_block", "pantry"]
+    # Office/aggregate ids are PROGRAM concepts, not ontology spaces -
+    # the solver emits their leaf rooms (t3_suite_N/S/E ...) and never places
+    # them as geometry.
+    _COMPOSITE_IDS = ["open_office", "private_office", "meeting_room", "pantry"]
 
     @classmethod
     def catalog(cls):

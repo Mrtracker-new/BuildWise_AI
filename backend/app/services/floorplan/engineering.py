@@ -47,7 +47,7 @@ TERRACE_SLOPE_RATIO: str = "1:100"           # NBC 2016 Part 3 Cl 10.2.1 / CPWD 
 TERRACE_SLOPE_CITATION: str = "NBC 2016 Part 3 Cl 10.2.1 terrace drainage slope >= 1:100 to rain water outlets"
 TERRACE_PARAPET_MIN_H_M: float = 1.00        # NBC 2016 Part 3 Cl 10.1 parapet >= 1.0m
 TERRACE_WP_BAND_M: float = 0.30              # waterproofing upturn band at parapet junction (CPWD practice)
-SITE_STORM_OUTLET_ID: str = "SO-01"          # Stage-1 site stormwater outlet (same network tie-in)
+SITE_STORM_OUTLET_ID: str = "SO-01"          # site stormwater outlet - the single network tie-in
 
 # --- L12 Structural -------------------------------------------------------------
 # Practical clear-span ceilings before intermediate columns are forced, per typology.
@@ -436,7 +436,7 @@ def compute_terrace_drainage(floors: List[Any], site_outlet_id: str = SITE_STORM
     For every terrace zone, produces the drainage set anchors (drain point,
     slope arrows, downpipe drop, waterproofing band, overflow note) used both
     by the audit (L11) and by the service-layer drawing. The downpipe ties to
-    the Stage-1 site stormwater outlet id.
+    the site stormwater outlet id.
     """
     terraces: List[Dict[str, Any]] = []
     for fl in floors:

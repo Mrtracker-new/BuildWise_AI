@@ -111,7 +111,7 @@ def get_typology_adjacency_graph(typology: str | None) -> Dict[str, List[str]]:
 
 def get_typology_module(typology: str | None):
     """
-    Returns the Stage-3 TypologyModule class for the resolved canonical typology.
+    Returns the TypologyModule class for the resolved canonical typology.
     Each module implements TypologyModuleProtocol (catalog, vertical_program,
     layout_strategy, compose_sheet, sheet_gates) — all as @classmethods.
     """

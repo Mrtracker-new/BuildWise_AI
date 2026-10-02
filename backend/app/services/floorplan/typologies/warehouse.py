@@ -306,12 +306,12 @@ class T4WarehouseSolver:
 
 
 # =============================================================================
-# STAGE 3 PROTOCOL IMPLEMENTATION: T4WarehouseModule
+# T4WarehouseModule
 # =============================================================================
 
 class T4WarehouseModule:
     """
-    Stage-3 typology module for T4 Warehouse / Light Industrial.
+    Typology module for T4 Warehouse / Light Industrial.
     Implements TypologyModuleProtocol - all five classmethods.
     Column grid 6m, dock apron, mezzanine +3.6m; Vastu weight OFF (0.05).
     """
@@ -321,6 +321,10 @@ class T4WarehouseModule:
     _GROUND_IDS = ["dock_bay", "dispatch", "heavy_bay", "racked_storage",
                    "worker_amenity", "guard_house"]
     _MEZZ_IDS = ["admin_catwalk", "admin_office", "conf_room"]
+    # Bay aggregates are PROGRAM concepts, not ontology spaces - the
+    # solver emits their leaf rooms (t4_storage_bay / dock_bay ...) and never
+    # places them as geometry.
+    _COMPOSITE_IDS = ["heavy_bay", "racked_storage"]
 
     @classmethod
     def catalog(cls):
