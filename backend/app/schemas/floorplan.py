@@ -29,6 +29,11 @@ class FloorPlanRequest(BaseModel):
         description="Weight of Vastu Shastra rules vs. plumbing & circulation efficiency"
     )
     building_typology: Optional[str] = Field(default="residential_single", description="Typology identifier")
+    seed: Optional[str] = Field(
+        default=None,
+        max_length=32,
+        description="Optional deterministic generation seed; numeric values drive the GEN/CERT token, others fall back to the historical default",
+    )
     quality_grade: Optional[str] = Field(default="standard", description="Specification grade: basic, standard, premium")
     floors: Optional[int] = Field(default=1, ge=1, le=10, description="Number of storeys/levels")
     built_up_area_sqft: Optional[float] = Field(default=None, description="Total plinth/built-up area in sq ft")
@@ -126,6 +131,23 @@ class FloorPlanRequest(BaseModel):
             if data.get("plot_depth_m") is None:
                 data["plot_depth_m"] = 14.0
         return data
+
+    @field_validator("seed", mode="before")
+    @classmethod
+    def coerce_numeric_seed(cls, v: Any) -> Any:
+        """Accept numeric seeds (int/float, not bool) as canonical digit strings.
+
+        The engine derives GEN/CERT tokens from the seed; callers may
+        legitimately pass JSON numbers, so coerce them to strings up front
+        instead of failing pydantic string validation.
+        """
+        if v is None or isinstance(v, str):
+            return v
+        if isinstance(v, bool):
+            raise ValueError("seed must be a string or a number")
+        if isinstance(v, (int, float)):
+            return str(v)
+        return v
 
     @field_validator("required_rooms")
     @classmethod
@@ -263,6 +285,10 @@ class FloorPlanResponse(BaseModel):
     params_snapshot: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Snapshot of generation input parameters"
+    )
+    unmet_requirements: Optional[List[Dict[str, str]]] = Field(
+        default=None,
+        description="Requested rooms the solver could not satisfy, each with an explicit reason (zero silent skips)"
     )
     generation_id: Optional[str] = Field(
         default=None,

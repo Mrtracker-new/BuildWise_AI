@@ -194,6 +194,9 @@ class AnalysisResponse(BaseModel):
     structural_recommendations: Optional[List[str]] = None
     cost_breakdown: Optional[Dict[str, Any]] = None
     vastu_compliance: Optional[Dict[str, Any]] = None
+    # Map-first capture: read-only echo of the captured boundary,
+    # validated server-side (shoelace area, perimeter, winding, statutory minima).
+    boundary_summary: Optional[Dict[str, Any]] = None
 
 class HealthResponse(BaseModel):
     status: str

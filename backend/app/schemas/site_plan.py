@@ -262,4 +262,8 @@ class SitePlanModel(BaseModel):
         default="STATUS: CONCEPT DESIGN - VALIDATED LAYERS: [L1, L2] - NOT FOR CONSTRUCTION",
         description="Drawing status stamp line"
     )
+    provenance: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Boundary source, frontage source, projection origin - flows end-to-end"
+    )
     svg_site_plan: Optional[str] = None

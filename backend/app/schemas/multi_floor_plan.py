@@ -2,6 +2,15 @@ from typing import List, Dict, Optional, Literal, Any
 from pydantic import BaseModel, Field
 
 
+class UnmetRequirement(BaseModel):
+    """
+    One requested room the solver could not satisfy, with an explicit reason
+    (zero silent skips for user requirements).
+    """
+    room_id: str
+    reason: str
+
+
 class VerticalCoreSpec(BaseModel):
     """
     Specification for vertically continuous building circulation elements
@@ -210,7 +219,7 @@ class MultiStoreyBuildingModel(BaseModel):
     global_metrics: Dict[str, Any] = Field(default_factory=dict)
     qa_report: Dict[str, Any] = Field(default_factory=dict)
     warnings: List[str] = Field(default_factory=list)
-    unmet_requirements: List[str] = Field(default_factory=list)
+    unmet_requirements: List[UnmetRequirement] = Field(default_factory=list)
     seed: int = 42
     solver_timing_ms: float = 0.0
     mathematical_certificate: Optional[Dict[str, Any]] = Field(
