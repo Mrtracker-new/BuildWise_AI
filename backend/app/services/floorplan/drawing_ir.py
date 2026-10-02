@@ -265,8 +265,9 @@ class SheetHeaderInfo:
 
     @property
     def drawing_status_stamp(self) -> str:
-        layers_str = ", ".join(self.validated_layers)
-        return f"STATUS: CONCEPT DESIGN - VALIDATED LAYERS: [{layers_str}] - NOT FOR CONSTRUCTION"
+        # Single-source status stamp, shared with the validation gate module.
+        from app.services.floorplan.validation_gate import drawing_status_stamp
+        return drawing_status_stamp(self.validated_layers)
 
 
 @dataclass
@@ -404,9 +405,46 @@ def _approx_text_width(text: str, fs: float) -> float:
     return 0.62 * fs * len(text)
 
 
+# Single-source service legend - rendered on the SVG sheet panel AND
+# appended to the PDF blueprint page (report_service) so both outputs teach
+# the same symbols (SVG/PDF content parity).
+SERVICE_LEGEND_PARTS = [
+    "dashed box = plumbing shaft (soil+vent stack, inspection access at foundation)",
+    "diamond = stack",
+    "RWP = rainwater pipe",
+    "TB = transfer beam (verify support below)",
+    "DRAIN = terrace rain-water outlet, slope 1:100 to site storm outlet SO-01",
+    "DP = downpipe to SO-01; OVERFLOW = emergency weir on terrace edge",
+]
+
+
 def _ellipsize_str(s: str, max_len: int) -> str:
     s = str(s).strip()
     return s if len(s) <= max_len else s[:max_len - 2].rstrip() + ".."
+
+
+def _fit_banner_line(text: str, max_chars: int, base_fs: float = 7.5,
+                     min_fs: float = 4.8) -> tuple:
+    """Fit a banner line onto the sheet without dropping the truth tail.
+
+    Sheet truth: the freshness token carries the confirmed frontage
+    edge and the polygon hash and must reach the sheet VERBATIM. If the line
+    is longer than the banner budget the font is shrunk first; only when the
+    canvas is too narrow even for ``min_fs`` is the TYPOLOGY head ellipsized -
+    the ``FRTG``/``POLYHASH`` tail is always preserved in full.
+    """
+    text = str(text).strip()
+    if max_chars <= 0 or len(text) <= max_chars:
+        return base_fs, text
+    needed = base_fs * max_chars / float(len(text))
+    if needed >= min_fs:
+        return max(min_fs, needed), text
+    idx = text.find(" | FRTG")
+    if idx >= 0:
+        tail = text[idx:]
+        head_budget = max(8, max_chars - len(tail) - 4)
+        return min_fs, _ellipsize_str(text[:idx], head_budget) + tail
+    return min_fs, _ellipsize_str(text, max_chars)
 
 
 def _wrap_status_stamp(stamp: str, max_chars: int) -> List[str]:
@@ -493,6 +531,12 @@ class BBox:
             self.ymin - pad >= other.ymax
         )
 
+    def intersection_area(self, other: "BBox") -> float:
+        """Overlap area with another box in square pixels (0.0 when disjoint)."""
+        w = min(self.xmax, other.xmax) - max(self.xmin, other.xmin)
+        h = min(self.ymax, other.ymax) - max(self.ymin, other.ymin)
+        return (w * h) if (w > 0.0 and h > 0.0) else 0.0
+
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
     if obj is None:
@@ -518,6 +562,29 @@ def _safe_int(val: Any, default: int = 0) -> int:
         return int(val)
     except (ValueError, TypeError):
         return default
+
+
+def _polygon_hash_short(poly: Any) -> str:
+    """Sheet truth: deterministic 8-hex djb2 hash of the plot polygon.
+
+    Hashes the canonical vertices formatted to 2 decimals so the SAME boundary
+    always produces the SAME sheet marker (parity with the frontend
+    sheetTruth.polygonHashShort in frontend/src/services/sheetTruth.ts -
+    keep the two implementations byte-identical).
+    """
+    verts = _get(poly, "vertices", None) or []
+    if not verts:
+        return ""
+    h = 5381
+    for v in verts:
+        if isinstance(v, dict):
+            xs, ys = v.get("x", 0.0), v.get("y", 0.0)
+        else:
+            xs, ys = v[0], v[1]
+        for c in (_safe_float(xs, 0.0), _safe_float(ys, 0.0)):
+            for b in f"{c:.2f}".encode("utf-8"):
+                h = ((h * 33) + b) & 0xFFFFFFFF
+    return f"{h:08x}"
 
 
 def build_drawing_ir(
@@ -571,7 +638,21 @@ def build_drawing_ir(
 
     storeys_label = f"G+{total_storeys - 1}" if total_storeys > 1 else "G"
     clean_gen = str(gen_id or _get(building_model, "seed", _get(floor_data, "seed", "GEN-F01")))
-    freshness_token = f"GEN {clean_gen} | PLOT {plot_w:.1f}m FRONTAGE x {plot_d:.1f}m DEPTH | {storeys_label} | ENV {env_w:.2f}x{env_d:.2f}m"
+    # Sheet truth: the header must carry the confirmed frontage edge and
+    # the polygon hash so any sheet can be traced back to the exact captured
+    # boundary (stale-guard across viewer + sheets). Rectangle-legacy builds
+    # without a polygon keep the historical token (byte-stable).
+    _poly_hash = _polygon_hash_short(_get(building_model, "plot_polygon", None))
+    _site_prov = _get(_get(building_model, "site_plan", None), "provenance", {}) or {}
+    _frtg_idx = _site_prov.get("frontage_edge_index")
+    _frtg_src = _site_prov.get("frontage_source")
+    _truth_tail = ""
+    if _frtg_idx is not None or _frtg_src or _poly_hash:
+        _frtg_txt = str(_frtg_idx) if _frtg_idx is not None else "NA"
+        if _frtg_src:
+            _frtg_txt = f"{_frtg_txt} ({_frtg_src})"
+        _truth_tail = f" | FRTG {_frtg_txt} | POLYHASH {_poly_hash or 'NA'}"
+    freshness_token = f"GEN {clean_gen} | PLOT {plot_w:.1f}m FRONTAGE x {plot_d:.1f}m DEPTH | {storeys_label} | ENV {env_w:.2f}x{env_d:.2f}m{_truth_tail}"
 
     # Universal validation gate (L1-L14): stamped layer list + per-layer table.
     gate_data = _get(building_model, "validation_gate", None) or _get(floor_data, "validation_gate", None) or {}
@@ -670,6 +751,9 @@ def build_drawing_ir(
             "height": rd,
             "area_sqm": area,
             "zone": zone,
+            # Carry zone_category - the terrace drainage set keys off it
+            # (the key was previously dropped, leaving that block dead code).
+            "zone_category": str(_get(r, "zone_category", "")),
             "is_vertical_core": is_core,
             "unit_id": u_id,
             "raw": r,
@@ -996,6 +1080,11 @@ def build_drawing_ir(
             lx_ir = mlx
             ly_ir = mly
 
+            # Keep the swing inside the building (see _door_leaf_inside).
+            lx_ir, ly_ir = _door_leaf_inside(env_w, env_d, (hx_ir, hy_ir), (lx_ir, ly_ir))
+            mlx = lx_ir
+            mly = ly_ir
+
             ang_closed = round(math.degrees(math.atan2(cy_ir - hy_ir, cx_ir - hx_ir))) % 360
             ang_open = round(math.degrees(math.atan2(ly_ir - hy_ir, lx_ir - hx_ir))) % 360
 
@@ -1041,6 +1130,11 @@ def build_drawing_ir(
 
             lx_ir = mlx
             ly_ir = env_d - mly
+
+            # Keep the swing inside the building (see _door_leaf_inside).
+            lx_ir, ly_ir = _door_leaf_inside(env_w, env_d, (hx_ir, hy_ir), (lx_ir, ly_ir))
+            mlx = lx_ir
+            mly = env_d - ly_ir
 
             ang_closed = round(math.degrees(math.atan2(cy_ir - hy_ir, cx_ir - hx_ir))) % 360
             ang_open = round(math.degrees(math.atan2(ly_ir - hy_ir, lx_ir - hx_ir))) % 360
@@ -1353,25 +1447,86 @@ def build_drawing_ir(
                 td_cx = (thx_s + tlx_s) / 2.0
                 td_cy = (thy_s + tly_s) / 2.0
                 d_boxes.append(BBox(td_cx - 10.0, td_cy - 8.0, td_cx + 10.0, td_cy + 8.0))
+                # The unit badge and door tag ride the hinge; reserve that corner so
+                # the anchor badge never prints over the door furniture.
+                d_boxes.append(BBox(thx_s + 2.0, thy_s - 24.0, thx_s + 46.0, thy_s + 28.0))
 
             cands = [
                 (gx_s + gw_s + l_len, gy_s + gh_s - b_h - 4.0, gx_s + gw_s, gy_s + gh_s - 10.0, gx_s + gw_s + l_len, gy_s + gh_s - 4.0 - b_h / 2.0),
                 (gx_s + gw_s + l_len, gy_s + gh_s / 2.0 - b_h / 2.0, gx_s + gw_s, gy_s + gh_s / 2.0, gx_s + gw_s + l_len, gy_s + gh_s / 2.0),
                 (gx_s + gw_s / 2.0 - b_w / 2.0, gy_s + gh_s + l_len, gx_s + gw_s / 2.0, gy_s + gh_s, gx_s + gw_s / 2.0, gy_s + gh_s + l_len),
                 (gx_s - l_len - b_w, gy_s + gh_s - b_h - 4.0, gx_s, gy_s + gh_s - 10.0, gx_s - l_len, gy_s + gh_s - 4.0 - b_h / 2.0),
+                # Escape slots: on a door-dense plate every slot above can be occupied
+                # by door furniture, so offer the mirrored side and top corners too.
+                (gx_s - l_len - b_w, gy_s + gh_s / 2.0 - b_h / 2.0, gx_s, gy_s + gh_s / 2.0, gx_s - l_len, gy_s + gh_s / 2.0 - b_h / 2.0),
+                (gx_s + gw_s + l_len, gy_s + l_len, gx_s + gw_s, gy_s + l_len + b_h / 2.0, gx_s + gw_s + l_len, gy_s + l_len + b_h / 2.0),
+                (gx_s - l_len - b_w, gy_s + l_len, gx_s, gy_s + l_len + b_h / 2.0, gx_s - l_len, gy_s + l_len + b_h / 2.0),
+                # Inside the ghost core itself (clear of its treads' annotations):
+                # the one place on a dense plate that no room label can claim.
+                (gx_s + max(2.0, (gw_s - b_w) / 2.0), gy_s + gh_s - b_h - 6.0, gx_s + gw_s / 2.0, gy_s + gh_s - 6.0, gx_s + gw_s / 2.0, gy_s + gh_s - b_h - 6.0),
             ]
-            chosen = cands[0]
-            for c_cand in cands:
+            # Side-margin callout slots: outside the plan, level with the core.
+            # Drawn with a leader, this is where the anchor note goes when the plate
+            # is too dense to hold the badge anywhere inside.
+            _margin_lo = max(2.0, c_mx - b_w - 4.0)
+            _margin_hi = c_mx + env_w * c_scale + 6.0
+            for _sy in (gy_s + gh_s - b_h - 4.0, gy_s + gh_s / 2.0 - b_h / 2.0, gy_s + l_len):
+                cands.append((_margin_lo, _sy, _margin_lo + b_w, _sy + b_h / 2.0, _margin_lo + b_w, _sy + b_h / 2.0))
+                cands.append((_margin_hi, _sy, _margin_hi, _sy + b_h / 2.0, _margin_hi, _sy + b_h / 2.0))
+            # Room centroids carry the Level-3 numbered tag circle when a room is
+            # too small for its name, so the anchor badge must dodge those too.
+            room_tag_zones: List[BBox] = []
+            for r_parsed in parsed_rooms:
+                r_cx = c_mx + (r_parsed[1] + r_parsed[3] / 2.0) * c_scale
+                r_cy = c_my + (env_d - (r_parsed[2] + r_parsed[4] / 2.0)) * c_scale
+                room_tag_zones.append(BBox(r_cx - 9.0, r_cy - 9.0, r_cx + 9.0, r_cy + 9.0))
+
+            # Stair annotations inside the core (UP / DN / clear headroom) are fixed
+            # text, so the badge must leave them readable too.
+            if 'stair_prim' in locals() and stair_prim is not None:
+                for _tx, _ty in (stair_prim.up_text_pos, stair_prim.dn_text_pos, stair_prim.headroom_text_pos):
+                    if _tx is None or _ty is None:
+                        continue
+                    _tx_px = c_mx + _tx * c_scale
+                    _ty_px = c_my + (env_d - _ty) * c_scale
+                    room_tag_zones.append(BBox(_tx_px - 20.0, _ty_px - 9.0, _tx_px + 20.0, _ty_px + 9.0))
+
+            # Grid bubbles sit in the right margin; keep the badge off them.
+            if not ("T1" in bldg_typ or "SINGLE" in bldg_typ):
+                for _gy_m in (0.0, env_d / 2.0, env_d):
+                    _gy_px = c_my + _gy_m * c_scale
+                    _gx_px = c_mx + (env_w + 0.60) * c_scale
+                    room_tag_zones.append(BBox(_gx_px - 10.0, _gy_px - 10.0, _gx_px + 10.0, _gy_px + 10.0))
+
+            # Prefer a free slot; otherwise take the least-overlapping one so the
+            # badge never lands squarely on top of a door tag or unit badge.
+            def _badge_cost(c_cand: Tuple[float, ...]) -> float:
                 cbx, cby = c_cand[0], c_cand[1]
                 c_bbox = BBox(cbx, cby, cbx + b_w, cby + b_h)
-                collides_d = any(c_bbox.intersects(db) for db in d_boxes)
-                in_env = (
+                cost = 0.0
+                for db in d_boxes:
+                    if c_bbox.intersects(db):
+                        cost += max(1.0, c_bbox.intersection_area(db))
+                for rb in room_tag_zones:
+                    if c_bbox.intersects(rb):
+                        cost += max(1.0, c_bbox.intersection_area(rb))
+                inside_plan = (
                     cbx >= c_mx and cbx + b_w <= c_mx + env_w * c_scale and
                     cby >= c_my and cby + b_h <= c_my + env_d * c_scale
                 )
-                if not collides_d and in_env:
-                    chosen = c_cand
-                    break
+                in_side_margin = (
+                    (cbx >= 2.0 and cbx + b_w <= c_mx - 4.0) or
+                    (cbx >= c_mx + env_w * c_scale + 4.0 and cbx + b_w <= c_mx + env_w * c_scale + 64.0)
+                )
+                if inside_plan:
+                    pass
+                elif in_side_margin and cby >= c_my - 20.0:
+                    cost += 30.0  # callout outside the plan: allowed, but not preferred
+                else:
+                    cost += 1000.0
+                return cost
+
+            chosen = min(cands, key=_badge_cost)
 
             ch_bx, ch_by, ch_lx1, ch_ly1, ch_lx2, ch_ly2 = chosen
             # Convert chosen candidate to IR Y-up meters
@@ -1510,9 +1665,12 @@ def build_drawing_ir(
                 dtag_y = col_my + (env_d - op.tag_y) * col_scale
                 fixed_obstacles.append((f"door_tag_{op.tag}", BBox(dtag_x - 7.0, dtag_y - 4.5, dtag_x + 7.0, dtag_y + 4.5)))
                 if op.unit_badge:
-                    ub_x = col_px(op.unit_badge["x"])
-                    ub_y = col_my + (env_d - op.unit_badge["y"]) * col_scale
-                    fixed_obstacles.append((f"unit_badge_{op.opening_id}", BBox(ub_x - 2.0, ub_y - 7.5, ub_x + 42.0, ub_y + 7.5)))
+                    # Reserved exactly where the openings layer paints the badge
+                    # (38x13 px riding the hinge, flipped below near the top edge).
+                    ub_hx = col_px(op.hinge_x)
+                    ub_hy = col_my + (env_d - op.hinge_y) * col_scale
+                    ub_y = (ub_hy + 12.0) if ub_hy < col_my + 35.0 else (ub_hy - 22.0)
+                    fixed_obstacles.append((f"unit_badge_{op.opening_id}", BBox(ub_hx + 4.0 - 2.0, ub_y - 1.0, ub_hx + 4.0 + 38.0 + 2.0, ub_y + 14.0)))
             elif op.opening_type == "window":
                 wtag_x = col_px(op.tag_x)
                 wtag_y = col_my + (env_d - op.tag_y) * col_scale
@@ -1637,6 +1795,49 @@ def build_drawing_ir(
                 return True
         return False
 
+    # Slide order: vertical nudges first (historical behaviour), then sideways, so a
+    # small room can move its tag clear of a door tag or the core-anchor badge instead
+    # of colliding with a neighbour.
+    _NUDGE_OFFSETS = [
+        (0.0, -2.0), (0.0, 2.0), (0.0, -4.0), (0.0, 4.0), (0.0, -6.0), (0.0, 6.0),
+        (0.0, -8.0), (0.0, 8.0), (0.0, -12.0), (0.0, 12.0), (0.0, -10.0), (0.0, 10.0),
+        (-8.0, 0.0), (8.0, 0.0), (-16.0, 0.0), (16.0, 0.0), (-24.0, 0.0), (24.0, 0.0),
+        (-8.0, -4.0), (8.0, -4.0), (-8.0, 4.0), (8.0, 4.0),
+        (-16.0, -6.0), (16.0, -6.0), (-16.0, 6.0), (16.0, 6.0),
+    ]
+
+    def try_nudge(i_idx: int, cand: Dict[str, Any], current_bboxes: List[BBox]) -> bool:
+        """Slides a room label inside its own room until it clears every conflict.
+
+        Returns True when a clear position was found (leaving the candidate there),
+        False when the label was restored to the room centre.
+        """
+        base_cx = cand["rx"] + cand["rw"] / 2.0
+        base_cy = cand["ry"] + cand["rh"] / 2.0
+        if cand["level"] in (1, 2):
+            lines = cand["name_lines"]
+            fs = cand["font_size"]
+            w = max(_approx_text_width(l, fs) for l in lines)
+            if cand.get("dims_str"):
+                w = max(w, _approx_text_width(cand["dims_str"], cand["dims_fs"]))
+            h = cand["total_h"]
+        else:
+            w = h = cand["radius"] * 2
+
+        for off_x, off_y in _NUDGE_OFFSETS:
+            test_cx = base_cx + off_x
+            test_cy = base_cy + off_y
+            if test_cx - w / 2.0 < cand["rx"] + 3.0 or test_cx + w / 2.0 > cand["rx"] + cand["rw"] - 3.0:
+                continue
+            if test_cy - h / 2.0 < cand["ry"] + 3.0 or test_cy + h / 2.0 > cand["ry"] + cand["rh"] - 3.0:
+                continue
+            cand["cx"], cand["cy"] = test_cx, test_cy
+            if not has_any_conflict(i_idx, cand, current_bboxes):
+                return True
+
+        cand["cx"], cand["cy"] = base_cx, base_cy
+        return False
+
     for iteration in range(35):
         collision_detected = False
         bboxes = [get_cand_bbox(opts[active_levels[i]]) for i, (r_d, opts) in enumerate(room_options)]
@@ -1647,21 +1848,11 @@ def build_drawing_ir(
             for obs_name, b_obs in fixed_obstacles:
                 if b_cand.intersects(b_obs):
                     collision_detected = True
-                    base_cy = cand["ry"] + cand["rh"] / 2.0
-                    nudged = False
-                    for dy in [-2, 2, -4, 4, -6, 6, -8, 8, -12, 12]:
-                        test_cy = base_cy + dy
-                        h = cand["total_h"] if cand["level"] in (1, 2) else cand["radius"] * 2
-                        if test_cy - h / 2.0 >= cand["ry"] + 3.0 and test_cy + h / 2.0 <= cand["ry"] + cand["rh"] - 3.0:
-                            cand["cy"] = test_cy
-                            if not has_any_conflict(i, cand, bboxes):
-                                nudged = True
-                                break
-                    if not nudged:
-                        cand["cy"] = base_cy
+                    if not try_nudge(i, cand, bboxes):
                         if active_levels[i] + 1 < len(opts):
                             active_levels[i] += 1
                             cand = opts[active_levels[i]]
+                            cand["cx"] = cand["rx"] + cand["rw"] / 2.0
                             cand["cy"] = cand["ry"] + cand["rh"] / 2.0
                     break
             if collision_detected:
@@ -1679,30 +1870,9 @@ def build_drawing_ir(
                     cand1 = opts1[active_levels[i]]
                     cand2 = opts2[active_levels[j]]
 
-                    base_cy1 = cand1["ry"] + cand1["rh"] / 2.0
-                    base_cy2 = cand2["ry"] + cand2["rh"] / 2.0
-
-                    nudged = False
-                    for dy in [-2, 2, -4, 4, -6, 6, -8, 8, -10, 10]:
-                        test_cy = base_cy1 + dy
-                        h = cand1["total_h"] if cand1["level"] in (1, 2) else cand1["radius"] * 2
-                        if test_cy - h / 2.0 >= cand1["ry"] + 3.0 and test_cy + h / 2.0 <= cand1["ry"] + cand1["rh"] - 3.0:
-                            cand1["cy"] = test_cy
-                            if not has_any_conflict(i, cand1, bboxes):
-                                nudged = True
-                                break
+                    nudged = try_nudge(i, cand1, bboxes)
                     if not nudged:
-                        cand1["cy"] = base_cy1
-                        for dy in [-2, 2, -4, 4, -6, 6, -8, 8, -10, 10]:
-                            test_cy = base_cy2 + dy
-                            h = cand2["total_h"] if cand2["level"] in (1, 2) else cand2["radius"] * 2
-                            if test_cy - h / 2.0 >= cand2["ry"] + 3.0 and test_cy + h / 2.0 <= cand2["ry"] + cand2["rh"] - 3.0:
-                                cand2["cy"] = test_cy
-                                if not has_any_conflict(j, cand2, bboxes):
-                                    nudged = True
-                                    break
-                        if not nudged:
-                            cand2["cy"] = base_cy2
+                        if not try_nudge(j, cand2, bboxes):
                             if r1_d[7] <= r2_d[7]:
                                 if active_levels[i] + 1 < len(opts1):
                                     active_levels[i] += 1
@@ -1721,6 +1891,7 @@ def build_drawing_ir(
             break
 
     # Build TextPrimitives from resolved candidates
+    label_boxes: List[BBox] = []
     for i, (r_data, opts) in enumerate(room_options):
         cand = opts[active_levels[i]]
         cand_cx = cand["cx"]
@@ -1739,6 +1910,13 @@ def build_drawing_ir(
             w_px = max(_approx_text_width(l, fs) for l in lines)
             if dims_str:
                 w_px = max(w_px, _approx_text_width(dims_str, dims_fs))
+
+            label_boxes.append(BBox(
+                cand_cx - w_px / 2.0 - 1.0,
+                cand_cy - total_h / 2.0 - 1.0,
+                cand_cx + w_px / 2.0 + 1.0,
+                cand_cy + total_h / 2.0 + 1.0,
+            ))
 
             primitives.append(TextPrimitive(
                 layer="text",
@@ -1775,6 +1953,12 @@ def build_drawing_ir(
         else:
             rad_px = cand["radius"]
             tag_num = cand["room_idx"]
+            label_boxes.append(BBox(
+                cand_cx - rad_px,
+                cand_cy - rad_px,
+                cand_cx + rad_px,
+                cand_cy + rad_px,
+            ))
             primitives.append(TextPrimitive(
                 layer="text",
                 x=cx_ir,
@@ -1792,6 +1976,36 @@ def build_drawing_ir(
                     "centroid_m": cand.get("centroid_m", (cx_ir, cy_ir)),
                 }
             ))
+
+    # 7b. Door Tag Placement
+    # Room labels and fixed annotations are resolved above; door tags are the last
+    # movable label, so nudge each one clear of the room text it would otherwise
+    # overprint (and clear of the other door tags). The tag stays within ~0.45m of
+    # its leaf, and keeps its original position when every candidate is occupied.
+    door_tag_boxes: List[BBox] = []
+    for prim in primitives:
+        if not isinstance(prim, OpeningPrimitive) or prim.opening_type != "door":
+            continue
+        base_x = col_px(prim.tag_x)
+        base_y = col_my + (env_d - prim.tag_y) * col_scale
+        chosen = (base_x, base_y)
+        for off_x, off_y in (
+            (0.0, 0.0), (0.0, -13.0), (0.0, 13.0), (16.0, 0.0), (-16.0, 0.0),
+            (13.0, -12.0), (-13.0, -12.0), (13.0, 12.0), (-13.0, 12.0),
+        ):
+            cand_x, cand_y = base_x + off_x, base_y + off_y
+            cand_box = BBox(cand_x - 8.0, cand_y - 6.0, cand_x + 8.0, cand_y + 6.0)
+            if any(cand_box.intersects(b) for b in door_tag_boxes):
+                continue
+            if any(cand_box.intersects(b) for b in label_boxes):
+                continue
+            if any(cand_box.intersects(b) for _name, b in fixed_obstacles):
+                continue
+            chosen = (cand_x, cand_y)
+            break
+        door_tag_boxes.append(BBox(chosen[0] - 8.0, chosen[1] - 6.0, chosen[0] + 8.0, chosen[1] + 6.0))
+        prim.tag_x = (chosen[0] - col_mx) / col_scale
+        prim.tag_y = env_d - (chosen[1] - col_my) / col_scale
 
     # 8. 3-Line Dimension Chains Layer
     dim_offsets_y = [0.35, 0.70, 1.05]
@@ -2112,8 +2326,11 @@ def build_drawing_ir(
             layer="walls", status="CALCULATED"
         ))
 
-    if f_idx == 0 and _svc_layer_on:
-        # Terrace drainage set on every terrace zone of the ground plate.
+    if _svc_layer_on:
+        # Terrace drainage set on EVERY terrace zone of every plate
+        # (the ground-only restriction left upper-floor terraces undrained on
+        # sheet). The loop below is terrace-conditioned, so plates without a
+        # terrace zone are unaffected.
         for tr in norm_rooms:
             if str(tr.get("zone_category", "")) != "terrace":
                 continue
@@ -2154,6 +2371,22 @@ def build_drawing_ir(
                 ],
                 stroke_color=None, fill_color="#F59E0B", dash_array=None,
                 layer="walls", status="RECOMMENDED"
+            ))
+            # Downpipe tag - rainwater pipe discharging to the site
+            # storm outlet (L11 model: downpipe_ties_to = SO-01).
+            primitives.append(TextPrimitive(
+                x=round(dxp + 0.14, 2), y=round(dyp + 0.02, 2),
+                text="DP -> SO-01", subtext=None,
+                font_size_pt=5.0, font_weight="bold", color="#0284C7",
+                halo=False, layer="text", status="CALCULATED"
+            ))
+            # Emergency overflow weir on the terrace edge opposite the
+            # waterproofing band (water exits before overtopping the door sill).
+            primitives.append(TextPrimitive(
+                x=round(tx + tw - 0.60, 2), y=round(ty + td - 0.10, 2),
+                text="OVERFLOW WEIR", subtext=None,
+                font_size_pt=5.0, font_weight="normal", color="#64748B",
+                halo=False, layer="text", status="RECOMMENDED"
             ))
 
     if _struct_layer_on and wg_dict:
@@ -2269,6 +2502,31 @@ def build_drawing_ir(
 # 3. BACKEND RENDERER 1: SVG GENERATOR (WEB BLUEPRINT VIEWER)
 # =============================================================================
 
+def _door_leaf_inside(
+    env_w: float,
+    env_d: float,
+    hinge_ir: Tuple[float, float],
+    leaf_ir: Tuple[float, float],
+) -> Tuple[float, float]:
+    """Mirror a door leaf across its hinge when the declared swing opens OUTSIDE.
+
+    A leaf must open into the building. Room layouts sometimes place a door on a
+    room's outer edge (the west exterior wall of an end room) while the record's
+    swing side points through that wall, so the leaf and its swing arc are drawn
+    outside the envelope - a hole in the facade with the door hanging off it.
+    Mirroring across the hinge keeps the door on the same wall at the same width
+    and opens it the other way. A leaf that is already inside is returned as-is.
+    """
+    lx, ly = leaf_ir
+    if 0.0 <= lx <= env_w and 0.0 <= ly <= env_d:
+        return lx, ly
+    mx = 2.0 * hinge_ir[0] - lx
+    my = 2.0 * hinge_ir[1] - ly
+    if 0.0 <= mx <= env_w and 0.0 <= my <= env_d:
+        return mx, my
+    return lx, ly
+
+
 def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
     """
     Renders publication-grade architectural SVG blueprint exclusively from FloorDrawingIR.
@@ -2326,13 +2584,7 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
     _gate_rows = [ld for ld in getattr(ir.header, "layer_statuses", []) or [] if isinstance(ld, dict)]
     _warn_present = any(str(ld.get("status")) == "WARN" for ld in _gate_rows)
     _panel_text_max_chars = max(40, int((svg_w - margin_x - 12.0) / (5.5 * 0.60)))
-    _legend_parts = [
-        "dashed box = plumbing shaft (soil+vent stack, inspection access at foundation)",
-        "diamond = stack",
-        "RWP = rainwater pipe",
-        "TB = transfer beam (verify support below)",
-        "DRAIN = terrace rain-water outlet, slope 1:100 to site storm outlet SO-01",
-    ]
+    _legend_parts = SERVICE_LEGEND_PARTS
     legend_lines: List[str] = []
     _legend_cur = "SERVICE/STRUCTURAL LEGEND: "
     for _lpart in _legend_parts:
@@ -2694,7 +2946,8 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
         # its tail ("NOT FOR CONSTRUCTION") - never ellipsized. _hdr_max was
         # planned upfront and the SAME wrap produced it, so schedules_y
         # already clears the true banner bottom.
-        svg.append(f'    <text x="0" y="25.0" font-size="7.5" font-weight="600" fill="{text_secondary}">{html.escape(_ellipsize_str(typology_tag, _hdr_max))}</text>')
+        _tag_fs, _tag_txt = _fit_banner_line(typology_tag, _hdr_max)
+        svg.append(f'    <text x="0" y="25.0" font-size="{_tag_fs:.2f}" font-weight="600" fill="{text_secondary}">{html.escape(_tag_txt)}</text>')
         _stamp_lines = _stamp_lines_plan
         for _si, _sline in enumerate(_stamp_lines):
             svg.append(f'    <text x="0" y="{38.0 + _si * 12.0:.1f}" font-size="7.5" font-weight="600" fill="{text_secondary}">{html.escape(_sline)}</text>')
@@ -2704,7 +2957,8 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
             svg.append(f'    <text x="0" y="{_entry_y:.1f}" font-size="8.5" font-weight="600" fill="#10B981">MAIN ENTRANCE: {entrance_dir} | MAIN ENTRY | NBC 2016 COMPLIANT</text>')
     else:
         svg.append(f'    <text x="0" y="11.0" font-size="11.0" font-weight="700" fill="{text_primary}">{html.escape(ir.header.floor_name.upper())}</text>')
-        svg.append(f'    <text x="0" y="24.0" font-size="8.5" font-weight="500" fill="{text_secondary}">{html.escape(_ellipsize_str(typology_tag, _hdr_max))}</text>')
+        _tag_fs, _tag_txt = _fit_banner_line(typology_tag, _hdr_max, base_fs=8.5)
+        svg.append(f'    <text x="0" y="24.0" font-size="{_tag_fs:.2f}" font-weight="500" fill="{text_secondary}">{html.escape(_tag_txt)}</text>')
         # Site stamp wrapped too: same plan, tail always kept, ids never
         # dropped; the NBC/POLICY lines flow BELOW the actual last line.
         for _si, _sline in enumerate(_stamp_lines_plan):
@@ -3421,6 +3675,57 @@ def render_reportlab_from_ir(
 # 5. SITE PLAN DRAWING IR BUILDER (SHEET 10.SP / SITE SURVEY)
 # =============================================================================
 
+# Site-plan fields that carry geometry, rebased by _rebase_site_geometry below.
+_SITE_PAIR_KEYS = frozenset({
+    "vertices", "buildable_polygon_coords", "building_line_coords", "polygon_coords",
+    "corner_vertices", "centroid", "drive_aisle_polygon",
+})
+_SITE_X_KEYS = frozenset({"x", "x_m", "center_x", "cx", "hinge_x", "minx"})
+_SITE_Y_KEYS = frozenset({"y", "y_m", "center_y", "cy", "hinge_y", "miny"})
+
+
+def _is_pair(val: Any) -> bool:
+    return (
+        isinstance(val, (list, tuple))
+        and len(val) == 2
+        and all(isinstance(c, (int, float)) and not isinstance(c, bool) for c in val)
+    )
+
+
+def _rebase_site_geometry(node: Any, dx: float, dy: float) -> Any:
+    """Translate every coordinate of a dumped site plan by (dx, dy).
+
+    A captured boundary is pin-centred, so its local coordinates can be negative
+    (plot bbox minx/miny < 0) while the site sheet's layout math - road corridor,
+    edge callouts, label lanes - is authored for a plot whose south-west corner is
+    the origin. Rebasing the geometry onto that corner puts drawing and layout in
+    one frame. No rounding is applied, so an exact (0, 0) offset is a no-op.
+    """
+    if isinstance(node, dict):
+        out: Dict[str, Any] = {}
+        for key, val in node.items():
+            if key in _SITE_PAIR_KEYS and isinstance(val, (list, tuple)):
+                if _is_pair(val):
+                    out[key] = (float(val[0]) + dx, float(val[1]) + dy)
+                else:
+                    out[key] = [
+                        (float(p[0]) + dx, float(p[1]) + dy) if _is_pair(p) else _rebase_site_geometry(p, dx, dy)
+                        for p in val
+                    ]
+            elif key == "bounding_box" and isinstance(val, (list, tuple)) and len(val) == 4:
+                out[key] = (float(val[0]) + dx, float(val[1]) + dy, float(val[2]) + dx, float(val[3]) + dy)
+            elif key in _SITE_X_KEYS and isinstance(val, (int, float)) and not isinstance(val, bool):
+                out[key] = float(val) + dx
+            elif key in _SITE_Y_KEYS and isinstance(val, (int, float)) and not isinstance(val, bool):
+                out[key] = float(val) + dy
+            else:
+                out[key] = _rebase_site_geometry(val, dx, dy)
+        return out
+    if isinstance(node, list):
+        return [_rebase_site_geometry(v, dx, dy) for v in node]
+    return node
+
+
 def build_site_drawing_ir(
     site_plan: Any,
     gen_id: str = "GEN-SITE-01",
@@ -3442,6 +3747,21 @@ def build_site_drawing_ir(
         if isinstance(obj, dict):
             return obj.get(key, default)
         return getattr(obj, key, default)
+
+    # Rebase FIRST: everything below (both the drawing and the layout math) must
+    # read the plot's south-west corner as the origin.
+    _plot_probe = _get(site_plan, "plot_polygon", {}) or {}
+    _probe_bbox = _get(_plot_probe, "bounding_box", None)
+    if isinstance(_probe_bbox, (list, tuple)) and len(_probe_bbox) == 4:
+        _base_x, _base_y = float(_probe_bbox[0]), float(_probe_bbox[1])
+    else:
+        _probe_verts = _get(_plot_probe, "vertices", []) or []
+        _base_x = min((float(p[0]) for p in _probe_verts), default=0.0)
+        _base_y = min((float(p[1]) for p in _probe_verts), default=0.0)
+    if _base_x or _base_y:
+        _dumped = site_plan.model_dump() if hasattr(site_plan, "model_dump") else site_plan
+        if isinstance(_dumped, dict):
+            site_plan = _rebase_site_geometry(_dumped, -_base_x, -_base_y)
 
     plot_poly = _get(site_plan, "plot_polygon", {})
     vertices = _get(plot_poly, "vertices", []) or []

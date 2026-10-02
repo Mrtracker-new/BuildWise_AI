@@ -766,8 +766,10 @@ def make_site_plan_sheet_flowables(
     flowables.append(stat_table)
     flowables.append(Spacer(1, 4))
 
-    # Drawing Status Stamp Callout
-    stamp_txt = getattr(sp_model, "drawing_status_stamp", "STATUS: CONCEPT DESIGN - VALIDATED LAYERS: [L1] - NOT FOR CONSTRUCTION")
+    # Drawing Status Stamp Callout (the fallback derives from the
+    # canonical single-source helper rather than a re-worded literal)
+    from app.services.floorplan.validation_gate import drawing_status_stamp as _canonical_stamp
+    stamp_txt = getattr(sp_model, "drawing_status_stamp", None) or _canonical_stamp(["L1"])
     p_stamp = Paragraph(f"<font color='#DC2626'><b>{stamp_txt}</b></font>", p_meta)
     t_stamp = Table([[p_stamp]], colWidths=[width])
     t_stamp.setStyle(TableStyle([
@@ -1029,6 +1031,99 @@ def make_site_plan_sheet_flowables(
 # =============================================================================
 # 6. MAIN PDF REPORT GENERATOR (REDESIGNED v9)
 # =============================================================================
+
+def make_universal_gate_table(gate: Dict[str, Any]) -> List[Any]:
+    """
+    UNIVERSAL VALIDATION GATE layer table as ReportLab flowables.
+    Shared by the Sheet 10.0 dossier and the single-floor blueprint page so the
+    gate is a content layer on every blueprint-bearing PDF (SVG/PDF parity).
+    Every generation lists ALL layers L1-L14 with per-layer status
+    (PASS | WARN | FAIL | N/A-with-reason); overall = worst layer.
+    """
+    flowables: List[Any] = []
+    _gate_layers = list((gate or {}).get("layers") or [])
+    if not _gate_layers:
+        return flowables
+    _g_overall = str((gate or {}).get("overall_status", "PASS"))
+    _g_colors = {"PASS": COLOR_GREEN_TEXT, "WARN": COLOR_AMBER_TEXT, "FAIL": COLOR_RED_TEXT, "N/A": COLOR_TEXT_SECONDARY}
+    _g_head = ParagraphStyle('GateHead', fontName=FONT_SEMIBOLD, fontSize=7.5, leading=9.0, textColor=COLOR_TEXT_PRIMARY)
+    _g_cell = ParagraphStyle('GateCell', fontName=FONT_REGULAR, fontSize=7.0, leading=8.5, textColor=COLOR_TEXT_SECONDARY)
+    _g_layer = ParagraphStyle('GateLayer', fontName=FONT_SEMIBOLD, fontSize=7.0, leading=8.5, textColor=COLOR_TEXT_PRIMARY)
+    _g_th = ParagraphStyle('GateTH', fontName=FONT_SEMIBOLD, fontSize=7.0, leading=8.5, textColor=COLOR_TEXT_PRIMARY)
+    _g_status = {
+        st: ParagraphStyle(f'GateSt_{st}', fontName=FONT_SEMIBOLD, fontSize=7.5, leading=9.0,
+                           textColor=_g_colors.get(st, COLOR_TEXT_SECONDARY))
+        for st in ("PASS", "WARN", "FAIL", "N/A")
+    }
+    _gate_rows = [
+        [
+            Paragraph("<b>UNIVERSAL VALIDATION GATE - LAYERS L1-L14</b>", _g_head),
+            Paragraph("", _g_cell),
+            Paragraph(f"<b>OVERALL: {_g_overall}</b>",
+                      _g_status.get(_g_overall, _g_cell)),
+        ],
+        [
+            Paragraph("<b>Layer</b>", _g_th),
+            Paragraph("<b>Scope / Summary (N/A shows reason)</b>", _g_th),
+            Paragraph("<b>Status</b>", _g_th),
+        ],
+    ]
+    for _ld in _gate_layers[:14]:
+        _lid = str(_ld.get("layer_id", "?"))
+        _lt = str(_ld.get("title", ""))
+        _lst = str(_ld.get("status", "PASS"))
+        if _lst == "N/A":
+            _lsum = f"N/A: {_ld.get('reason', 'not applicable')}"
+        else:
+            _lsum = str(_ld.get("summary", ""))
+            _f = _ld.get("findings") or []
+            if _f:
+                # Keep only findings that add information (skip echoes of the
+                # summary and near-identical repeated findings).
+                _seen_f = {_lsum.strip().lower()}
+                _extra = []
+                for _fx in (str(x).strip() for x in _f[:4]):
+                    if not _fx:
+                        continue
+                    _key = _fx.lower()
+                    if _key in _seen_f:
+                        continue
+                    _seen_f.add(_key)
+                    _extra.append(_fx)
+                if _extra:
+                    _lsum += " - " + "; ".join(_extra[:2])
+        _gate_rows.append([
+            Paragraph(f"<b>{html.escape(_lid)}</b> {html.escape(_lt)}", _g_layer),
+            Paragraph(html.escape(_lsum[:220]), _g_cell),
+            Paragraph(f"<b>{_lst}</b>", _g_status.get(_lst, _g_cell)),
+        ])
+    _warn_ids = [str(_ld.get("layer_id")) for _ld in _gate_layers if str(_ld.get("status")) == "WARN"]
+    if _warn_ids:
+        _g_warn_style = ParagraphStyle('GateWarn', fontName=FONT_REGULAR, fontSize=7.0, leading=8.5, textColor=COLOR_AMBER_TEXT)
+        _gate_rows.append([
+            Paragraph(f"<b>Warnings surfaced as chips:</b> {html.escape(', '.join(_warn_ids))}", _g_warn_style),
+            "",
+            Paragraph("<b>ADVISORY</b>", _g_warn_style),
+        ])
+    t_gate = Table(_gate_rows, colWidths=[150.0, 279.0, 60.23], repeatRows=2)
+    t_gate.setStyle(TableStyle([
+        ('SPAN', (0, 0), (1, 0)),
+        ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
+        ('BACKGROUND', (0, 1), (-1, 1), COLOR_BG_SUBTLE),
+        ('LINEBELOW', (0, 0), (-1, 0), 1.0, COLOR_ACCENT),
+        ('LINEBELOW', (0, 1), (-1, 1), 0.5, COLOR_HAIRLINE),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.0),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.0),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
+        ('BOX', (0, 0), (-1, -1), 1.0, COLOR_ACCENT),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    flowables.append(t_gate)
+    flowables.append(Spacer(1, 8))
+    return flowables
+
+
 
 def generate_pdf_report(
     data: Dict[str, Any],
@@ -2024,88 +2119,14 @@ def generate_pdf_report(
 
         # =========================================================================
         # UNIVERSAL VALIDATION GATE - LAYER TABLE (SHEET 10.0)
-        # =========================================================================
         # Every generation lists ALL layers L1-L14 with per-layer status
         # (PASS | WARN | FAIL | N/A-with-reason); overall = worst layer.
-        _gate = (cert or {}).get("details", {}).get("validation_gate") or             _get(multi_storey, "validation_gate") or {}
-        _gate_layers = list(_gate.get("layers") or [])
-        if _gate_layers:
-            _g_overall = str(_gate.get("overall_status", "PASS"))
-            _g_colors = {"PASS": COLOR_GREEN_TEXT, "WARN": COLOR_AMBER_TEXT, "FAIL": COLOR_RED_TEXT, "N/A": COLOR_TEXT_SECONDARY}
-            _g_head = ParagraphStyle('GateHead', fontName=FONT_SEMIBOLD, fontSize=7.5, leading=9.0, textColor=COLOR_TEXT_PRIMARY)
-            _g_cell = ParagraphStyle('GateCell', fontName=FONT_REGULAR, fontSize=7.0, leading=8.5, textColor=COLOR_TEXT_SECONDARY)
-            _g_layer = ParagraphStyle('GateLayer', fontName=FONT_SEMIBOLD, fontSize=7.0, leading=8.5, textColor=COLOR_TEXT_PRIMARY)
-            _g_status = {
-                st: ParagraphStyle(f'GateSt_{st}', fontName=FONT_SEMIBOLD, fontSize=7.5, leading=9.0,
-                                   textColor=_g_colors.get(st, COLOR_TEXT_SECONDARY))
-                for st in ("PASS", "WARN", "FAIL", "N/A")
-            }
-            _gate_rows = [
-                [
-                    Paragraph(f"<b>UNIVERSAL VALIDATION GATE - LAYERS L1-L14</b>", _g_head),
-                    Paragraph("", _g_cell),
-                    Paragraph(f"<b>OVERALL: {_g_overall}</b>",
-                              _g_status.get(_g_overall, _g_cell)),
-                ],
-                [
-                    Paragraph("<b>Layer</b>", th_style),
-                    Paragraph("<b>Scope / Summary (N/A shows reason)</b>", th_style),
-                    Paragraph("<b>Status</b>", th_style),
-                ],
-            ]
-            for _ld in _gate_layers[:14]:
-                _lid = str(_ld.get("layer_id", "?"))
-                _lt = str(_ld.get("title", ""))
-                _lst = str(_ld.get("status", "PASS"))
-                if _lst == "N/A":
-                    _lsum = f"N/A: {_ld.get('reason', 'not applicable')}"
-                else:
-                    _lsum = str(_ld.get("summary", ""))
-                    _f = _ld.get("findings") or []
-                    if _f:
-                        # Keep only findings that add information (skip echoes of
-                        # the summary and near-identical repeated findings).
-                        _seen_f = {_lsum.strip().lower()}
-                        _extra = []
-                        for _fx in (str(x).strip() for x in _f[:4]):
-                            if not _fx:
-                                continue
-                            _key = _fx.lower()
-                            if _key in _seen_f:
-                                continue
-                            _seen_f.add(_key)
-                            _extra.append(_fx)
-                        if _extra:
-                            _lsum += " - " + "; ".join(_extra[:2])
-                _gate_rows.append([
-                    Paragraph(f"<b>{html.escape(_lid)}</b> {html.escape(_lt)}", _g_layer),
-                    Paragraph(html.escape(_lsum[:220]), _g_cell),
-                    Paragraph(f"<b>{_lst}</b>", _g_status.get(_lst, _g_cell)),
-                ])
-            _warn_ids = [str(_ld.get("layer_id")) for _ld in _gate_layers if str(_ld.get("status")) == "WARN"]
-            if _warn_ids:
-                _g_warn_style = ParagraphStyle('GateWarn', fontName=FONT_REGULAR, fontSize=7.0, leading=8.5, textColor=COLOR_AMBER_TEXT)
-                _gate_rows.append([
-                    Paragraph(f"<b>Warnings surfaced as chips:</b> {html.escape(', '.join(_warn_ids))}", _g_warn_style),
-                    "",
-                    Paragraph("<b>ADVISORY</b>", _g_warn_style),
-                ])
-            t_gate = Table(_gate_rows, colWidths=[150.0, 279.0, 60.23], repeatRows=2)
-            t_gate.setStyle(TableStyle([
-                ('SPAN', (0, 0), (1, 0)),
-                ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
-                ('BACKGROUND', (0, 1), (-1, 1), COLOR_BG_SUBTLE),
-                ('LINEBELOW', (0, 0), (-1, 0), 1.0, COLOR_ACCENT),
-                ('LINEBELOW', (0, 1), (-1, 1), 0.5, COLOR_HAIRLINE),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 3.0),
-                ('TOPPADDING', (0, 0), (-1, -1), 3.0),
-                ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
-                ('BOX', (0, 0), (-1, -1), 1.0, COLOR_ACCENT),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]))
-            story.append(t_gate)
-            story.append(Spacer(1, 8))
+        # Rendering extracted to make_universal_gate_table so the
+        # single-floor blueprint path emits the same content layer.
+        _gate = (cert or {}).get("details", {}).get("validation_gate") or _get(multi_storey, "validation_gate") or {}
+        _gate_flowables = make_universal_gate_table(_gate)
+        if _gate_flowables:
+            story.extend(_gate_flowables)
 
         # Life Safety & Structural Compliance / Legal Advisory
         if not cert:
@@ -2263,6 +2284,15 @@ def generate_pdf_report(
             legend_table = make_floorplan_legend({"rectangles": floor_rects}, width=CONTENT_WIDTH_PT)
             story.append(legend_table)
 
+            # SVG/PDF parity: the service/structural legend taught on the
+            # SVG sheet panel must also teach its symbols on the PDF page.
+            from app.services.floorplan.drawing_ir import SERVICE_LEGEND_PARTS
+            story.append(Spacer(1, 3))
+            story.append(Paragraph(
+                "<b>SERVICE/STRUCTURAL LEGEND:</b> " + " | ".join(SERVICE_LEGEND_PARTS),
+                disclaimer_style,
+            ))
+
             # Dedicated Construction Schedules Sheet (When enabled)
             if render_ms_schedules:
                 story.append(PageBreak())
@@ -2414,6 +2444,21 @@ def generate_pdf_report(
         # Legend row (tinted dot + room name + zone chip per room, up to 3 lines)
         legend_table = make_floorplan_legend(floorplan, width=CONTENT_WIDTH_PT)
         story.append(legend_table)
+
+        # SVG/PDF parity: service legend mirrors the SVG sheet panel.
+        from app.services.floorplan.drawing_ir import SERVICE_LEGEND_PARTS
+        story.append(Spacer(1, 3))
+        story.append(Paragraph(
+            "<b>SERVICE/STRUCTURAL LEGEND:</b> " + " | ".join(SERVICE_LEGEND_PARTS),
+            disclaimer_style,
+        ))
+
+        # SVG/PDF parity: the universal gate layer table is a content
+        # layer on EVERY blueprint-bearing page (single-floor included).
+        _gate_sf = _get(multi_storey, "validation_gate", {}) or {}
+        _gate_sf_flowables = make_universal_gate_table(_gate_sf)
+        if _gate_sf_flowables:
+            story.extend(_gate_sf_flowables)
 
         # Construction Schedules (Door, Window, Room, Wall Specs)
         render_single_sched = include_construction_schedules
