@@ -18,6 +18,29 @@ interface MapCanvasProps {
   treeClusters?: GeoJsonFeatureCollection | null;
   waterBodies?: GeoJsonFeatureCollection | null;
   theme?: 'light' | 'dark';
+  /**
+   * Site focus: while the capture wizard is open or a boundary is committed the
+   * basemap's 3D building massing is suppressed. Extruded city blocks over the
+   * plot read as a dark square sitting on the pin and hide the very geometry
+   * (boundary, setback band, footprint) the user is working on.
+   */
+  hideMassing?: boolean;
+  /**
+   * Zoom ceiling. Browsing stays at 18 (beyond that the pitched camera dips
+   * below extruded rooftops); an active site session raises it so small urban
+   * plots are large enough on screen for precise edge picking.
+   */
+  maxZoom?: number;
+  /**
+   * Suppress the analysis-derived site estimate (footprint rectangle + entrance
+   * arrow) once a real plot has been captured. That estimate is anchored on the
+   * pin and ignores the plot, so left on it reads as a second boundary riding
+   * along with the marker while the authoritative preview footprint sits
+   * somewhere else. One building outline at a time.
+   */
+  hideSiteEstimate?: boolean;
+  /** Invoked once the MapLibre instance is created (and with null on teardown). */
+  onMapReady?: (map: maplibregl.Map | null) => void;
 }
 
 const CUSTOM_LAYER_IDS = new Set([
@@ -94,6 +117,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   treeClusters,
   waterBodies,
   theme = 'light',
+  hideMassing = false,
+  maxZoom = 18,
+  hideSiteEstimate = false,
+  onMapReady,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<maplibregl.Map | null>(null);
@@ -104,6 +131,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const [showWaterLayer, setShowWaterLayer] = useState<boolean>(true);
   const [mapStyle, setMapStyle] = useState<MapStyleMode>('standard');
 
+  const onMapReadyRef = useRef(onMapReady);
+  onMapReadyRef.current = onMapReady;
   const onLocationSelectRef = useRef(onLocationSelect);
   useEffect(() => {
     onLocationSelectRef.current = onLocationSelect;
@@ -128,6 +157,11 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   useEffect(() => {
     showWaterLayerRef.current = showWaterLayer;
   }, [showWaterLayer]);
+
+  const hideMassingRef = useRef(hideMassing);
+  hideMassingRef.current = hideMassing;
+  const maxZoomRef = useRef(maxZoom);
+  maxZoomRef.current = maxZoom;
 
   const treeClustersRef = useRef(treeClusters);
   useEffect(() => {
@@ -338,8 +372,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         continue;
       }
       if (layer.id === '3d-buildings') {
-        // Extrusions live in Standard (vector) and Terrain (relief) views — never over imagery.
-        fadeTargets.push({ layerId: layer.id, type: layer.type, target: mode === 'satellite' ? 0 : 1 });
+        // Extrusions live in Standard (vector) and Terrain (relief) views — never over
+        // imagery, and never while the site is the subject (see hideMassing).
+        const massingOff = mode === 'satellite' || hideMassingRef.current;
+        fadeTargets.push({ layerId: layer.id, type: layer.type, target: massingOff ? 0 : 1 });
         continue;
       }
 
@@ -429,7 +465,11 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       maxFadeMs = Math.max(maxFadeMs, delay + duration);
 
       try {
-        if (target === 1 && (map as any).getLayoutProperty(layerId, 'visibility') === 'none') {
+        if (
+          target === 1 &&
+          !(layerId === '3d-buildings' && hideMassingRef.current) &&
+          (map as any).getLayoutProperty(layerId, 'visibility') === 'none'
+        ) {
           map.setLayoutProperty(layerId, 'visibility', 'visible');
         }
       } catch {
@@ -795,6 +835,15 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         firstSymbolId
       );
     }
+    // Re-assert massing visibility after every style (re)load: satellite never shows
+    // extrusions, and neither does an active capture/site session (hideMassing).
+    if (map.getLayer('3d-buildings')) {
+      map.setLayoutProperty(
+        '3d-buildings',
+        'visibility',
+        mapStyleRef.current !== 'satellite' && !hideMassingRef.current ? 'visible' : 'none'
+      );
+    }
 
     // 4. Proposed Building Footprint Overlay
     if (!map.getSource('footprint-source')) {
@@ -1019,7 +1068,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       minZoom: 3,
       // Cap at z18: beyond that the pitched camera dips below extruded rooftops and the
       // scene collapses into floating grey blocks with the base map invisible.
-      maxZoom: 18,
+      maxZoom: maxZoomRef.current,
       pitch: 0,
       bearing: 0,
       attributionControl: false,
@@ -1142,6 +1191,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     });
 
     mapInstanceRef.current = map;
+    onMapReadyRef.current?.(map);
 
     // Window and container resize observers
     const resizeObserver = new ResizeObserver(() => {
@@ -1175,6 +1225,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         clearTimeout(zoomPulseTimerRef.current);
         zoomPulseTimerRef.current = null;
       }
+      onMapReadyRef.current?.(null);
       map.remove();
       mapInstanceRef.current = null;
     };
@@ -1215,6 +1266,29 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       startZoomPulse(map, pitchTarget);
     }
   }, [mapStyle]);
+
+  // Site session: raise/lower the zoom ceiling (see maxZoom).
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    try {
+      map.setMaxZoom(maxZoom);
+    } catch {
+      // Non-fatal: the map keeps its previous ceiling.
+    }
+  }, [maxZoom]);
+
+  // Site focus: suppress basemap building massing over the plot (see hideMassing).
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    if (!map.getLayer('3d-buildings')) return;
+    map.setLayoutProperty(
+      '3d-buildings',
+      'visibility',
+      mapStyleRef.current !== 'satellite' && !hideMassing ? 'visible' : 'none'
+    );
+  }, [hideMassing, mapStyle]);
 
   // Invalidate / Resize helper
   useEffect(() => {
@@ -1260,7 +1334,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       }
 
       // Draw oriented building footprint polygon if orientation angle is provided
-      if (orientationDegrees !== undefined) {
+      // (unless a captured plot owns the site: see hideSiteEstimate).
+      if (orientationDegrees !== undefined && !hideSiteEstimate) {
         const plinthSqFt = plinthAreaSqFt ?? 2000;
         const areaM2 = plinthSqFt * 0.092903;
         const aspectRatio = 1.75;
@@ -1501,7 +1576,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       }
       // Buildings visible in Standard + Terrain; hidden in Satellite so extrusions never
       // ghost over the photography.
-      const show3dBuildings = mapStyleRef.current !== 'satellite';
+      const show3dBuildings =
+        mapStyleRef.current !== 'satellite' && !hideMassingRef.current;
       if (map.getLayer('3d-buildings')) {
         map.setLayoutProperty(
           '3d-buildings',
@@ -1597,7 +1673,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         };
       }
     }
-  }, [latitude, longitude, orientationDegrees, plinthAreaSqFt, entranceDirection, theme]);
+  }, [latitude, longitude, orientationDegrees, plinthAreaSqFt, entranceDirection, theme, hideSiteEstimate]);
 
   // Synchronize Ecological GeoJSON Layers
   useEffect(() => {

@@ -93,6 +93,13 @@ export const MapStyleSelector: React.FC<MapStyleSelectorProps> = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false);
 
+  // Global shortcut: 'M' opens this menu (event dispatched by useShortcuts).
+  useEffect(() => {
+    const openFromShortcut = (): void => setIsOpen(true);
+    window.addEventListener('bw:open-map-styles', openFromShortcut);
+    return () => window.removeEventListener('bw:open-map-styles', openFromShortcut);
+  }, []);
+
   // Opening the picker is the strongest signal the user is about to switch styles:
   // give the raster modes a head start downloading tiles while they choose.
   useEffect(() => {
@@ -163,8 +170,9 @@ export const MapStyleSelector: React.FC<MapStyleSelectorProps> = ({
             ? 'text-[var(--accent)] bg-[var(--accent-tint)]'
             : 'text-[var(--text-1)] hover:bg-[var(--fill)]'
         }`}
-        title="Map Details (Standard / Satellite / Terrain)"
-        aria-label="Map Details (Standard / Satellite / Terrain)"
+        title="Map details (standard / satellite / terrain)"
+        aria-label="Map details (standard / satellite / terrain)"
+        aria-keyshortcuts="M"
         aria-expanded={isOpen}
         aria-haspopup="menu"
       >
