@@ -513,8 +513,15 @@ def decompose_buildable_into_wings(
             env_w = round(max(4.0, env_w), 2)
             env_d = round(max(4.0, env_d), 2)
             env_area = round(env_w * env_d, 2)
-            footprint_x = round(side_setback, 2)
-            footprint_y = round(front_setback, 2)
+            # Anchor the footprint on the BUILDABLE's own south-west corner, not
+            # on a corner-based (0,0) assumption: for a plot translated in its
+            # local frame (pin-centred capture) the setback distances place the
+            # buildable off-origin, and a hard-coded (side, front) anchor would
+            # push the footprint off the plot. Byte-identical for origin-anchored
+            # plots, where the buildable's corner IS (side_setback, front_setback).
+            bld_minx, bld_miny = buildable_poly.bounds[0], buildable_poly.bounds[1]
+            footprint_x = round(bld_minx, 2)
+            footprint_y = round(bld_miny, 2)
 
         corners = [
             (footprint_x, footprint_y),
@@ -972,11 +979,15 @@ def evaluate_orthogonal_waste_and_rotations(
     buildable_poly: Polygon,
     footprint_area: float,
     chosen_angle: float = 0.0,
+    rotation_scan_grid_step: float = 0.25,
 ) -> Tuple[float, List[Dict[str, Any]], Optional[str]]:
     """
     Evaluates orthogonal waste vs buildable area.
     If waste > 25%, evaluates candidate rotations (0° axis + edge-aligned angles)
     and returns (waste_pct, rotation_alternatives, warning_message).
+    rotation_scan_grid_step: discretization for the alternative-orientation scan
+    (0.25 m canonical; coarser values trade alternatives precision for speed —
+    used by the map preview budget, never by the floorplan solve).
     """
     buildable_area = round(buildable_poly.area, 2)
     if buildable_area <= 0.0:
@@ -1001,7 +1012,7 @@ def evaluate_orthogonal_waste_and_rotations(
                 angles.append(deg)
 
         for ang in sorted(angles):
-            rect = find_largest_inscribed_rectangle(buildable_poly, grid_step=0.25, candidate_orientations=[ang])
+            rect = find_largest_inscribed_rectangle(buildable_poly, grid_step=rotation_scan_grid_step, candidate_orientations=[ang])
             if rect:
                 a_area = rect["area_sqm"]
                 w_pct = round(max(0.0, buildable_area - a_area) / buildable_area * 100.0, 1)
@@ -1269,6 +1280,8 @@ def compute_canonical_site_plan(
     program_needed_area_m2: Optional[float] = None,
     inscribed_override: Optional[Dict[str, float]] = None,
     typology: str = "T1_SINGLE_FAMILY",
+    provenance: Optional[Dict[str, Any]] = None,
+    rotation_scan_grid_step: Optional[float] = None,
 ) -> Tuple[bool, Optional[SitePlanModel], List[str]]:
     """
     Primary canonical site plan synthesis. Consumes PlotPolygon or auto-generates
@@ -1329,11 +1342,17 @@ def compute_canonical_site_plan(
         avail_d = max(4.0, bbox_d - front_setback - rear_setback)
         avail_area = avail_w * avail_d
 
+        # The setback formula above is corner-based (bbox-relative). Re-anchor
+        # it on the plot's own bbox corner: a plot whose local origin is NOT
+        # its bbox corner (e.g. the pin-centred captured boundary, where
+        # minx/miny are negative) would otherwise displace the buildable - and
+        # the footprint/wedge zones derived from it - off the plot entirely.
+        # For origin-anchored plots (minx == miny == 0.0) this is byte-identical.
         buildable_coords = [
-            (round(side_setback, 2), round(front_setback, 2)),
-            (round(side_setback + avail_w, 2), round(front_setback, 2)),
-            (round(side_setback + avail_w, 2), round(front_setback + avail_d, 2)),
-            (round(side_setback, 2), round(front_setback + avail_d, 2)),
+            (round(minx + side_setback, 2), round(miny + front_setback, 2)),
+            (round(minx + side_setback + avail_w, 2), round(miny + front_setback, 2)),
+            (round(minx + side_setback + avail_w, 2), round(miny + front_setback + avail_d, 2)),
+            (round(minx + side_setback, 2), round(miny + front_setback + avail_d, 2)),
         ]
         buildable_poly = Polygon(buildable_coords)
         buildable_area = round(buildable_poly.area, 2)
@@ -1412,7 +1431,8 @@ def compute_canonical_site_plan(
             buildable_poly, footprint_poly, shape_type
         )
         waste_pct, rot_alts, waste_warn = evaluate_orthogonal_waste_and_rotations(
-            buildable_poly, env_area, chosen_angle=0.0
+            buildable_poly, env_area, chosen_angle=0.0,
+            rotation_scan_grid_step=rotation_scan_grid_step or 0.25,
         )
         if waste_warn:
             warnings.append(waste_warn)
@@ -1538,6 +1558,10 @@ def compute_canonical_site_plan(
         "contract": "universal_gate_v1_site_scope",
     }
 
+    # Stamp derived from the canonical single-source helper.
+    from app.services.floorplan.validation_gate import drawing_status_stamp as _stamp_fn
+    _site_stamp = _stamp_fn(["L1", "L2"], scope_note="SITE SCOPE; BUILDING LAYERS N/A")
+
     site_plan = SitePlanModel(
         plot_polygon=poly_model,
         buildable_polygon_coords=buildable_coords,
@@ -1564,10 +1588,9 @@ def compute_canonical_site_plan(
         parking=parking_envelope,
         validated_layers=["L1", "L2"],
         validation_gate=_site_gate,
-        drawing_status_stamp=(
-            "STATUS: CONCEPT DESIGN - VALIDATED LAYERS: [L1, L2] (SITE SCOPE; BUILDING LAYERS N/A) "
-            "- NOT FOR CONSTRUCTION"
-        ),
+        provenance=provenance,
+        # Canonical single-source stamp (site-scope note retained).
+        drawing_status_stamp=_site_stamp,
     )
 
     return True, site_plan, warnings
