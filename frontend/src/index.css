@@ -30,6 +30,12 @@
   --card-bg-subtle: #FFFFFF;
   --sheet-bg: rgba(255, 255, 255, 0.92);
   --map-controls-right: 16px;
+  /* Motion tokens (design/tokens.ts is the source of these values) */
+  --motion-duration-fast: 100ms;
+  --motion-duration-base: 150ms;
+  --motion-duration-slow: 200ms;
+  --motion-duration-sheet: 250ms;
+  --motion-ease-out: cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
 [data-theme="dark"] {
@@ -59,6 +65,12 @@
   --card-bg-subtle: #2C2C2E;
   --sheet-bg: rgba(28, 28, 30, 0.92);
   --map-controls-right: 16px;
+  /* Motion tokens (design/tokens.ts is the source of these values) */
+  --motion-duration-fast: 100ms;
+  --motion-duration-base: 150ms;
+  --motion-duration-slow: 200ms;
+  --motion-duration-sheet: 250ms;
+  --motion-ease-out: cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
 @layer base {
@@ -74,6 +86,40 @@
     padding: 0;
     overflow: hidden;
     user-select: auto;
+  }
+}
+
+@layer utilities {
+  /* Standard Apple-style deceleration curve (design/tokens.ts MOTION.ease.out) */
+  .ease-apple {
+    transition-timing-function: var(--motion-ease-out);
+  }
+
+  /* Off-scale sheet duration (drawer/camera) used by ui('sheet') */
+  .duration-250 {
+    transition-duration: var(--motion-duration-sheet);
+  }
+
+  /* Tabular (fixed-width) numerals for ALL measurements */
+  .ui-font-tabular {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  /* Uniform focus ring; components may override width/color but not presence */
+  .focus-ring-apple {
+    outline: none;
+  }
+  .focus-ring-apple:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--bg-page), 0 0 0 4px var(--accent);
+  }
+
+  /* Color-only transition preset (paint-safe properties only) */
+  .transition-ui {
+    transition-property: color, background-color, border-color, opacity, box-shadow, transform;
+    transition-duration: var(--motion-duration-base);
+    transition-timing-function: var(--motion-ease-out);
   }
 }
 
@@ -456,3 +502,18 @@
   }
 }
 
+
+/* ========================================================================= */
+/* GLOBAL REDUCED MOTION (honors tokens.ts MOTION contract; mirrors          */
+/* primitives.useReducedMotion so JS-driven motion matches CSS)              */
+/* ========================================================================= */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

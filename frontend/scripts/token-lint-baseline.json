@@ -1,0 +1,76 @@
+{
+  "src/App.tsx": {
+    "transition-all": 3,
+    "off-scale-duration": 3
+  },
+  "src/components/AnalysisForm.tsx": {
+    "transition-all": 3,
+    "arbitrary-shadow": 1
+  },
+  "src/components/AnalysisHUD.tsx": {
+    "transition-all": 1,
+    "off-scale-duration": 1
+  },
+  "src/components/BlueprintViewer.tsx": {
+    "hex-color": 56,
+    "transition-all": 19,
+    "arbitrary-shadow": 13
+  },
+  "src/components/ConstraintChips.tsx": {
+    "transition-all": 2
+  },
+  "src/components/CoordinatesInput.tsx": {
+    "hex-color": 2,
+    "transition-all": 8
+  },
+  "src/components/CostBreakdownTable.tsx": {
+    "transition-all": 1,
+    "off-scale-duration": 1
+  },
+  "src/components/DataSourcesDisclosure.tsx": {
+    "transition-all": 1
+  },
+  "src/components/DownloadReportButton.tsx": {
+    "transition-all": 2
+  },
+  "src/components/FactorBreakdown.tsx": {
+    "transition-all": 1,
+    "off-scale-duration": 1
+  },
+  "src/components/FloorPlanGeneratorCard.tsx": {
+    "transition-all": 3,
+    "arbitrary-shadow": 1
+  },
+  "src/components/HazardProfileCard.tsx": {
+    "transition-all": 3
+  },
+  "src/components/MapCanvas.tsx": {
+    "hex-color": 24
+  },
+  "src/components/MapStyleSelector.tsx": {
+    "hex-color": 21
+  },
+  "src/components/RecommendationPanel.tsx": {
+    "transition-all": 1,
+    "arbitrary-shadow": 1
+  },
+  "src/components/ReportHeroBand.tsx": {
+    "transition-all": 1,
+    "off-scale-duration": 1
+  },
+  "src/components/ReportSheet.tsx": {
+    "transition-all": 2,
+    "arbitrary-shadow": 2
+  },
+  "src/components/ScoreSummaryCard.tsx": {
+    "transition-all": 2,
+    "off-scale-duration": 1
+  },
+  "src/components/SiteVisionCard.tsx": {
+    "transition-all": 2,
+    "off-scale-duration": 1
+  },
+  "src/components/VastuAdvisoryCard.tsx": {
+    "transition-all": 1
+  }
+}
