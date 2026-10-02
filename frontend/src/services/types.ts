@@ -11,6 +11,20 @@ export interface AnalysisRequest {
   ground_coverage_ratio?: number;
   client_requirements?: string;
   extracted_constraints?: ExtractedClientConstraints;
+  /** Optional map-captured boundary (the server re-validates authoritatively). */
+  boundary?: BoundarySummaryPayload | null;
+}
+
+/** Mirrors the backend BoundarySummary wire shape ({x,y} vertices in local meters). */
+export interface BoundarySummaryPayload {
+  vertices: { x: number; y: number }[];
+  origin_lat: number;
+  origin_lon: number;
+  shape_type: string;
+  area_sqm: number;
+  perimeter_m: number;
+  source: string;
+  frontage_edge_index: number | null;
 }
 
 export interface FactorScore {
@@ -731,6 +745,7 @@ export interface SitePlanModel {
   site_vastu_zones?: Record<string, [number, number, number, number]>;
   certificate: SiteCertificate;
   svg_site_plan?: string;
+  provenance?: Record<string, any>;
   design_policy?: string;
   design_policy_rationale?: string;
   waste_pct?: number;
@@ -758,12 +773,18 @@ export interface MultiStoreyBuildingModel {
   global_metrics: Record<string, any>;
   qa_report: Record<string, any>;
   warnings: string[];
-  unmet_requirements: string[];
+  unmet_requirements: UnmetRequirement[];
   seed: number;
   solver_timing_ms: number;
   mathematical_certificate?: MathematicalValidityCertificate;
   plot_polygon?: PlotPolygon;
   site_plan?: SitePlanModel;
+}
+
+/** Requested room the solver could not place, with an explicit reason. */
+export interface UnmetRequirement {
+  room_id: string;
+  reason: string;
 }
 
 export interface SpatialAdjacencyConstraint {
@@ -862,6 +883,7 @@ export interface FloorPlanParamsSnapshot {
   design_intent?: 'maximize_enclosed' | 'passive_ventilation';
   include_service_layer?: boolean;
   include_structural_sheet?: boolean;
+  seed?: string;
 }
 
 export interface FloorPlanResponse {
@@ -886,6 +908,7 @@ export interface FloorPlanResponse {
   client_constraints?: ExtractedClientConstraints;
   generated_at?: number;
   generation_id?: string;
+  unmet_requirements?: UnmetRequirement[];
   params_snapshot?: FloorPlanParamsSnapshot;
   mathematical_certificate?: MathematicalValidityCertificate;
   plot_polygon?: PlotPolygon;
