@@ -18,6 +18,7 @@ import { VastuAdvisoryCard } from './VastuAdvisoryCard';
 import { CostBreakdownTable } from './CostBreakdownTable';
 import { LandValueCard } from './LandValueCard';
 import { FloorPlanGeneratorCard } from './FloorPlanGeneratorCard';
+import type { SharedBoundaryState } from '../services/siteBoundary';
 import { DownloadReportButton } from './DownloadReportButton';
 import { Icon } from './Icon';
 
@@ -40,6 +41,7 @@ export interface ReportSheetProps {
   reportPayload: ReportRequestPayload;
   activeTab: ResultsTab;
   onTabChange: (tab: ResultsTab) => void;
+  sharedBoundary?: SharedBoundaryState | null;
 }
 
 const TABS: { id: ResultsTab; label: string }[] = [
@@ -54,6 +56,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
   onClose,
   analysisData,
   analysisRequest,
+  sharedBoundary,
   siteVisionData,
   isSiteVisionLoading,
   onRunSiteVision,
@@ -516,6 +519,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                         activeFloorPlan={floorPlanData}
                         onFloorPlanGenerated={onFloorPlanGenerated}
                         analysisRequest={analysisRequest}
+                        sharedBoundary={sharedBoundary}
                         buildingTypology={analysisRequest?.building_typology}
                         qualityGrade={analysisRequest?.quality_grade}
                         floors={analysisRequest?.floors}

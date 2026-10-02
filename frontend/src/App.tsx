@@ -17,7 +17,16 @@ import { FactorBreakdown } from './components/FactorBreakdown';
 import { ReportSheet, type ResultsTab } from './components/ReportSheet';
 import { TelemetryStrip, ErrorBanner } from './components/StatusBanner';
 import { EmptyState } from './components/EmptyState';
+import { SiteMoveDialog } from './components/SiteMoveDialog';
 import { AnalysisHUD } from './components/AnalysisHUD';
+import { DesignProvider, ToastViewport, ShortcutsSheet, useShortcuts } from './design';
+import { CaptureSheet, type CaptureStep } from './components/map/CaptureSheet';
+import { BoundaryChip } from './components/map/BoundaryChip';
+import { SitePreviewHUD } from './components/map/SitePreviewHUD';
+import { useSitePreview } from './hooks/useSitePreview';
+import type { SharedBoundaryState } from './services/siteBoundary';
+import { boundaryToSummaryPayload } from './services/siteIntelligence';
+import type { Map as MaplibreMap } from 'maplibre-gl';
 import { MethodologyModal } from './components/MethodologyModal';
 import { Icon } from './components/Icon';
 
@@ -31,7 +40,7 @@ const PIPELINE_STAGES = [
   'Synthesizing report...',
 ] as const;
 
-export const App: React.FC = () => {
+const AppShell: React.FC = () => {
   // Theme State: 'light' | 'dark'
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
 
@@ -48,6 +57,68 @@ export const App: React.FC = () => {
   });
 
   const [hasLocation, setHasLocation] = useState<boolean>(true);
+  // ======== Single-source site boundary + capture wizard state ========
+  const [boundary, setBoundary] = useState<SharedBoundaryState | null>(null);
+  const [captureOpen, setCaptureOpen] = useState<boolean>(false);
+  const [captureStep, setCaptureStep] = useState<CaptureStep>('locate');
+  const mapInstanceRef = useRef<MaplibreMap | null>(null);
+
+  // Deterministic site preview (overlay + HUD) whenever a boundary exists.
+  const [previewDismissed, setPreviewDismissed] = useState<boolean>(false);
+  const getMapInstance = useCallback((): MaplibreMap | null => mapInstanceRef.current, []);
+  const {
+    preview: sitePreview,
+    loading: previewLoading,
+    error: previewError,
+    dismiss: dismissPreview,
+  } = useSitePreview({
+    getMap: getMapInstance,
+    boundary,
+    enabled: !captureOpen && !previewDismissed,
+  });
+  const handleDismissPreview = useCallback((): void => {
+    setPreviewDismissed(true);
+    dismissPreview();
+  }, [dismissPreview]);
+
+  // Capture wizard opens on the trace step when a boundary already exists (Edit).
+  const openCapture = useCallback((step: CaptureStep = 'trace') => {
+    setCaptureStep(boundary ? step : 'locate');
+    setCaptureOpen(true);
+  }, [boundary]);
+  const handleBoundaryCommit = useCallback((b: SharedBoundaryState) => {
+    setBoundary(b);
+    setPreviewDismissed(false); // new boundary re-arms the preview
+    setCaptureOpen(false);
+  }, []);
+  // Deep-link from the generator card ("Edit on map").
+  useEffect(() => {
+    const onEditRequest = (): void => openCapture('trace');
+    window.addEventListener('bw:edit-boundary', onEditRequest);
+    return () => window.removeEventListener('bw:edit-boundary', onEditRequest);
+  }, [openCapture]);
+
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState<boolean>(false);
+  const handleResetRef = useRef<(() => void) | null>(null);
+
+  // Global keyboard shortcuts (T/M/R/?); Escape closes the shortcuts sheet.
+  useShortcuts((action) => {
+    switch (action) {
+      case 'toggleTheme':
+        setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+        break;
+      case 'resetApp':
+        handleResetRef.current?.();
+        break;
+      case 'toggleShortcuts':
+        setIsShortcutsOpen((prev) => !prev);
+        break;
+      case 'openMapStyles':
+        window.dispatchEvent(new CustomEvent('bw:open-map-styles'));
+        break;
+    }
+  });
+
   const [analysisData, setAnalysisData] = useState<AnalysisResponse | null>(null);
   const [overrideLandRate, setOverrideLandRate] = useState<number | null>(null);
   const [overridePlotArea, setOverridePlotArea] = useState<number | null>(null);
@@ -58,6 +129,16 @@ export const App: React.FC = () => {
   const [currentStageIndex, setCurrentStageIndex] = useState<number>(0);
   const [hudFallbackMessage, setHudFallbackMessage] = useState<string | null>(null);
   const [cancelToast, setCancelToast] = useState<string | null>(null);
+  /** Shown after a pin move carried the captured plot to the new site. */
+  const [siteMovedNotice, setSiteMovedNotice] = useState<boolean>(false);
+  /**
+   * Site move awaiting a decision. With a plot already captured, moving the pin
+   * must not silently re-meaning the boundary: the coordinates are held here
+   * until the user chooses (take the plot / re-capture / keep as-is).
+   */
+  const [pendingSiteMove, setPendingSiteMove] = useState<{ lat: number; lon: number } | null>(null);
+  /** Bumped to re-sync the coordinate inputs with the app's actual coordinates. */
+  const [coordinatesSyncKey, setCoordinatesSyncKey] = useState<number>(0);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [fallbackToast, setFallbackToast] = useState<string | null>(null);
@@ -140,6 +221,7 @@ export const App: React.FC = () => {
         setIsReportOpen(false);
       }
     };
+  handleResetRef.current = handleReset;
 
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
@@ -165,6 +247,12 @@ export const App: React.FC = () => {
   }, [isLoading]);
 
   // Auto-dismiss cancel toast
+  useEffect(() => {
+    if (!siteMovedNotice) return;
+    const timer = setTimeout(() => setSiteMovedNotice(false), 4500);
+    return () => clearTimeout(timer);
+  }, [siteMovedNotice]);
+
   useEffect(() => {
     if (!cancelToast) return;
     const timer = setTimeout(() => setCancelToast(null), 3000);
@@ -264,17 +352,80 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isDrawerOpen, isMobileControlOpen, isMobileResultsOpen]);
 
-  // Coordinate changes from map click or input
-  // STALE-STATE RULE: Changing selected coordinates clears siteVisionData
-  const handleLocationSelect = (lat: number, lon: number) => {
-    setRequest((prev) => ({
-      ...prev,
-      latitude: lat,
-      longitude: lon,
-    }));
-    setHasLocation(true);
+  /**
+   * Invalidate everything that described the previous site: the analysis, the
+   * generated plan, site vision, the report modal and the preview dismissal.
+   * (STALE-STATE RULE - these results are location-specific.)
+   */
+  const invalidateSiteResults = useCallback((): void => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsLoading(false);
+    setHudFallbackMessage(null);
+    setErrorMessage(null);
     setSiteVisionData(null);
-  };
+    setAnalysisData(null);
+    setFloorPlanData(null);
+    setIsReportOpen(false);
+    setPreviewDismissed(false);
+    if (typeof window !== 'undefined' && window.location.hash === '#report') {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  }, []);
+
+  /** Commit a site move: move the pin (and, when chosen, the captured plot). */
+  const applySiteMove = useCallback(
+    (lat: number, lon: number, withPlot: boolean): void => {
+      invalidateSiteResults();
+      setRequest((prev) => ({ ...prev, latitude: lat, longitude: lon }));
+      setHasLocation(true);
+      if (withPlot && boundary) {
+        // The boundary is anchored to the pin: same traced shape, new origin.
+        setBoundary({ ...boundary, origin: { lat, lon } });
+        setSiteMovedNotice(true);
+      }
+    },
+    [boundary, invalidateSiteResults]
+  );
+
+  // Coordinate changes from map click or input.
+  // With a plot already captured, the move is NOT applied until the user says
+  // what should happen to it (see SiteMoveDialog) - otherwise the pin, the
+  // boundary and the overlays could describe different sites at once.
+  const handleLocationSelect = useCallback(
+    (lat: number, lon: number) => {
+      if (boundary) {
+        setPendingSiteMove({ lat, lon });
+        return;
+      }
+      applySiteMove(lat, lon, false);
+    },
+    [boundary, applySiteMove]
+  );
+
+  const handleSiteMoveApply = useCallback((): void => {
+    if (!pendingSiteMove) return;
+    applySiteMove(pendingSiteMove.lat, pendingSiteMove.lon, true);
+    setPendingSiteMove(null);
+  }, [pendingSiteMove, applySiteMove]);
+
+  const handleSiteMoveRecapture = useCallback((): void => {
+    if (!pendingSiteMove) return;
+    invalidateSiteResults();
+    setRequest((prev) => ({ ...prev, latitude: pendingSiteMove.lat, longitude: pendingSiteMove.lon }));
+    setHasLocation(true);
+    setBoundary(null);
+    setPendingSiteMove(null);
+    openCapture('locate');
+  }, [pendingSiteMove, invalidateSiteResults, openCapture]);
+
+  const handleSiteMoveCancel = useCallback((): void => {
+    setPendingSiteMove(null);
+    // The typed coordinates were never applied: put the inputs back in sync.
+    setCoordinatesSyncKey((k) => k + 1);
+  }, []);
 
   const handleClearLocation = () => {
     if (abortControllerRef.current) {
@@ -283,10 +434,13 @@ export const App: React.FC = () => {
     }
     setIsLoading(false);
     setHudFallbackMessage(null);
+    setPendingSiteMove(null);
+    setSiteMovedNotice(false);
     setHasLocation(false);
     setAnalysisData(null);
     setSiteVisionData(null);
     setFloorPlanData(null);
+    setBoundary(null);
     setErrorMessage(null);
     setIsDrawerOpen(false);
     setIsMobileResultsOpen(false);
@@ -373,8 +527,14 @@ export const App: React.FC = () => {
     handleRunSiteVision(undefined, controller.signal);
 
     try {
+      // Carry the map-captured boundary (server re-validates; null
+      // keeps the legacy request shape byte-comparable).
+      const analyzeRequest = {
+        ...request,
+        boundary: boundary ? boundaryToSummaryPayload(boundary) : null,
+      };
       const { data: response, fallbackTriggered } = await generateFeasibilityReport(
-        request,
+        analyzeRequest,
         controller.signal
       );
 
@@ -595,7 +755,38 @@ export const App: React.FC = () => {
           treeClusters={siteVisionData?.tree_clusters}
           waterBodies={siteVisionData?.water_bodies}
           theme={theme}
+          hideMassing={captureOpen || boundary !== null}
+          hideSiteEstimate={boundary !== null}
+          maxZoom={captureOpen || boundary !== null ? 20 : 18}
+          onMapReady={(map) => {
+            mapInstanceRef.current = map;
+          }}
           className="w-full h-full"
+        />
+
+        {/* Map-first capture wizard + boundary chip (hosted inside the map section) */}
+        <CaptureSheet
+          open={captureOpen}
+          step={captureStep}
+          onStepChange={setCaptureStep}
+          boundary={boundary}
+          pin={{ lat: request.latitude, lon: request.longitude }}
+          onPinChange={handleLocationSelect}
+          onCommit={handleBoundaryCommit}
+          onCancel={() => setCaptureOpen(false)}
+          getMap={() => mapInstanceRef.current}
+        />
+        <div className="absolute bottom-16 left-3 lg:left-[364px] z-[999] pointer-events-auto flex items-center gap-2">
+          <BoundaryChip boundary={boundary} onEdit={() => openCapture('trace')} />
+        </div>
+
+        {/* Deterministic site preview overlay + measurement HUD */}
+        <SitePreviewHUD
+          preview={sitePreview}
+          loading={previewLoading}
+          error={previewError}
+          onDismiss={handleDismissPreview}
+          onEditBoundary={boundary ? () => openCapture('trace') : undefined}
         />
       </section>
 
@@ -695,6 +886,7 @@ export const App: React.FC = () => {
 
         {/* Coordinates Input Card */}
         <CoordinatesInput
+          key={`coords-${coordinatesSyncKey}`}
           latitude={hasLocation ? request.latitude : null}
           longitude={hasLocation ? request.longitude : null}
           formattedAddress={analysisData?.formatted_address}
@@ -706,9 +898,10 @@ export const App: React.FC = () => {
         <AnalysisForm
           request={request}
           isLoading={isLoading}
-          hasCoordinates={hasLocation}
+          hasCoordinates={hasLocation && boundary !== null}
           onChange={handleRequestChange}
           onSubmit={handleRunAnalysis}
+          onRequestCapture={() => openCapture('locate')}
         />
       </aside>
 
@@ -802,6 +995,29 @@ export const App: React.FC = () => {
         </div>
       )}
 
+      <SiteMoveDialog
+        open={pendingSiteMove !== null}
+        target={pendingSiteMove}
+        onMove={handleSiteMoveApply}
+        onRecapture={handleSiteMoveRecapture}
+        onCancel={handleSiteMoveCancel}
+      />
+
+      {/* Site moved: the captured plot travelled with the pin */}
+      {siteMovedNotice && (
+        <div
+          data-testid="site-moved-notice"
+          className="fixed top-[72px] left-1/2 -translate-x-1/2 z-[1050] pointer-events-none animate-fade-in"
+        >
+          <div className="vibrancy-pill px-4 py-2 rounded-full text-[13px] font-medium text-[var(--text-1)] flex items-center gap-2 shadow-lg border border-[var(--panel-border-color)] max-w-[92vw]">
+            <Icon name="map-pin" size={14} className="text-[var(--accent)] shrink-0" />
+            <span>
+              Plot moved with the pin - re-run the analysis for this location.
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Analysis Cancelled / System Toast */}
       {cancelToast && (
         <div className="fixed top-[72px] left-1/2 -translate-x-1/2 z-[1050] pointer-events-auto animate-fade-in">
@@ -825,6 +1041,7 @@ export const App: React.FC = () => {
           onClose={handleCloseReport}
           analysisData={analysisData}
           analysisRequest={request}
+          sharedBoundary={boundary}
           siteVisionData={siteVisionData}
           isSiteVisionLoading={isSiteVisionLoading}
           onRunSiteVision={handleRunSiteVision}
@@ -842,8 +1059,18 @@ export const App: React.FC = () => {
           onTabChange={setActiveResultsTab}
         />
       )}
+
+      {/* Design system: keyboard shortcuts sheet + toast viewport */}
+      <ShortcutsSheet open={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
+      <ToastViewport />
     </div>
   );
 };
+
+export const App: React.FC = () => (
+  <DesignProvider>
+    <AppShell />
+  </DesignProvider>
+);
 
 export default App;

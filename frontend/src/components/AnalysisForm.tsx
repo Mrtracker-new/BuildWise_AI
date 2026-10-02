@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { AnalysisRequest } from '../services/types';
 import { Icon } from './Icon';
-import { IosSelect } from './IosSelect';
+import { Select } from '../design';
 import { ConstraintChips } from './ConstraintChips';
 import { parseRequirements, parseRequirementsClientFallback } from '../services/api';
 import { TYPOLOGY_OPTIONS, getMaxStoreys } from '../services/typology';
@@ -12,6 +12,8 @@ interface AnalysisFormProps {
   hasCoordinates: boolean;
   onChange: (updated: Partial<AnalysisRequest>) => void;
   onSubmit: () => void;
+  /** Opened when the CTA is pressed before a boundary exists. */
+  onRequestCapture?: () => void;
 }
 
 export const AnalysisForm: React.FC<AnalysisFormProps> = ({
@@ -20,6 +22,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
   hasCoordinates,
   onChange,
   onSubmit,
+  onRequestCapture,
 }) => {
   const [isParsingConstraints, setIsParsingConstraints] = useState(false);
   const lastParsedTextRef = useRef<string | null>(null);
@@ -63,7 +66,11 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
   }, [request.client_requirements, request.ai_provider]);
 
   const isAreaValid = request.built_up_area_sqft >= 500 && request.built_up_area_sqft <= 50000;
-  const canSubmit = hasCoordinates && isAreaValid && !isLoading;
+  // Without a captured boundary the CTA is not a dead end - it opens
+  // the capture wizard (STEP ZERO). Analysis itself stays gated on a committed
+  // valid boundary (hasCoordinates && isAreaValid).
+  const needsCapture = !hasCoordinates && !isLoading;
+  const ctaEnabled = isLoading ? false : (hasCoordinates ? isAreaValid : Boolean(onRequestCapture));
 
   const qualityGrades: { id: 'basic' | 'standard' | 'premium'; label: string; rate: string }[] = [
     { id: 'basic', label: 'Basic', rate: '₹1,500/sq ft' },
@@ -205,7 +212,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
           >
             Building Typology
           </label>
-          <IosSelect
+          <Select
             id="typology-select"
             value={request.building_typology}
             onChange={(val) => {
@@ -225,7 +232,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
           >
             Storeys (Levels)
           </label>
-          <IosSelect
+          <Select
             id="floors-select"
             value={request.floors}
             onChange={(val) => onChange({ floors: parseInt(val, 10) || 1 })}
@@ -315,7 +322,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
         >
           Technical Explanation Generator
         </label>
-        <IosSelect
+        <Select
           id="ai-provider-select"
           value={request.ai_provider}
           onChange={(val) => onChange({ ai_provider: val })}
@@ -328,12 +335,12 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
       <div className="pt-2 min-w-0">
         <button
           type="button"
-          onClick={onSubmit}
-          disabled={!canSubmit || isLoading}
+          onClick={needsCapture ? onRequestCapture : onSubmit}
+          disabled={!ctaEnabled || isLoading}
           className={`w-full h-11 px-4 rounded-[12px] font-semibold text-[13px] sm:text-[14px] flex items-center justify-center gap-2 transition-all duration-200 select-none shadow-sm ${
             isLoading
               ? 'bg-[var(--fill)] text-[var(--text-3)] cursor-not-allowed opacity-90'
-              : canSubmit
+              : ctaEnabled
               ? 'bg-[var(--accent)] text-white hover:brightness-[0.98] active:brightness-95 cursor-pointer'
               : 'bg-[var(--fill)] text-[var(--text-3)] cursor-not-allowed'
           }`}

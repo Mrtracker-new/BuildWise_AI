@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { Icon } from './Icon';
+import { Kbd } from '../design';
 
 interface MethodologyModalProps {
   isOpen: boolean;
@@ -178,6 +179,23 @@ export const MethodologyModal: React.FC<MethodologyModalProps> = ({ isOpen, onCl
               <li><b>Connected Component Vectorization</b>: Binary masks are segmented using 8-connectivity labeling, filtered to clusters &ge; 25 m², simplified via Douglas-Peucker (&epsilon;=0.0001°), and projected to WGS84 GeoJSON polygons.</li>
               <li><b>Tree Preservation Hierarchy</b>: Clusters &ge; 100 m² with NDVI &ge; 0.50 are marked <b>PRESERVE</b>. Clusters &ge; 50 m² overlapping the proposed building footprint are marked <b>COMPENSATE</b>. Small clusters &lt; 50 m² overlapping footprint are marked <b>REMOVABLE</b>, and others are marked <b>CONTEXT</b>.</li>
             </ul>
+          </div>
+
+          {/* Section 8: Keyboard Shortcuts */}
+          <div className="space-y-2 pt-3 border-t border-[var(--hairline)]">
+            <h4 className="font-semibold text-[var(--text-1)] uppercase text-[11px] tracking-[0.08em]">
+              8. Keyboard Shortcuts
+            </h4>
+            <p className="text-[11px] text-[var(--text-2)]">
+              Shortcuts are active whenever no text field has focus:
+            </p>
+            <div className="divide-y divide-[var(--hairline)] rounded-[10px] bg-[var(--fill)] overflow-hidden text-[11px]">
+              <div className="flex items-center gap-2.5 px-3 py-2"><Kbd>T</Kbd><span className="text-[var(--text-2)]">Toggle light / dark theme</span></div>
+              <div className="flex items-center gap-2.5 px-3 py-2"><Kbd>M</Kbd><span className="text-[var(--text-2)]">Open map details (standard / satellite / terrain)</span></div>
+              <div className="flex items-center gap-2.5 px-3 py-2"><Kbd>R</Kbd><span className="text-[var(--text-2)]">Reset the site analysis</span></div>
+              <div className="flex items-center gap-2.5 px-3 py-2"><Kbd>?</Kbd><span className="text-[var(--text-2)]">Show the shortcuts sheet</span></div>
+              <div className="flex items-center gap-2.5 px-3 py-2"><Kbd>Esc</Kbd><span className="text-[var(--text-2)]">Close the active dialog or sheet</span></div>
+            </div>
           </div>
         </div>
 

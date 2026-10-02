@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom';
 import type { RoomPlacement, MultiStoreyBuildingModel, SingleFloorPlanModel, SitePlanModel } from '../services/types';
 import { downloadFloorplanDossier } from '../services/api';
 import { Icon } from './Icon';
+import { frontageChipText, polygonChipText } from '../services/sheetTruth';
 
 interface BlueprintViewerProps {
   svgString: string;
@@ -151,7 +152,14 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   const effectiveGenId = generationId ?? (generationTimestamp ? `T${generationTimestamp}` : (svgString ? `${svgString.length}_${svgString.slice(0, 16).replace(/\W/g, '')}` : 'init'));
   const storeysLabel = isMultiStorey ? `G+${(multiStorey?.total_storeys || storeys || 2) - 1}` : 'G';
   const dimsLabel = `${(plotWidthM || 10).toFixed(1)}x${(plotDepthM || 12).toFixed(1)}m`;
-  const freshnessToken = `${effectiveGenId} | ${dimsLabel} | ${storeysLabel}`;
+  // Sheet truth: the viewer header carries the same frontage + polygon-hash
+  // provenance markers as the drawn sheets (sheetTruth parity with drawing_ir).
+  const _prov = (multiStorey?.site_plan?.provenance || sitePlan?.provenance || {}) as Record<string, any>;
+  const sheetTruthTail = [
+    frontageChipText(_prov.frontage_edge_index, _prov.frontage_source),
+    polygonChipText(multiStorey?.plot_polygon || sitePlan?.plot_polygon),
+  ].join(' | ');
+  const freshnessToken = `${effectiveGenId} | ${dimsLabel} | ${storeysLabel} | ${sheetTruthTail}`;
 
   const containerKey = `blueprint-svg-${effectiveGenId}-${safeFloorIndex}-${mode}-${showGhostOverlay ? 'ghost' : 'noghost'}`;
   const modalContainerKey = `modal-blueprint-svg-${effectiveGenId}-${safeFloorIndex}-${mode}-${showGhostOverlay ? 'ghost' : 'noghost'}`;
@@ -167,16 +175,21 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
       ? '.ghost-core-overlay { display: block !important; opacity: 1 !important; }'
       : '.ghost-core-overlay { display: none !important; opacity: 0 !important; visibility: hidden !important; }';
 
+    // Sheets are authored at a fixed pixel size (a portrait site plan runs ~2500px
+    // tall); the preview box and the modal are both shorter than that, so the lower
+    // half of a tall sheet used to be cut off even at the smallest zoom. Constrain
+    // the sheet to its container instead: it scales down to fit and the ratio holds.
     const styleInjection = `
       <style>
         ${ghostOverlayCss}
+        .bw-sheet-fit { max-width: 100%; max-height: 100%; width: auto; height: auto; }
       </style>
     `;
 
     if (cleaned.includes('<svg')) {
       return cleaned.replace(
         /<svg\b([^>]*)>/i,
-        `<svg $1 data-ghost-overlay="${showGhostOverlay ? 'true' : 'false'}">${styleInjection}`
+        `<svg $1 class="bw-sheet-fit" data-ghost-overlay="${showGhostOverlay ? 'true' : 'false'}">${styleInjection}`
       );
     }
     return cleaned;
@@ -645,7 +658,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
         >
           <div
             key={containerKey}
-            className="relative flex items-center justify-center max-w-full max-h-full drop-shadow-md"
+            className="relative flex items-center justify-center w-full h-full drop-shadow-md"
             dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
           />
         </div>
@@ -1120,7 +1133,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                 >
                   <div
                     key={modalContainerKey}
-                    className="relative flex items-center justify-center max-w-full max-h-full drop-shadow-xl"
+                    className="relative flex items-center justify-center w-full h-full drop-shadow-xl"
                     dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
                   />
                 </div>

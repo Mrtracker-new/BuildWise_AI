@@ -3,7 +3,13 @@ import type { FloorPlanRequest, FloorPlanResponse, AnalysisRequest, FloorPlanPar
 import { generateFloorPlan } from '../services/api';
 import { BlueprintViewer } from './BlueprintViewer';
 import { Icon } from './Icon';
+import {
+  buildPlotPolygonPayload,
+  metricsFor,
+  type SharedBoundaryState,
+} from '../services/siteBoundary';
 import { ConstraintChips } from './ConstraintChips';
+import { groupGateLayers, qaRowText, QA_CHIP_CLASSES } from '../services/validationGateUI';
 import {
   type CanonicalTypology,
   type RoomOption,
@@ -37,6 +43,8 @@ interface FloorPlanGeneratorCardProps {
   solarAxisDegrees?: number;
   prevailingWindDirectionDegrees?: number;
   topVastuEntrances?: string[];
+  /** Shared single-source boundary (map capture). Overrides the legacy local vertex editor. */
+  sharedBoundary?: SharedBoundaryState | null;
 }
 
 export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
@@ -55,6 +63,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   solarAxisDegrees,
   prevailingWindDirectionDegrees,
   topVastuEntrances,
+  sharedBoundary,
 }) => {
   // Inherit parameters directly from shared request (single source of truth)
   // Delete card's local copies of storeys/typology/coverage so disagreement is impossible.
@@ -70,83 +79,36 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   const [userWidth, setUserWidth] = useState<number | null>(null);
   const [userDepth, setUserDepth] = useState<number | null>(null);
 
-  // Site Geometry Mode: 'rectangle' | 'irregular'
-  const [siteMode, setSiteMode] = useState<'rectangle' | 'irregular'>('rectangle');
-  const [irregularVertices, setIrregularVertices] = useState<[number, number][]>([
-    [0, 0],
-    [14, 0],
-    [14, 8],
-    [7, 8],
-    [7, 14],
-    [0, 14],
-  ]); // Default L-shape preset
-  const [geoJsonModalOpen, setGeoJsonModalOpen] = useState<boolean>(false);
-  const [geoJsonText, setGeoJsonText] = useState<string>('');
-  const [geoJsonError, setGeoJsonError] = useState<string | null>(null);
+  // Single-source boundary: derived from the shared map-capture model.
+  // The legacy local vertex editor is retired; boundary is captured on the map.
+  const sharedActive = Boolean(sharedBoundary && sharedBoundary.vertices.length >= 3);
+  const siteMode: 'rectangle' | 'irregular' = sharedActive ? 'irregular' : 'rectangle';
+  const irregularVertices: [number, number][] = sharedBoundary
+    ? sharedBoundary.vertices.map((v: { x: number; y: number }) => [v.x, v.y] as [number, number])
+    : [];
 
-  // Live Polygon Metrics & Geometry Validation
+  // Live Polygon Metrics & Geometry Validation (shared model)
   const polyMetrics = React.useMemo(() => {
-    const verts = irregularVertices;
-    if (verts.length < 3) {
+    const m = sharedBoundary ? metricsFor(sharedBoundary.vertices) : null;
+    if (!m) {
       return {
         area: 0,
         perimeter: 0,
         isValid: false,
-        reason: 'At least 3 vertices required',
+        reason: 'Capture the plot boundary on the map first.',
         bbox: [0, 0, 10, 10] as [number, number, number, number],
-        shapeType: 'invalid',
+        shapeType: 'rectangle',
       };
     }
-    let areaSum = 0;
-    let perim = 0;
-    let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
-    const n = verts.length;
-    for (let i = 0; i < n; i++) {
-      const [x1, y1] = verts[i];
-      const [x2, y2] = verts[(i + 1) % n];
-      minx = Math.min(minx, x1);
-      miny = Math.min(miny, y1);
-      maxx = Math.max(maxx, x1);
-      maxy = Math.max(maxy, y1);
-      areaSum += (x1 * y2 - x2 * y1);
-      const d = Math.hypot(x2 - x1, y2 - y1);
-      if (d < 1.0) {
-        return {
-          area: 0,
-          perimeter: 0,
-          isValid: false,
-          reason: `Edge P${i+1}→P${((i+1)%n)+1} (${d.toFixed(1)}m) is < 1.0m statutory minimum`,
-          bbox: [minx, miny, maxx, maxy] as [number, number, number, number],
-          shapeType: 'invalid',
-        };
-      }
-      perim += d;
-    }
-    const area = Math.abs(areaSum) / 2.0;
-    if (area < 36.0) {
-      return {
-        area: Math.round(area * 10) / 10,
-        perimeter: Math.round(perim * 10) / 10,
-        isValid: false,
-        reason: `Plot area (${area.toFixed(1)} m²) is < 36 m² statutory minimum`,
-        bbox: [minx, miny, maxx, maxy] as [number, number, number, number],
-        shapeType: 'invalid',
-      };
-    }
-    let shapeType = 'polygon';
-    if (n === 4) shapeType = 'trapezoid';
-    else if (n === 6) shapeType = 'l_shape';
-    else if (n === 5) shapeType = 'pentagon';
-
     return {
-      area: Math.round(area * 10) / 10,
-      perimeter: Math.round(perim * 10) / 10,
-      isValid: true,
-      reason: 'Valid Statutory Boundary',
-      bbox: [minx, miny, maxx, maxy] as [number, number, number, number],
-      shapeType,
+      area: Math.round(m.areaSqm * 10) / 10,
+      perimeter: Math.round(m.perimeterM * 10) / 10,
+      isValid: m.valid,
+      reason: m.reason ?? 'Valid Statutory Boundary',
+      bbox: m.bbox,
+      shapeType: m.shapeType,
     };
-  }, [irregularVertices]);
+  }, [sharedBoundary]);
 
   const bboxWidth = Math.max(4.0, polyMetrics.bbox[2] - polyMetrics.bbox[0]);
   const bboxDepth = Math.max(4.0, polyMetrics.bbox[3] - polyMetrics.bbox[1]);
@@ -154,69 +116,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   const plotWidth = siteMode === 'irregular' ? bboxWidth : (userWidth ?? defaultWidthM);
   const plotDepth = siteMode === 'irregular' ? bboxDepth : (userDepth ?? defaultDepthM);
 
-  const applyPreset = (presetName: 'l_shape' | 'trapezoid' | 'pentagon') => {
-    if (presetName === 'l_shape') {
-      setIrregularVertices([
-        [0, 0],
-        [14, 0],
-        [14, 8],
-        [7, 8],
-        [7, 14],
-        [0, 14],
-      ]);
-    } else if (presetName === 'trapezoid') {
-      setIrregularVertices([
-        [0, 0],
-        [16, 0],
-        [12, 14],
-        [3, 14],
-      ]);
-    } else if (presetName === 'pentagon') {
-      setIrregularVertices([
-        [0, 0],
-        [14, 0],
-        [14, 10],
-        [9, 15],
-        [0, 15],
-      ]);
-    }
-  };
 
-  const handleGeoJsonImport = () => {
-    setGeoJsonError(null);
-    try {
-      const parsed = JSON.parse(geoJsonText.trim());
-      let rawCoords: any = null;
-      if (parsed.type === 'FeatureCollection' && parsed.features?.[0]?.geometry?.coordinates) {
-        rawCoords = parsed.features[0].geometry.coordinates[0];
-      } else if (parsed.type === 'Feature' && parsed.geometry?.coordinates) {
-        rawCoords = parsed.geometry.coordinates[0];
-      } else if (parsed.type === 'Polygon' && parsed.coordinates) {
-        rawCoords = parsed.coordinates[0];
-      } else if (Array.isArray(parsed)) {
-        rawCoords = parsed;
-      }
-      if (!rawCoords || !Array.isArray(rawCoords) || rawCoords.length < 3) {
-        throw new Error('Could not find polygon coordinates array (at least 3 points required).');
-      }
-      const newVerts: [number, number][] = rawCoords.map((pt: any) => [
-        Number(pt[0]),
-        Number(pt[1]),
-      ]);
-      if (
-        newVerts.length > 3 &&
-        Math.abs(newVerts[0][0] - newVerts[newVerts.length - 1][0]) < 1e-3 &&
-        Math.abs(newVerts[0][1] - newVerts[newVerts.length - 1][1]) < 1e-3
-      ) {
-        newVerts.pop();
-      }
-      setIrregularVertices(newVerts);
-      setGeoJsonModalOpen(false);
-      setGeoJsonText('');
-    } catch (e: any) {
-      setGeoJsonError(e.message || 'Invalid GeoJSON format.');
-    }
-  };
 
   // Sync user dimensions when default props change
   useEffect(() => {
@@ -382,6 +282,12 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       ))
   );
 
+  // Boundary edits (presets / import / vertex edits) live in the map capture
+  // capture wizard. The card deep-links instead of owning geometry state.
+  const requestBoundaryEdit = () => {
+    window.dispatchEvent(new CustomEvent('bw:edit-boundary'));
+  };
+
   const toggleRoom = (roomId: string) => {
     setSelectedRooms((prev) =>
       prev.includes(roomId)
@@ -407,15 +313,22 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
     const currentWidth = Math.max(4.0, Math.min(60.0, Number(plotWidth) || 10.0));
     const currentDepth = Math.max(4.0, Math.min(60.0, Number(plotDepth) || 12.0));
 
+    // THE single-source funnel: identical model as map trace / presets / import.
     let plotPoly: PlotPolygon | undefined = undefined;
-    if (siteMode === 'irregular') {
+    if (sharedBoundary && sharedBoundary.vertices.length >= 3) {
+      const payload = buildPlotPolygonPayload({
+        vertices: sharedBoundary.vertices,
+        origin: sharedBoundary.origin,
+        source: sharedBoundary.source,
+        frontageEdgeIndex: sharedBoundary.frontageEdgeIndex,
+      });
       plotPoly = {
-        vertices: irregularVertices,
-        shape_type: polyMetrics.shapeType as any,
-        area_sqm: polyMetrics.area,
-        perimeter_m: polyMetrics.perimeter,
-        bounding_box: polyMetrics.bbox,
-        is_regular_rectangle: false,
+        vertices: payload.vertices,
+        shape_type: payload.shape_type as any,
+        area_sqm: payload.area_sqm,
+        perimeter_m: payload.perimeter_m,
+        bounding_box: payload.bounding_box,
+        is_regular_rectangle: payload.is_regular_rectangle,
       };
     }
 
@@ -446,7 +359,6 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
 
     try {
       const resp = await generateFloorPlan(req);
-      const genId = 'GEN-' + Math.random().toString(36).slice(2, 8).toUpperCase();
       const snapshot: FloorPlanParamsSnapshot = {
         building_typology: activeTypology,
         floors: activeFloors,
@@ -471,7 +383,12 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       };
       const freshPlan: FloorPlanResponse = {
         ...resp,
-        generation_id: genId,
+        // The generation token is owned by the backend - derived
+        // from typology/storeys/seed (GEN-{TYP}-{N}F-{seed}) so identical
+        // requests are byte-identical and traceable. The previous client-side
+        // Math.random() token broke that determinism contract. generated_at
+        // stays client-side purely for freshness ordering.
+        generation_id: resp.generation_id,
         generated_at: Date.now(),
         params_snapshot: snapshot,
       };
@@ -574,38 +491,26 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         </div>
       )}
 
-      {/* Site Boundary Mode Toggle: Rectangle vs Irregular (Cadastral) */}
+      {/* Single-Source Boundary Status (map capture is the only editor) */}
       <div className="flex items-center justify-between p-2.5 rounded-[10px] bg-[var(--fill)] border border-[var(--hairline)]">
-        <div className="flex items-center gap-2">
-          <Icon name="maximize" size={14} className="text-[var(--text-2)]" />
-          <span className="text-[12px] font-medium text-[var(--text-1)]">Plot Boundary Mode</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <Icon name="maximize" size={14} className="text-[var(--text-2)] shrink-0" />
+          <span className="text-[12px] font-medium text-[var(--text-1)] truncate">
+            {siteMode === 'rectangle'
+              ? 'Rectangle plot (default dimensions)'
+              : `Boundary: ${String(polyMetrics.shapeType).replace('_', '-').toUpperCase()} · ${polyMetrics.area.toFixed(0)} m2 · ${polyMetrics.bbox ? '' : ''}${irregularVertices.length} vertices`}
+          </span>
+          {!polyMetrics.isValid && siteMode === 'irregular' && (
+            <span className="text-[11px] text-[var(--semantic-red)] truncate">{polyMetrics.reason}</span>
+          )}
         </div>
-        <div className="bg-[var(--bg-card)] rounded-[8px] p-[2px] flex items-center gap-1 border border-[var(--hairline)]">
-          <button
-            type="button"
-            data-testid="mode-rectangle-btn"
-            onClick={() => setSiteMode('rectangle')}
-            className={`py-1 px-3 rounded-[6px] text-[11px] font-medium transition-all ${
-              siteMode === 'rectangle'
-                ? 'bg-[var(--accent)] text-white shadow-sm font-semibold'
-                : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
-            }`}
-          >
-            Rectangle
-          </button>
-          <button
-            type="button"
-            data-testid="mode-irregular-btn"
-            onClick={() => setSiteMode('irregular')}
-            className={`py-1 px-3 rounded-[6px] text-[11px] font-medium transition-all ${
-              siteMode === 'irregular'
-                ? 'bg-purple-600 text-white shadow-sm font-semibold'
-                : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
-            }`}
-          >
-            Irregular (Cadastral)
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={requestBoundaryEdit}
+          className="px-2.5 py-1 rounded-[8px] text-[11px] font-medium bg-[var(--accent-tint)] text-[var(--accent)] hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] shrink-0"
+        >
+          Edit on map
+        </button>
       </div>
 
       {/* Drafting-Specific Controls: Plot Dimensions (m) & Vastu Strictness */}
@@ -723,188 +628,18 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
             </div>
           </div>
 
-          {/* Quick Presets & GeoJSON Import Bar */}
-          <div className="flex items-center justify-between flex-wrap gap-1.5 pt-1">
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-[11px] text-[var(--text-3)] font-medium">Presets:</span>
-              <button
-                type="button"
-                onClick={() => applyPreset('l_shape')}
-                className="px-2 py-0.5 rounded-[6px] text-[11px] bg-[var(--bg-card)] border border-[var(--hairline)] hover:border-purple-400 text-[var(--text-1)]"
-              >
-                L-Shape (Concave)
-              </button>
-              <button
-                type="button"
-                onClick={() => applyPreset('trapezoid')}
-                className="px-2 py-0.5 rounded-[6px] text-[11px] bg-[var(--bg-card)] border border-[var(--hairline)] hover:border-purple-400 text-[var(--text-1)]"
-              >
-                Trapezoid
-              </button>
-              <button
-                type="button"
-                onClick={() => applyPreset('pentagon')}
-                className="px-2 py-0.5 rounded-[6px] text-[11px] bg-[var(--bg-card)] border border-[var(--hairline)] hover:border-purple-400 text-[var(--text-1)]"
-              >
-                Pentagon (Chamfer)
-              </button>
-            </div>
+          {/* Read-only boundary summary (edit on the map) */}
+          <div className="flex items-center justify-between rounded-[8px] bg-[var(--bg-card)] border border-[var(--hairline)] px-3 py-2">
+            <span className="text-[11px] text-[var(--text-2)]">
+              Geometry preview and vertex editing moved to the map capture wizard.
+            </span>
             <button
               type="button"
-              onClick={() => setGeoJsonModalOpen(!geoJsonModalOpen)}
-              className="px-2.5 py-0.5 rounded-[6px] text-[11px] bg-purple-500/10 text-purple-700 dark:text-purple-300 border border-purple-500/30 hover:bg-purple-500/20 font-medium flex items-center gap-1"
+              onClick={requestBoundaryEdit}
+              className="text-[11px] font-medium text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded"
             >
-              <Icon name="file-text" size={12} />
-              <span>{geoJsonModalOpen ? 'Close Import' : 'Paste GeoJSON'}</span>
+              Open capture
             </button>
-          </div>
-
-          {/* GeoJSON Import Drawer */}
-          {geoJsonModalOpen && (
-            <div className="p-2.5 rounded-[8px] bg-[var(--bg-card)] border border-purple-500/30 space-y-2">
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="font-medium text-[var(--text-1)]">Paste GeoJSON Polygon / Feature / Coordinates</span>
-                <span className="text-[var(--text-3)]">Easting (X), Northing (Y) in meters</span>
-              </div>
-              <textarea
-                rows={3}
-                value={geoJsonText}
-                onChange={(e) => setGeoJsonText(e.target.value)}
-                placeholder='e.g. [[0,0],[14,0],[14,8],[7,8],[7,14],[0,14]] or {"type":"Polygon","coordinates":[[...]]}'
-                className="w-full text-[11px] font-mono p-2 rounded-[6px] bg-[var(--fill)] border border-[var(--hairline)] text-[var(--text-1)] outline-none focus:ring-1 focus:ring-purple-500"
-              />
-              {geoJsonError && (
-                <div className="text-[11px] text-[var(--semantic-red)] font-medium">
-                  {geoJsonError}
-                </div>
-              )}
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => { setGeoJsonModalOpen(false); setGeoJsonError(null); }}
-                  className="px-2.5 py-1 text-[11px] rounded-[6px] text-[var(--text-2)] hover:text-[var(--text-1)]"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleGeoJsonImport}
-                  className="px-3 py-1 text-[11px] rounded-[6px] bg-purple-600 text-white font-medium hover:bg-purple-700"
-                >
-                  Import Coordinates
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Miniature SVG Preview & Vertex Table Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-            {/* SVG Visualizer */}
-            <div className="flex flex-col items-center justify-center p-2 rounded-[8px] bg-[var(--bg-card)] border border-[var(--hairline)] min-h-[140px]">
-              <span className="text-[10px] text-[var(--text-3)] font-mono mb-1">
-                Boundary Geometry Preview (Local Tangent Plane)
-              </span>
-              <svg
-                viewBox={`${polyMetrics.bbox[0] - 1.5} ${-polyMetrics.bbox[3] - 1.5} ${bboxWidth + 3.0} ${bboxDepth + 3.0}`}
-                className="w-full max-h-[120px] overflow-visible"
-              >
-                {/* Polygon fill & stroke */}
-                <polygon
-                  points={irregularVertices.map(([x, y]) => `${x},${-y}`).join(' ')}
-                  fill="rgba(147, 51, 234, 0.12)"
-                  stroke="#9333ea"
-                  strokeWidth="0.35"
-                  strokeLinejoin="round"
-                />
-                {/* Vertex circles & labels */}
-                {irregularVertices.map(([x, y], idx) => (
-                  <g key={idx}>
-                    <circle cx={x} cy={-y} r="0.4" fill="#9333ea" />
-                    <text
-                      x={x + 0.5}
-                      y={-y - 0.5}
-                      fontSize="1.1"
-                      fill="var(--text-2)"
-                      fontFamily="monospace"
-                      fontWeight="bold"
-                    >
-                      P{idx + 1}
-                    </text>
-                  </g>
-                ))}
-              </svg>
-            </div>
-
-            {/* Vertex Coordinate Editor Table */}
-            <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1">
-              <div className="grid grid-cols-12 gap-1 text-[10px] font-mono text-[var(--text-3)] uppercase px-1">
-                <span className="col-span-2">Pt</span>
-                <span className="col-span-4">East X (m)</span>
-                <span className="col-span-4">North Y (m)</span>
-                <span className="col-span-2 text-right">Del</span>
-              </div>
-              {irregularVertices.map(([vx, vy], idx) => (
-                <div key={idx} className="grid grid-cols-12 gap-1 items-center bg-[var(--bg-card)] p-1 rounded-[6px] border border-[var(--hairline)]">
-                  <span className="col-span-2 text-[11px] font-mono font-semibold text-purple-600 dark:text-purple-400 pl-1">
-                    P{idx + 1}
-                  </span>
-                  <input
-                    type="number"
-                    step="0.5"
-                    value={vx}
-                    onChange={(e) => {
-                      const val = parseFloat(e.target.value) || 0;
-                      setIrregularVertices((prev) => {
-                        const copy = [...prev];
-                        copy[idx] = [val, copy[idx][1]];
-                        return copy;
-                      });
-                    }}
-                    className="col-span-4 h-6 px-1.5 text-[11px] font-mono bg-[var(--fill)] rounded-[4px] text-[var(--text-1)] border-0 outline-none"
-                  />
-                  <input
-                    type="number"
-                    step="0.5"
-                    value={vy}
-                    onChange={(e) => {
-                      const val = parseFloat(e.target.value) || 0;
-                      setIrregularVertices((prev) => {
-                        const copy = [...prev];
-                        copy[idx] = [copy[idx][0], val];
-                        return copy;
-                      });
-                    }}
-                    className="col-span-4 h-6 px-1.5 text-[11px] font-mono bg-[var(--fill)] rounded-[4px] text-[var(--text-1)] border-0 outline-none"
-                  />
-                  <div className="col-span-2 flex justify-end pr-1">
-                    <button
-                      type="button"
-                      disabled={irregularVertices.length <= 3}
-                      onClick={() => {
-                        if (irregularVertices.length > 3) {
-                          setIrregularVertices((prev) => prev.filter((_, i) => i !== idx));
-                        }
-                      }}
-                      className="text-[var(--text-3)] hover:text-rose-500 disabled:opacity-30 disabled:cursor-not-allowed"
-                      title={irregularVertices.length <= 3 ? 'Minimum 3 vertices required' : 'Delete vertex'}
-                    >
-                      <Icon name="x" size={12} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-              <button
-                type="button"
-                onClick={() => {
-                  const last = irregularVertices[irregularVertices.length - 1] || [0, 0];
-                  setIrregularVertices((prev) => [...prev, [last[0] + 2, last[1] + 2]]);
-                }}
-                className="w-full py-1 text-[11px] rounded-[6px] border border-dashed border-[var(--hairline)] hover:border-purple-400 text-[var(--text-2)] hover:text-[var(--text-1)] font-mono flex items-center justify-center gap-1"
-              >
-                <Icon name="plus" size={11} />
-                <span>Add Vertex</span>
-              </button>
-            </div>
           </div>
         </div>
       )}
@@ -1409,6 +1144,34 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
               );
             })()}
 
+            {/* Unmet Requirements Ledger: requested rooms the solver could not place */}
+            {floorPlan.unmet_requirements && floorPlan.unmet_requirements.length > 0 && (
+              <div className="mt-2.5 p-3 rounded-[10px] bg-rose-500/10 border border-rose-500/25 text-rose-800 dark:text-rose-200 space-y-1.5">
+                <div className="flex items-center gap-1.5 font-semibold text-[12px]">
+                  <Icon name="shield-alert" size={13} className="shrink-0" />
+                  <span>Unmet Requirements ({floorPlan.unmet_requirements.length})</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {floorPlan.unmet_requirements.map((u, idx) => (
+                    <span
+                      key={idx}
+                      title={u.reason}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 border border-rose-500/30 text-[11px] font-medium text-rose-900 dark:text-rose-100"
+                    >
+                      <span className="capitalize">{u.room_id.replace(/_/g, ' ')}</span>
+                    </span>
+                  ))}
+                </div>
+                <ul className="text-[11px] space-y-0.5 pl-4 list-disc text-rose-900/80 dark:text-rose-100/80">
+                  {floorPlan.unmet_requirements.map((u, idx) => (
+                    <li key={idx} className="leading-snug">
+                      <span className="capitalize font-semibold mr-1">{u.room_id.replace(/_/g, ' ')}:</span>{u.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {/* Solver Warnings Banner */}
             {floorPlan.warnings && floorPlan.warnings.length > 0 && (
               <div className="mt-2.5 p-3 rounded-[10px] bg-amber-500/10 border border-amber-500/25 text-amber-800 dark:text-amber-200 space-y-1">
@@ -1586,16 +1349,12 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                   ))}
                 </div>
 
-                {/* UNIVERSAL VALIDATION GATE - LAYER TABLE (L1-L14) */}
+                {/* UNIVERSAL VALIDATION GATE - QA PANEL (L1-L14, never hidden) */}
                 {(() => {
                   const gate = (cert.details && cert.details.validation_gate) || floorPlan.qa?.validation_gate;
                   if (!gate || !Array.isArray(gate.layers) || gate.layers.length === 0) return null;
-                  const chipCls: Record<string, string> = {
-                    PASS: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
-                    WARN: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
-                    FAIL: 'bg-rose-500/15 text-rose-700 dark:text-rose-300',
-                    'N/A': 'bg-slate-500/15 text-slate-600 dark:text-slate-300',
-                  };
+                  const { naRows, warnChips, incompleteIds } = groupGateLayers(gate);
+                  const chipCls = QA_CHIP_CLASSES;
                   return (
                     <div className="pt-2 border-t border-emerald-500/20 space-y-1.5" data-testid="validation-gate-layer-table">
                       <div className="flex items-center justify-between text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">
@@ -1613,7 +1372,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                           >
                             <span className="font-medium text-[var(--text-1)] truncate">
                               <span className="font-mono text-[10px] text-[var(--text-3)] mr-1">{ld.layer_id}</span>
-                              {ld.status === 'N/A' ? `N/A: ${ld.reason || 'not applicable'}` : (ld.summary || ld.title)}
+                              {qaRowText(ld)}
                             </span>
                             <span className={`font-bold px-1.5 py-0.2 rounded shrink-0 font-mono text-[10px] ${chipCls[ld.status] || chipCls['N/A']}`}>
                               {ld.status}
@@ -1621,15 +1380,25 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                           </div>
                         ))}
                       </div>
-                      {(gate.layers.filter((ld: any) => ld.status === 'WARN').length > 0) && (
+                      {incompleteIds.length > 0 && (
+                        <div className="text-[10px] font-semibold text-rose-700 dark:text-rose-300" data-testid="validation-gate-incomplete">
+                          Gate incomplete: missing {incompleteIds.join(', ')}
+                        </div>
+                        )}
+                      {warnChips.length > 0 && (
                         <div className="flex flex-wrap gap-1 pt-1" data-testid="validation-gate-warn-chips">
-                          {gate.layers.filter((ld: any) => ld.status === 'WARN').map((ld: any) => (
+                          {warnChips.map((ld) => (
                             <span key={ld.layer_id} className="px-1.5 py-0.2 rounded-full bg-amber-500/15 text-amber-800 dark:text-amber-200 text-[10px] font-semibold">
                               ⚠ {ld.layer_id} {ld.title}
                             </span>
                           ))}
                         </div>
                       )}
+                      {naRows.length > 0 && (
+                        <div className="text-[10px] text-[var(--text-3)]" data-testid="validation-gate-na-reasons">
+                          N/A layers never gate validity: {naRows.map((l) => `${l.layer_id} (${l.reason || 'not applicable'})`).join('; ')}
+                        </div>
+                        )}
                     </div>
                   );
                 })()}

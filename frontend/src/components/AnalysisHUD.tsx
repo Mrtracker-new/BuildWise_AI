@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
+import { useReducedMotion } from '../design';
 import { Icon } from './Icon';
 
 export interface AnalysisHUDProps {
@@ -18,20 +19,9 @@ export const AnalysisHUD: React.FC<AnalysisHUDProps> = ({
   onCancel,
   isExiting = false,
 }) => {
-  const [prefersReducedMotion, setPrefersReducedMotion] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    }
-    return false;
-  });
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const handler = (e: MediaQueryListEvent) => setPrefersReducedMotion(e.matches);
-    mediaQuery.addEventListener('change', handler);
-    return () => mediaQuery.removeEventListener('change', handler);
-  }, []);
+  // Reduced-motion via the design system hook (global CSS guard also nulls
+  // animation/transition durations when the OS preference is set).
+  const prefersReducedMotion = useReducedMotion();
 
   const stageNumber = Math.min(stageIndex + 1, totalStages);
   const progressPct = Math.min(100, Math.max(14, (stageNumber / totalStages) * 100));

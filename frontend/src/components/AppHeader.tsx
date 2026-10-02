@@ -70,7 +70,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   return (
     <header
       className="fixed top-3 left-3 right-3 h-[52px] rounded-[16px] vibrancy-panel z-[1001] px-3 sm:px-4 flex items-center justify-between pointer-events-auto border border-[var(--panel-border-color)] shadow-md select-none"
-      style={{ top: '12px', left: '12px', right: '12px', height: '52px', borderRadius: '16px' }}
     >
       {/* Brand identity: BuildWise AI Logo */}
       <div className="flex items-center gap-2.5 min-w-0">
@@ -212,9 +211,10 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           <button
             type="button"
             onClick={onToggleTheme}
-            className="w-8 h-8 rounded-[10px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-1)] flex items-center justify-center transition-colors active:brightness-95"
-            title={theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
-            aria-label={theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
+            className="relative w-8 h-8 rounded-[10px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-1)] flex items-center justify-center transition-colors active:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+            title="Toggle light / dark theme"
+            aria-label="Toggle light / dark theme"
+            aria-keyshortcuts="T"
           >
             <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={15} />
           </button>
@@ -235,8 +235,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         <button
           type="button"
           onClick={onReset}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-[var(--text-1)] bg-[var(--fill)] hover:bg-[var(--fill-hover)] rounded-[10px] transition-colors shrink-0 active:brightness-95"
-          title="Reset site analysis"
+          className="relative flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-[var(--text-1)] bg-[var(--fill)] hover:bg-[var(--fill-hover)] rounded-[10px] transition-colors shrink-0 active:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+          title="Reset the site analysis"
+          aria-keyshortcuts="R"
         >
           <Icon name="refresh" size={14} className="text-[var(--text-2)] shrink-0" />
           <span className="hidden sm:inline">Reset</span>
