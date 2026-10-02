@@ -15,6 +15,7 @@ Parameterized EXCLUSIVELY by ontology data (ONTOLOGY) and typology profiles (TYP
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 from typing import List, Dict, Optional, Tuple, Set, Any
@@ -36,6 +37,7 @@ from app.schemas.floorplan import (
 from app.schemas.multi_floor_plan import (
     MultiStoreyBuildingModel,
     SingleFloorPlanModel,
+    UnmetRequirement,
     VerticalCoreSpec,
     DuctShaftSpec,
     MultiFloorRoomRectangle,
@@ -77,6 +79,10 @@ from app.services.floorplan.living_quality import (
     audit_and_enforce_naming_honesty,
     audit_and_enforce_program_intent,
     audit_swings_against_walls_corridors_furniture,
+    find_door_host,
+    host_door_on_shared_wall,
+    nominal_door_toward,
+    shared_wall_segments,
 )
 from app.services.floorplan.validation_gate import (
     build_gate_layers,
@@ -89,7 +95,7 @@ from shapely.ops import unary_union
 
 class SoleGeometryEngine:
     """
-    Universal Geometry Engine consuming the Stage 1 Universal Space Semantics Ontology.
+    Universal Geometry Engine consuming the Universal Space Semantics Ontology.
     Single solver path for all typologies (T1, T2, T3, T4) across 1 to 4 floors.
     """
 
@@ -118,7 +124,19 @@ class SoleGeometryEngine:
             "contract": "llm_confined_to_text_parsing_and_narrative_v1",
         }
         self.ai_provider = ai_provider
-        self.seed = 42
+        # Deterministic seed: honor an explicit numeric seed (int or digit
+        # string) so GEN tokens/CERT ids derive from the REQUEST; anything else
+        # (absent / non-numeric) falls back to the historical 42 so legacy
+        # outputs stay byte-identical.
+        _raw_seed = getattr(self.req, "seed", None)
+        if isinstance(_raw_seed, bool):
+            self.seed = 42
+        elif isinstance(_raw_seed, (int, float)):
+            self.seed = int(_raw_seed)
+        elif isinstance(_raw_seed, str) and _raw_seed.strip().isdigit():
+            self.seed = int(_raw_seed.strip())
+        else:
+            self.seed = 42
         self.site_plan: Optional[SitePlanModel] = None
 
         # Typology Normalization
@@ -187,6 +205,16 @@ class SoleGeometryEngine:
             rear_setback = max(1.2, min(2.5, self.plot_d * 0.10))
             side_setback = max(1.0, min(2.0, self.plot_w * 0.10))
 
+            # The setback envelope below is corner-based (it measures from the
+            # plot's edges), but a CAPTURED boundary is pin-centred, so its local
+            # origin is not the bbox corner. Anchor the envelope on that corner:
+            # otherwise the override places the footprint (and the whole floor
+            # plate) beside the plot, split from its own buildable polygon.
+            # Origin-anchored plots keep minx/miny = 0 and are unchanged.
+            _poly_vs = getattr(self.req.plot_polygon, "vertices", None) or []
+            poly_minx = min((float(v[0]) for v in _poly_vs), default=0.0)
+            poly_miny = min((float(v[1]) for v in _poly_vs), default=0.0)
+
             avail_w = max(4.0, self.plot_w - 2 * side_setback)
             avail_d = max(4.0, self.plot_d - front_setback - rear_setback)
             avail_area = avail_w * avail_d
@@ -207,8 +235,8 @@ class SoleGeometryEngine:
             env_area = round(env_w * env_d, 2)
 
             envelope = {
-                "x": round(side_setback, 2),
-                "y": round(front_setback, 2),
+                "x": round(poly_minx + side_setback, 2),
+                "y": round(poly_miny + front_setback, 2),
                 "width": env_w,
                 "depth": env_d,
                 "area_sqm": env_area,
@@ -241,12 +269,12 @@ class SoleGeometryEngine:
                     env_w = min(round(self.plot_w - 1.0, 2), 12.0)
                     env_d = min(round(self.plot_d - 1.5, 2), 9.5)
 
-                env_x = max(0.20, round((self.plot_w - env_w) / 2.0, 2))
+                env_x = round(poly_minx + max(0.20, round((self.plot_w - env_w) / 2.0, 2)), 2)
                 # Front-edge placement must respect the same directional front
                 # setback the site pipeline uses (>= 1.8m, up to 3.5m for deep
                 # plots). Capping y at 2.5 left the footprint straddling the
                 # buildable envelope on deep plots (site-gate L1 FAIL).
-                env_y = max(0.20, min(max(1.8, min(3.5, self.plot_d * 0.15)), round((self.plot_d - env_d) / 3.0, 2)))
+                env_y = round(poly_miny + max(0.20, min(max(1.8, min(3.5, self.plot_d * 0.15)), round((self.plot_d - env_d) / 3.0, 2))), 2)
                 env_area = round(env_w * env_d, 2)
                 envelope = {
                     "x": env_x,
@@ -3344,271 +3372,53 @@ class SoleGeometryEngine:
                 door_type="standard",
             ))
 
-        # 2. Door to Puja Room from Living
-        if living and puja:
+        def _host(room: Optional[MultiFloorRoomRectangle], preferred: List[Optional[MultiFloorRoomRectangle]], door_id: Optional[str] = None) -> None:
+            """
+            Hosts `room`'s door in the wall it really shares with the first
+            available preferred neighbour (else circulation, else the longest
+            shared neighbour wall), so no door is ever cut through a facade or a
+            third room's wall.
+            """
+            if room is None:
+                return
+            prefs = [p for p in preferred if p is not None]
+            chosen, hosted = find_door_host(room, rooms, 0.90, preferred=prefs)
+            if chosen is None or hosted is None:
+                if not prefs:
+                    return
+                chosen, hosted = prefs[0], nominal_door_toward(room, prefs[0], 0.90)
             doors.append(MultiFloorDoorGeometry(
-                door_id="door_puja",
+                door_id=door_id or f"door_{room.room_id}",
                 floor_index=0,
-                from_room=living.room_id,
-                to_room=puja.room_id,
-                wall_edge="vertical",
-                x1=puja.x,
-                y1=round(puja.y + 1.0, 2),
-                x2=puja.x,
-                y2=round(puja.y + 1.9, 2),
-                hinge_x=puja.x,
-                hinge_y=round(puja.y + 1.0, 2),
-                swing_direction="inward_right",
-                width_m=0.90,
+                from_room=chosen.room_id,
+                to_room=room.room_id,
                 door_type="standard",
+                **hosted,
             ))
+
+        # 2. Door to Puja Room from Living
+        _host(puja, [living], "door_puja")
 
         # 3. Door from Living to Central Corridor
-        if living and corridor:
-            dx = round(corridor.x + 1.0, 2)
-            dy = corridor.y
-            doors.append(MultiFloorDoorGeometry(
-                door_id="door_corridor",
-                floor_index=0,
-                from_room=living.room_id,
-                to_room=corridor.room_id,
-                wall_edge="horizontal",
-                x1=dx,
-                y1=dy,
-                x2=round(dx + 0.9, 2),
-                y2=dy,
-                hinge_x=dx,
-                hinge_y=dy,
-                swing_direction="inward_right",
-                width_m=0.90,
-                door_type="standard",
-            ))
+        _host(corridor, [living], "door_corridor")
 
-        # 4. Door to Common Bath (bath_1) - degree == 1
-        if bath_1:
-            p_from = corridor.room_id if corridor else (living.room_id if living else "corridor")
-            is_horiz = (corridor and (abs(bath_1.y - (corridor.y + corridor.depth_m)) < 0.05 or abs(bath_1.y + bath_1.depth_m - corridor.y) < 0.05)) or (not corridor and living and abs(bath_1.y - (living.y + living.depth_m)) < 0.05)
-            if is_horiz:
-                dx = round(bath_1.x + max(0.2, (bath_1.width_m - 0.9) / 2.0), 2)
-                dy = bath_1.y
-                doors.append(MultiFloorDoorGeometry(
-                    door_id=f"door_{bath_1.room_id}",
-                    floor_index=0,
-                    from_room=p_from,
-                    to_room=bath_1.room_id,
-                    wall_edge="horizontal",
-                    x1=dx,
-                    y1=dy,
-                    x2=round(dx + 0.9, 2),
-                    y2=dy,
-                    hinge_x=dx,
-                    hinge_y=dy,
-                    swing_direction="inward_right",
-                    width_m=0.90,
-                    door_type="standard",
-                ))
-            else:
-                dx = round(bath_1.x + bath_1.width_m, 2)
-                dy = round(bath_1.y + 1.0, 2)
-                doors.append(MultiFloorDoorGeometry(
-                    door_id=f"door_{bath_1.room_id}",
-                    floor_index=0,
-                    from_room=p_from,
-                    to_room=bath_1.room_id,
-                    wall_edge="vertical",
-                    x1=dx,
-                    y1=dy,
-                    x2=dx,
-                    y2=round(dy + 0.9, 2),
-                    hinge_x=dx,
-                    hinge_y=dy,
-                    swing_direction="inward_left",
-                    width_m=0.90,
-                    door_type="standard",
-                ))
+        # 4. Door to Common Bath (bath_1) - degree == 1, off the corridor
+        _host(bath_1, [corridor, living])
 
         # 5. Door to Master Bedroom
-        if master:
-            p_from = corridor.room_id if corridor else (living.room_id if living else "corridor")
-            dx = round(master.x + 0.8, 2)
-            dy = master.y
-            doors.append(MultiFloorDoorGeometry(
-                door_id="door_master",
-                floor_index=0,
-                from_room=p_from,
-                to_room=master.room_id,
-                wall_edge="horizontal",
-                x1=dx,
-                y1=dy,
-                x2=round(dx + 0.9, 2),
-                y2=dy,
-                hinge_x=dx,
-                hinge_y=dy,
-                swing_direction="inward_left",
-                width_m=0.90,
-                door_type="standard",
-            ))
+        _host(master, [corridor, living])
 
-        # 6. Door to Kitchen
-        if kitchen:
-            if dining and abs(dining.y + dining.depth_m - kitchen.y) < 0.05:
-                p_from = dining.room_id
-                dx = round(max(kitchen.x, dining.x) + 0.8, 2)
-                dy = kitchen.y
-            elif corridor:
-                p_from = corridor.room_id
-                dx = round(kitchen.x + 0.8, 2)
-                dy = kitchen.y
-            else:
-                p_from = living.room_id if living else "corridor"
-                dx = round(kitchen.x + 0.8, 2)
-                dy = kitchen.y
-
-            doors.append(MultiFloorDoorGeometry(
-                door_id="door_kitchen",
-                floor_index=0,
-                from_room=p_from,
-                to_room=kitchen.room_id,
-                wall_edge="horizontal",
-                x1=dx,
-                y1=dy,
-                x2=round(dx + 0.9, 2),
-                y2=dy,
-                hinge_x=dx,
-                hinge_y=dy,
-                swing_direction="inward_right",
-                width_m=0.90,
-                door_type="standard",
-            ))
+        # 6. Door to Kitchen - off the dining area when they share a wall
+        _host(kitchen, [dining, corridor, living])
 
         # 7. Door to Bedroom 2 (if present)
-        if bed_2:
-            p_from = corridor.room_id if corridor else (living.room_id if living else "corridor")
-            is_horiz = corridor and abs(bed_2.y + bed_2.depth_m - corridor.y) < 0.05
-            if is_horiz:
-                dx = round(bed_2.x + 0.8, 2)
-                dy = round(bed_2.y + bed_2.depth_m, 2)
-                doors.append(MultiFloorDoorGeometry(
-                    door_id="door_bed_2",
-                    floor_index=0,
-                    from_room=p_from,
-                    to_room=bed_2.room_id,
-                    wall_edge="horizontal",
-                    x1=dx,
-                    y1=dy,
-                    x2=round(dx + 0.9, 2),
-                    y2=dy,
-                    hinge_x=dx,
-                    hinge_y=dy,
-                    swing_direction="inward_right",
-                    width_m=0.90,
-                    door_type="standard",
-                ))
-            else:
-                dx = round(bed_2.x, 2)
-                dy = round(bed_2.y + 1.0, 2)
-                doors.append(MultiFloorDoorGeometry(
-                    door_id="door_bed_2",
-                    floor_index=0,
-                    from_room=p_from,
-                    to_room=bed_2.room_id,
-                    wall_edge="vertical",
-                    x1=dx,
-                    y1=dy,
-                    x2=dx,
-                    y2=round(dy + 0.9, 2),
-                    hinge_x=dx,
-                    hinge_y=dy,
-                    swing_direction="inward_right",
-                    width_m=0.90,
-                    door_type="standard",
-                ))
+        _host(bed_2, [corridor, living])
 
         # 8. Door to Dining (if present)
-        if dining:
-            p_from = corridor.room_id if corridor else (living.room_id if living else "corridor")
-            is_horiz = corridor and (abs(dining.y - (corridor.y + corridor.depth_m)) < 0.05 or abs(dining.y + dining.depth_m - corridor.y) < 0.05)
-            if is_horiz:
-                dx = round(dining.x + 0.5, 2)
-                dy = dining.y
-                doors.append(MultiFloorDoorGeometry(
-                    door_id="door_dining",
-                    floor_index=0,
-                    from_room=p_from,
-                    to_room=dining.room_id,
-                    wall_edge="horizontal",
-                    x1=dx,
-                    y1=dy,
-                    x2=round(dx + 0.9, 2),
-                    y2=dy,
-                    hinge_x=dx,
-                    hinge_y=dy,
-                    swing_direction="inward_right",
-                    width_m=0.90,
-                    door_type="standard",
-                ))
-            else:
-                dx = round(dining.x, 2)
-                dy = round(dining.y + 1.0, 2)
-                doors.append(MultiFloorDoorGeometry(
-                    door_id="door_dining",
-                    floor_index=0,
-                    from_room=p_from,
-                    to_room=dining.room_id,
-                    wall_edge="vertical",
-                    x1=dx,
-                    y1=dy,
-                    x2=dx,
-                    y2=round(dy + 0.9, 2),
-                    hinge_x=dx,
-                    hinge_y=dy,
-                    swing_direction="inward_right",
-                    width_m=0.90,
-                    door_type="standard",
-                ))
+        _host(dining, [corridor, living])
 
-        # 9. Door to Bath 2 (if present) - degree == 1
-        if bath_2:
-            if master and abs((bath_2.x + bath_2.width_m) - master.x) < 0.05:
-                # Attached to master bedroom
-                dx = round(bath_2.x + bath_2.width_m, 2)
-                dy = round(bath_2.y + 1.0, 2)
-                doors.append(MultiFloorDoorGeometry(
-                    door_id=f"door_{bath_2.room_id}",
-                    floor_index=0,
-                    from_room=master.room_id,
-                    to_room=bath_2.room_id,
-                    wall_edge="vertical",
-                    x1=dx,
-                    y1=dy,
-                    x2=dx,
-                    y2=round(dy + 0.9, 2),
-                    hinge_x=dx,
-                    hinge_y=dy,
-                    swing_direction="inward_left",
-                    width_m=0.90,
-                    door_type="standard",
-                ))
-            else:
-                p_from = corridor.room_id if corridor else (living.room_id if living else "corridor")
-                dx = round(bath_2.x + max(0.2, (bath_2.width_m - 0.9) / 2.0), 2)
-                dy = bath_2.y
-                doors.append(MultiFloorDoorGeometry(
-                    door_id=f"door_{bath_2.room_id}",
-                    floor_index=0,
-                    from_room=p_from,
-                    to_room=bath_2.room_id,
-                    wall_edge="horizontal",
-                    x1=dx,
-                    y1=dy,
-                    x2=round(dx + 0.9, 2),
-                    y2=dy,
-                    hinge_x=dx,
-                    hinge_y=dy,
-                    swing_direction="inward_left",
-                    width_m=0.90,
-                    door_type="standard",
-                ))
+        # 9. Door to Bath 2 (if present) - degree == 1, ensuite off the master
+        _host(bath_2, [master, corridor, living])
 
         # Hosted Windows on Exterior Walls
         win_idx = 1
@@ -4042,22 +3852,26 @@ class SoleGeometryEngine:
                     width_m=2.40,
                     door_type="dock_shutter",
                 ))
-                # Internal door to dispatch buffer (MUST_ADJACENT)
+                # Internal door to dispatch buffer (MUST_ADJACENT), hosted in the
+                # wall the bay actually shares with the dispatch hall.
                 dispatch_room = next((rm for rm in rooms if "dispatch" in rm.room_id), lobby)
+                dispatch_door = host_door_on_shared_wall(r, dispatch_room, 1.50) if dispatch_room is not None else None
                 doors.append(MultiFloorDoorGeometry(
                     door_id=f"door_dock_dispatch_{r.room_id}",
                     floor_index=floor_index,
                     from_room=r.room_id,
                     to_room=dispatch_room.room_id,
-                    wall_edge="south",
-                    x1=r.x + 1.5,
-                    y1=r.y + r.depth_m,
-                    x2=r.x + 3.0,
-                    y2=r.y + r.depth_m,
-                    hinge_x=r.x + 1.5,
-                    hinge_y=r.y + r.depth_m,
-                    width_m=1.50,
                     door_type="standard",
+                    **(dispatch_door or {
+                        "wall_edge": "south",
+                        "x1": r.x + 1.5,
+                        "y1": r.y + r.depth_m,
+                        "x2": r.x + 3.0,
+                        "y2": r.y + r.depth_m,
+                        "hinge_x": r.x + 1.5,
+                        "hinge_y": r.y + r.depth_m,
+                        "width_m": 1.50,
+                    }),
                 ))
                 continue
 
@@ -4082,37 +3896,39 @@ class SoleGeometryEngine:
                 ))
                 continue
 
-            # Standard circulation door from lobby or adjacent parent room
-            parent_room = lobby
-            wall_edge = "vertical"
-            dx = r.x
-            dy = r.y + max(0.3, min(1.0, r.depth_m * 0.2))
-
-            # If ensuite bath, door opens onto master bed
+            # Standard circulation door, hosted in the wall this room actually
+            # shares with circulation (or, failing that, its nearest neighbour).
+            # An ensuite bath belongs to the master bedroom, not the lobby.
+            preferred: List[MultiFloorRoomRectangle] = [lobby]
             if "bath_master" in r.room_id:
-                mb = next((rm for rm in rooms if "master_bed" in rm.room_id), lobby)
-                parent_room = mb
-                dx = r.x + r.width_m
-                dy = r.y + 0.5
-            elif "dining" in r.room_id:
-                parent_room = lobby
+                preferred = [next((rm for rm in rooms if "master_bed" in rm.room_id), lobby)]
+            parent_room, hosted = find_door_host(r, rooms, 0.90, preferred=preferred)
+
+            if hosted is None:
+                # No shared wall: keep a nominal connection on the room's own wall
+                # so circulation graphs and door schedules stay complete.
+                parent_room = preferred[0]
+                wall_edge = "vertical"
                 dx = r.x
-                dy = r.y + 0.5
+                dy = r.y + max(0.3, min(1.0, r.depth_m * 0.2))
+                hosted = {
+                    "wall_edge": wall_edge,
+                    "x1": round(dx, 2),
+                    "y1": round(dy, 2),
+                    "x2": round(dx, 2),
+                    "y2": round(dy + 0.90, 2),
+                    "hinge_x": round(dx, 2),
+                    "hinge_y": round(dy, 2),
+                    "width_m": 0.90,
+                }
 
             doors.append(MultiFloorDoorGeometry(
                 door_id=f"door_{r.room_id}",
                 floor_index=floor_index,
                 from_room=parent_room.room_id,
                 to_room=r.room_id,
-                wall_edge=wall_edge,
-                x1=round(dx, 2),
-                y1=round(dy, 2),
-                x2=round(dx, 2),
-                y2=round(dy + 0.90, 2),
-                hinge_x=round(dx, 2),
-                hinge_y=round(dy, 2),
-                width_m=0.90,
                 door_type="fire_rated" if "ind_stair" in r.room_id or "server" in r.room_id else "standard",
+                **hosted,
             ))
 
         # 4. Windows on Exterior Walls (NBC 2016 Part 8 Light & Ventilation)
@@ -4341,6 +4157,9 @@ class SoleGeometryEngine:
         non_overlap = True
         containment = True
         chain_sums_match = True
+        # Zero-silent-skips audit: chain-sum precision must be verifiable,
+        # and floors without chains must be recorded, never skipped quietly.
+        chain_audit = {"chains_checked": 0, "floors_with_chains": 0, "floors_without_chains": []}
         min_dims_satisfied = True
         aspect_satisfied = True
         bfs_connected = True
@@ -4388,14 +4207,23 @@ class SoleGeometryEngine:
                         if r.aspect_ratio > spec.max_aspect_ratio * ar_tolerance:
                             aspect_satisfied = False
 
-            # Dimension chain check (<= 1mm)
-            if fl.wall_graph:
-                chains = fl.wall_graph.get("dimension_chains", [])
+            # Dimension chain check (<= 1mm). The serialized wall graph exposes
+            # chains as dim_chains_x/dim_chains_y — the historical
+            # "dimension_chains" key never existed, so this check ran vacuously
+            # Each non-overall chain must satisfy its own
+            # 1 mm sum tolerance (is_valid is derived from sum_mm vs total_mm).
+            wg = fl.wall_graph or {}
+            chains = list(wg.get("dim_chains_x", []) or []) + list(wg.get("dim_chains_y", []) or [])
+            if chains:
                 for ch in chains:
-                    c_sum = ch.get("chain_sum_m", 0.0)
-                    overall = ch.get("overall_dimension_m", 0.0)
-                    if abs(c_sum - overall) > 0.001:
+                    if ch.get("level") == "overall":
+                        continue
+                    if not ch.get("is_valid", True):
                         chain_sums_match = False
+                chain_audit["chains_checked"] += len(chains)
+                chain_audit["floors_with_chains"] += 1
+            else:
+                chain_audit["floors_without_chains"].append(getattr(fl, "floor_index", len(chain_audit["floors_without_chains"])))
 
             # Connectivity & Egress check
             if fl.circulation_status != "connected":
@@ -4513,6 +4341,7 @@ class SoleGeometryEngine:
                 "statutory_audit": statutory_audit,
                 "max_allowed_travel_m": float(self.profile.egress_constants.get("max_travel_distance_non_sprinklered_m", 30.0)),
                 "dimension_chain_tolerance_m": 0.001,
+                "dimension_chain_audit": chain_audit,
             }
         )
 
@@ -4546,6 +4375,76 @@ class SoleGeometryEngine:
     # =========================================================================
     # 10. PRIMARY SOLVE WORKFLOW
     # =========================================================================
+
+    def _compute_unmet_requirements(self, building: MultiStoreyBuildingModel) -> List[Dict[str, str]]:
+        """Backward-compatible wrapper: ledger from an assembled building model."""
+        return self._compute_unmet_requirements_from_floors(getattr(building, "floors", []))
+
+    def _compute_unmet_requirements_from_floors(self, floors: List[Any]) -> List[Dict[str, str]]:
+        """
+        UNSOLVED REQUIREMENTS LEDGER: every requested room that did
+        not appear on ANY solved floor level is recorded with an explicit
+        reason (typology-program mismatch). Surfaced in
+        FloorPlanResponse.unmet_requirements and the UI chips - never silently
+        dropped (zero silent skips contract). Never raises.
+        """
+        try:
+            requested = list(getattr(self.req, "required_rooms", None) or [])
+            if not requested:
+                return []
+            from app.services.floorplan.grid_model import normalize_room_identifier
+            # Placed ids carry level suffixes (e.g. living_F0) and aliases
+            # (hall -> living): compare through the normalizer on BOTH sides.
+            placed_norms = {
+                normalize_room_identifier(r.room_id) for fl in floors for r in fl.rooms
+            }
+            from app.services.floorplan.typologies import get_typology_module
+            module = get_typology_module(self.typology)
+            expected_ids: set = set()
+            for z in range(self.total_storeys):
+                for entry in module.vertical_program(z + 1):
+                    expected_ids.update(entry.get("space_ids", []))
+            normalized_expected = {normalize_room_identifier(e) for e in expected_ids}
+            # Core equivalence: a user requesting "stairs"/"lift" is satisfied
+            # by ANY placed vertical core of that class (ids differ per typology).
+            REQUESTED_CORE_ALIASES = {
+                "stairs", "stair", "staircase", "staircase_core", "t1_stair",
+                "shared_stair", "primary_stair", "secondary_stair", "ind_stair",
+                "lift", "lift_core", "lift_bank",
+            }
+            core_norms = {
+                normalize_room_identifier(r.room_id)
+                for fl in floors for r in fl.rooms
+                if getattr(r, "is_vertical_core", False)
+            }
+            unmet: List[Dict[str, str]] = []
+            for rid in requested:
+                norm = normalize_room_identifier(rid)
+                if norm in placed_norms:
+                    continue
+                if norm in REQUESTED_CORE_ALIASES and core_norms:
+                    continue
+                if norm in normalized_expected or rid in expected_ids:
+                    # Expected by the program but not placed: solver compression.
+                    unmet.append({
+                        "room_id": rid,
+                        "reason": (
+                            "Requested but not placeable in the available envelope "
+                            "- increase plot size/coverage or reduce other rooms"
+                        ),
+                    })
+                else:
+                    unmet.append({
+                        "room_id": rid,
+                        "reason": (
+                            f"Not part of the {self.typology} program for {self.total_storeys} "
+                            "storey(s) - review typology/storeys"
+                        ),
+                    })
+            return unmet
+        except Exception as exc:  # never let the ledger break the solve
+            logging.getLogger(__name__).warning("Unmet-requirements ledger computation failed: %s", exc)
+            return []
 
     def solve(self) -> MultiStoreyBuildingModel:
         """
@@ -4583,7 +4482,10 @@ class SoleGeometryEngine:
                 global_metrics={"status": "failed", "feasibility": "rejected"},
                 qa_report={"status": "failed", "degradation_level": deg_level},
                 warnings=self.warnings,
-                unmet_requirements=["insufficient_envelope_area"],
+                unmet_requirements=[UnmetRequirement(
+                    room_id="all_requested",
+                    reason="Insufficient envelope area for any room layout",
+                )],
                 seed=self.seed,
                 solver_timing_ms=elapsed_ms,
             )
@@ -4967,7 +4869,7 @@ class SoleGeometryEngine:
                 "rotation_alternatives": getattr(self.site_plan, "rotation_alternatives", []) if self.site_plan else [],
             },
             warnings=self.warnings,
-            unmet_requirements=[],
+            unmet_requirements=self._compute_unmet_requirements_from_floors(floors),
             seed=self.seed,
             solver_timing_ms=elapsed_ms,
             mathematical_certificate=cert.model_dump(),
@@ -5176,12 +5078,26 @@ class SoleGeometryEngine:
                 r.room_id: f"Zone={r.zone}, rules={','.join(r.applied_rules or ['ONTOLOGY-RULE'])}"
                 for r in rect_rooms
             },
+            unmet_requirements=[
+                (u.model_dump() if hasattr(u, "model_dump") else dict(u))
+                for u in (building.unmet_requirements or [])
+            ],
             design_intent=getattr(self.req, "design_intent", None) or "maximize_enclosed",
             qa=qa_data,
             multi_storey=building,
             client_constraints=self.client_constraints,
             mathematical_certificate=building.mathematical_certificate,
             params_snapshot={
+                # Coupling: provenance of the site plan feeds the
+                # snapshot so the stale-guard can key on frontage changes.
+                "frontage_edge_index": (
+                    (self.site_plan.provenance or {}).get("frontage_edge_index")
+                    if self.site_plan else None
+                ),
+                "frontage_source": (
+                    (self.site_plan.provenance or {}).get("frontage_source")
+                    if self.site_plan else None
+                ),
                 "building_typology": self.raw_typology,
                 "floors": self.total_storeys,
                 "ground_coverage_ratio": self.coverage,
