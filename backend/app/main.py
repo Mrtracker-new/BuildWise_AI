@@ -47,6 +47,18 @@ from app.services import (
 
 from app.ai import get_ai_adapter, generate_room_program
 from app.services.geocode_service import geocode_search
+from app.schemas.site_intelligence import (
+    NearestRoadResponse,
+    RoadHit,
+    RoadProvenance,
+    SitePreviewRequest,
+    SitePreviewResponse,
+)
+from app.services.road_service import fetch_nearest_road
+from app.services.site_preview_service import (
+    BoundaryStatutoryViolation,
+    compute_site_preview,
+)
 
 app = FastAPI(
     title="BuildWise AI API",
@@ -87,6 +99,23 @@ def check_rate_limit(client_ip: str):
             detail="Rate limit exceeded (maximum 30 requests per minute). Please wait before running another analysis."
         )
     _client_request_history[client_ip].append(now)
+
+# Separate sliding-window budget for the lightweight map-proxy endpoints
+# (nearest-road / site preview): keeps /api/analyze's 30/min budget intact.
+PROXY_RATE_LIMIT_WINDOW_SEC = 60.0
+PROXY_RATE_LIMIT_MAX_REQUESTS = 60
+_proxy_request_history = defaultdict(list)
+
+def check_proxy_rate_limit(client_ip: str):
+    now = time.time()
+    timestamps = _proxy_request_history[client_ip]
+    _proxy_request_history[client_ip] = [t for t in timestamps if now - t < PROXY_RATE_LIMIT_WINDOW_SEC]
+    if len(_proxy_request_history[client_ip]) >= PROXY_RATE_LIMIT_MAX_REQUESTS:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded (maximum 60 requests per minute) for map preview endpoints."
+        )
+    _proxy_request_history[client_ip].append(now)
 
 @app.get("/api/status")
 async def api_status():
@@ -138,6 +167,68 @@ async def geocode_endpoint(q: str = Query(..., min_length=1, description="Free-t
     result = await geocode_search(q.strip())
     return result
 
+@app.get("/api/nearest-road", response_model=NearestRoadResponse)
+async def nearest_road_endpoint(request: Request, lat: float = Query(..., ge=-90.0, le=90.0), lon: float = Query(..., ge=-180.0, le=180.0)):
+    """
+    Overpass nearest-road proxy for the frontage suggestion.
+
+    Policy:
+    - Server-side cache (24h hazard cache, ~11 m grid) and a shared <=1 req/s
+      Overpass throttle; frontend additionally debounces 400 ms.
+    - AMENDMENT 1: the fallback NEVER fabricates a bearing. When Overpass is
+      unreachable or maps no road within 500 m, found=false with an explicit
+      user-facing warning and the frontage stays manual (ASSUMED annotation).
+    - Attribution: © OpenStreetMap contributors (Overpass API).
+    """
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    check_proxy_rate_limit(client_ip)
+    request_id = f"BW-NR-{uuid.uuid4().hex[:8].upper()}"
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    result, cache_hit, warning = await fetch_nearest_road(lat, lon)
+
+    road = RoadHit(
+        bearing_degrees=result["bearing_degrees"],
+        approach_side=result["approach_side"],
+        distance_meters=result["distance_meters"],
+        nearest_point=result.get("nearest_point"),
+        highway_class=result.get("highway_class"),
+        road_name=result.get("road_name"),
+        is_fallback=result["is_fallback"],
+    )
+    return NearestRoadResponse(
+        request_id=request_id,
+        timestamp=timestamp,
+        lat=lat,
+        lon=lon,
+        found=not result["is_fallback"],
+        road=road,
+        provenance=RoadProvenance(
+            source=result["source"],
+            annotation=result["annotation"],
+            cache="hit" if cache_hit else "miss",
+        ),
+        cached=cache_hit,
+        degraded=bool(result["is_fallback"]),
+        warning=warning,
+    )
+
+@app.post("/api/site/preview", response_model=SitePreviewResponse)
+async def site_preview_endpoint(req: SitePreviewRequest):
+    """
+    Deterministic site geometry preview (setbacks -> buildable -> footprint ->
+    parking/wedges) for the map overlay.
+
+    Contracts: NO floor solve, NO LLM, NO network in this path; responses are
+    SHA-256 hash-cached and byte-identical for identical inputs; p95 < 150 ms.
+    Every annotation carries an explicit CALCULATED/ASSUMED/RECOMMENDED/VERIFIED
+    status - ASSUMED never renders as CALCULATED.
+    """
+    try:
+        return compute_site_preview(req)
+    except BoundaryStatutoryViolation as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
 @app.post("/api/analyze", response_model=AnalysisResponse)
 async def analyze_site(req: AnalysisRequest, request: Request):
     """
@@ -151,6 +242,45 @@ async def analyze_site(req: AnalysisRequest, request: Request):
     timestamp = datetime.now(timezone.utc).isoformat()
     warnings = []
     is_degraded = False
+
+    # Server-side boundary validation (the client payload is advisory;
+    # area/perimeter recomputed here are authoritative).
+    boundary_summary = None
+    if req.boundary is not None:
+        b = req.boundary
+        n = len(b.vertices)
+        shoelace = 0.0
+        perim = 0.0
+        for i in range(n):
+            p1 = b.vertices[i]
+            p2 = b.vertices[(i + 1) % n]
+            shoelace += p1.x * p2.y - p2.x * p1.y
+            perim += ((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2) ** 0.5
+        area = round(abs(shoelace) / 2.0, 2)
+        if area < 36.0:
+            raise HTTPException(status_code=422, detail=f"Boundary area {area} m2 is below the statutory minimum 36 m2.")
+        min_edge = min(
+            ((b.vertices[(i + 1) % n].x - b.vertices[i].x) ** 2 + (b.vertices[(i + 1) % n].y - b.vertices[i].y) ** 2) ** 0.5
+            for i in range(n)
+        )
+        if min_edge < 1.0:
+            raise HTTPException(status_code=422, detail=f"Boundary edge {min_edge:.2f} m is below the statutory minimum 1.00 m.")
+        boundary_summary = {
+            "vertex_count": n,
+            "area_sqm": area,
+            "perimeter_m": round(perim, 2),
+            "shape_type": b.shape_type,
+            "source": b.source,
+            "frontage_edge_index": b.frontage_edge_index,
+            "frontage_annotation": "VERIFIED" if b.frontage_edge_index is not None else None,
+            "origin": {"lat": b.origin_lat, "lon": b.origin_lon},
+            "winding": "ccw" if shoelace > 0 else "cw",
+            "provenance": {
+                "boundary_source": b.source,
+                "projection": "local tangent plane (E/N, equirectangular, cos(lat))",
+                "origin": {"lat": b.origin_lat, "lon": b.origin_lon},
+            },
+        }
 
     # 1. Fetch geospatial, elevation, and climate data with fallback tracking
     address, address_fallback = await fetch_reverse_geocode(req.latitude, req.longitude)
@@ -336,7 +466,8 @@ async def analyze_site(req: AnalysisRequest, request: Request):
             feasibility_score=feasibility_score_val,
             structural_recommendations=ai_recs,
             cost_breakdown=cost_breakdown_val,
-            vastu_compliance=vastu_compliance_val
+            vastu_compliance=vastu_compliance_val,
+            boundary_summary=boundary_summary
         )
     except ValidationError as val_err:
         logger.warning(f"Pydantic validation error constructing AnalysisResponse: {val_err}")
@@ -368,6 +499,7 @@ async def analyze_site(req: AnalysisRequest, request: Request):
             degraded_mode=True,
             warnings=warnings,
             parameter_reflection=mock_meta.get("parameter_reflection", param_reflection),
+            boundary_summary=boundary_summary,
             feasibility_score=int(round(overall_score)),
             structural_recommendations=mock_recs,
             cost_breakdown=cost_estimate.model_dump(),
