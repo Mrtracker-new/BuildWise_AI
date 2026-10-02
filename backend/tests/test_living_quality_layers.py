@@ -57,6 +57,9 @@ from app.services.floorplan.living_quality import (
     audit_and_enforce_naming_honesty,
     audit_and_enforce_program_intent,
     audit_and_enforce_zoning_separation,
+    find_door_host,
+    host_door_on_shared_wall,
+    shared_wall_segments,
     MASTER_SUITE_MIN_AREA_M2,
     TERRACE_RATIO_MAX,
     KITCHEN_TRIANGLE_MIN_SUM_M,
@@ -148,6 +151,87 @@ def test_l2_swings_clear_of_stairs_and_foreign_corridors(typology: str, floors: 
                     assert inter.area <= 0.05, (
                         f"{typology} F{fl.floor_index} door {d.door_id} sweeps corridor {r.room_id}"
                     )
+
+
+@pytest.mark.parametrize("typology", TYPOLogies)
+@pytest.mark.parametrize("floors", [1, 2, 3, 4])
+def test_l2_doors_are_hosted_in_a_shared_wall(typology: str, floors: int):
+    """
+    Property: every interior door is cut into a wall the two rooms actually share,
+    inside that shared run and clear of its ends.
+
+    A door placed on a room's own edge regardless of its neighbour drills through an
+    exterior facade or a third room's wall, so the opening must lie within the
+    overlap of the two rooms it connects.
+    """
+    b = _solve(typology, floors)
+    for fl in b.floors:
+        room_by_id = {r.room_id: r for r in fl.rooms}
+        for d in fl.doors:
+            parent = room_by_id.get(d.from_room)
+            served = room_by_id.get(d.to_room)
+            if parent is None or served is None:
+                continue  # exterior door
+            walls = shared_wall_segments(served, parent)
+            assert walls, (
+                f"{typology} F{fl.floor_index} door {d.door_id} ({d.from_room} -> {d.to_room}) "
+                "connects rooms that share no wall"
+            )
+            hosted = [
+                w for w in walls
+                if (w[0] == "v" and abs(w[1] - d.x1) <= 0.06 and abs(d.x1 - d.x2) <= 0.06)
+                or (w[0] == "h" and abs(w[1] - d.y1) <= 0.06 and abs(d.y1 - d.y2) <= 0.06)
+            ]
+            assert hosted, (
+                f"{typology} F{fl.floor_index} door {d.door_id} is not on a wall shared "
+                f"with {parent.room_id}"
+            )
+            wall = hosted[0]
+            lo, hi = sorted((d.y1, d.y2)) if wall[0] == "v" else sorted((d.x1, d.x2))
+            assert lo >= wall[2] - 0.06 and hi <= wall[3] + 0.06, (
+                f"{typology} F{fl.floor_index} door {d.door_id} overruns the shared wall"
+            )
+            assert min(lo - wall[2], wall[3] - hi) >= 0.09, (
+                f"{typology} F{fl.floor_index} door {d.door_id} has no jamb clearance"
+            )
+            assert abs((hi - lo) - d.width_m) <= 0.06, (
+                f"{typology} F{fl.floor_index} door {d.door_id} width disagrees with its opening"
+            )
+
+
+def test_l2_leaf_opens_into_the_served_room():
+    """
+    Property: the declared swing puts the leaf on the served room's side of the wall,
+    matching the side the renderer draws (drawing_ir's leaf formula).
+    """
+    from app.schemas.multi_floor_plan import MultiFloorDoorGeometry
+
+    # Vertical wall at x = 5.0: the leaf leaves the hinge normal to the wall, on the
+    # negative x side for a left swing and the positive side for a right swing.
+    for swing, is_left in (("inward_left", True), ("inward_right", False)):
+        door = MultiFloorDoorGeometry(
+            door_id="d", floor_index=0, from_room="parent", to_room="served",
+            wall_edge="vertical", x1=5.0, y1=2.0, x2=5.0, y2=2.9,
+            hinge_x=5.0, hinge_y=2.0, swing_direction=swing, width_m=0.9,
+        )
+        arc = compute_door_swing_polygon(door)
+        assert arc.area > 0.01
+        far_x = arc.bounds[0] if is_left else arc.bounds[2]
+        assert abs(far_x - (4.1 if is_left else 5.9)) < 0.02, (swing, arc.bounds)
+        # The arc stays on the wall's line in y (it sweeps sideways, not along it).
+        assert abs(arc.bounds[1] - 2.0) < 0.02 and abs(arc.bounds[3] - 2.9) < 0.02, (swing, arc.bounds)
+
+    # Horizontal wall at y = 3.0: the leaf sweeps along y instead.
+    for swing, is_left in (("inward_left", True), ("inward_right", False)):
+        door = MultiFloorDoorGeometry(
+            door_id="d", floor_index=0, from_room="parent", to_room="served",
+            wall_edge="horizontal", x1=1.0, y1=3.0, x2=1.9, y2=3.0,
+            hinge_x=1.0, hinge_y=3.0, swing_direction=swing, width_m=0.9,
+        )
+        arc = compute_door_swing_polygon(door)
+        far_y = arc.bounds[1] if is_left else arc.bounds[3]
+        assert abs(far_y - (2.1 if is_left else 3.9)) < 0.02, (swing, arc.bounds)
+        assert abs(arc.bounds[0] - 1.0) < 0.02 and abs(arc.bounds[2] - 1.9) < 0.02, (swing, arc.bounds)
 
 
 def test_l2_collision_resolution_autoflips_or_converts():

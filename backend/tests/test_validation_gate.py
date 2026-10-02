@@ -53,12 +53,16 @@ from app.services.floorplan.engineering import (
 )
 from app.services.floorplan.validation_gate import (
     LAYER_IDS,
+    build_gate_layers,
+    drawing_status_stamp,
     sanitize_llm_constraints,
 )
 from app.services.floorplan.drawing_ir import build_drawing_ir, render_svg_from_ir
 
 TYPologies = ["T1_SINGLE_FAMILY", "T2_FAMILY_APARTMENT", "T3_LARGE_COMPLEX", "T4_WAREHOUSE"]
-STRICTNESS = ["high", "medium"]
+# Full matrix - all three strictness levels (the zero-
+# silent-skips contract must hold at every strictness, not just high/medium).
+STRICTNESS = ["high", "medium", "low"]
 VALID_STATUSES = {"PASS", "WARN", "FAIL", "N/A"}
 BASE_ROOMS = ["living", "kitchen", "master_bed", "bath_1", "dining", "stairs"]
 
@@ -651,3 +655,115 @@ def test_pdf_sheet10_layer_table_and_stamp():
         assert lid in text
     assert "OVERALL" in text
     assert "NOT FOR CONSTRUCTION" in text or "not for construction" in text.lower()
+
+
+# =============================================================================
+# 5. CHAIN PRECISION & ADVISORY WORDING
+# =============================================================================
+
+def _fake_cert(**over: Any):
+    """Minimal certificate stand-in for gate unit tests (no solver run)."""
+    from types import SimpleNamespace
+    base = dict(
+        non_overlap=True, containment=True, chain_sums_match=True,
+        zero_forbidden_violations=True, connectivity_bfs=True,
+        vertical_stack_valid=True, core_continuity_valid=True,
+        no_wet_over_terrace_valid=True, cores_stack_aligned=True,
+        min_dimensions_satisfied=True, aspect_ratios_satisfied=True,
+        egress_distances_satisfied=True, l2_door_swings_valid=True,
+        l3_fixture_clearances_satisfied=True, l4_furniture_clearances_satisfied=True,
+        details={"living_quality_layers": {}},
+    )
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+@pytest.mark.parametrize("typology,floors", [
+    ("T1_SINGLE_FAMILY", 2), ("T2_FAMILY_APARTMENT", 2),
+    ("T3_LARGE_COMPLEX", 2), ("T4_WAREHOUSE", 1),
+])
+def test_chain_sums_machine_verified_zero_silent_skips(typology: str, floors: int):
+    """Dimension-chain precision is machine-verified, never vacuous.
+
+    The historical check read a serialized key that never existed
+    ('dimension_chains'), so chain verification was silently skipped. Every
+    solved floor must now expose audited chains and the L1 layer must state
+    the verified count.
+    """
+    b = _solve(typology, floors)
+    audit = b.mathematical_certificate["details"]["dimension_chain_audit"]
+    assert audit["chains_checked"] > 0, f"{typology}: no chains audited (vacuous verification)"
+    assert audit["floors_with_chains"] == floors, f"{typology}: chains missing on some floor"
+    assert audit["floors_without_chains"] == []
+    l1 = next(ld for ld in b.validation_gate["layers"] if ld["layer_id"] == "L1")
+    assert "dimension chains verified within 1mm" in l1["summary"]
+    assert l1["status"] != "FAIL"
+
+
+def test_l1_fails_when_a_floor_lacks_dimension_chains():
+    """A solved floor without chains must FAIL L1 with an explicit finding."""
+    cert = _fake_cert(details={
+        "living_quality_layers": {},
+        "dimension_chain_audit": {"chains_checked": 0, "floors_with_chains": 0,
+                                  "floors_without_chains": [0]},
+    })
+    from types import SimpleNamespace
+    layers = build_gate_layers(
+        engine=SimpleNamespace(structural_grid=None),
+        cert=cert, floors=[], duct_shafts=[], typology="T1_SINGLE_FAMILY",
+        pi_ok=True, pi_warns=[], statutory_audit={"occupant_load": 0},
+    )
+    l1 = next(ld for ld in layers if ld["layer_id"] == "L1")
+    assert l1["status"] == "FAIL"
+    assert any("silent-skip guard" in f for f in l1.get("findings") or [])
+
+
+@pytest.mark.parametrize("typology,floors", [("T1_SINGLE_FAMILY", 2), ("T4_WAREHOUSE", 1)])
+def test_l12_load_path_continuity_wording(typology: str, floors: int):
+    """L12 states the floor-to-floor load-path verdict explicitly."""
+    b = _solve(typology, floors)
+    l12 = next(ld for ld in b.validation_gate["layers"] if ld["layer_id"] == "L12")
+    assert "load-path" in l12["summary"]
+
+
+def test_l8_terrace_ratio_justification_surfaces():
+    """A terrace-ratio breach carries conversion guidance even when L8 passes."""
+    from types import SimpleNamespace
+    cert = _fake_cert(details={"living_quality_layers": {
+        "program_intent_audit": {"terrace_ratio_pct": 52.5, "terrace_ratio_satisfied": False},
+    }})
+    warns = ["Terrace Ratio Advisory: Open terrace area (52.5 m2, 52.5% of enclosed) "
+             "exceeds optimal threshold (35%). Consider converting partial terrace."]
+    layers = build_gate_layers(
+        engine=SimpleNamespace(structural_grid=None),
+        cert=cert, floors=[], duct_shafts=[], typology="T1_SINGLE_FAMILY",
+        pi_ok=True, pi_warns=warns, statutory_audit={"occupant_load": 0},
+    )
+    l8 = next(ld for ld in layers if ld["layer_id"] == "L8")
+    assert l8["status"] == "PASS"
+    assert "terrace ratio" in l8["summary"].lower()
+    assert any("Terrace Ratio" in f for f in l8.get("findings") or [])
+
+
+def test_stamp_single_source_canonical_format():
+    """Every stamp surface derives from the one canonical helper."""
+    from app.services.floorplan.drawing_ir import SheetHeaderInfo, _wrap_status_stamp
+
+    assert drawing_status_stamp(["L1", "L2"]) == (
+        "STATUS: CONCEPT DESIGN - VALIDATED LAYERS: [L1, L2] - NOT FOR CONSTRUCTION")
+    assert drawing_status_stamp(["L1", "L2"], scope_note="SITE SCOPE; BUILDING LAYERS N/A") == (
+        "STATUS: CONCEPT DESIGN - VALIDATED LAYERS: [L1, L2] "
+        "(SITE SCOPE; BUILDING LAYERS N/A) - NOT FOR CONSTRUCTION")
+
+    hdr = SheetHeaderInfo(
+        gen_id="GEN-T1-1F-42", plot_w_m=12.0, plot_d_m=15.0, storeys=1,
+        storeys_label="G", floor_index=0, floor_name="Ground Floor (G)",
+        elevation_m=0.0, envelope_w_m=10.0, envelope_d_m=13.0,
+        freshness_token="GEN GEN-T1-1F-42", validated_layers=["L1", "L7"],
+    )
+    assert hdr.drawing_status_stamp == drawing_status_stamp(["L1", "L7"])
+
+    # Wrapped sheet lines keep the head prefix and the legal tail, never dropped.
+    lines = _wrap_status_stamp(drawing_status_stamp([f"L{i}" for i in range(1, 15)]), 60)
+    assert all(l.startswith("STATUS: CONCEPT DESIGN") for l in lines)
+    assert lines[-1].endswith("] - NOT FOR CONSTRUCTION")

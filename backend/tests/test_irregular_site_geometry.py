@@ -124,8 +124,18 @@ def test_rectangle_equivalence_regression():
     if dump_poly.get("multi_storey") and dump_legacy.get("multi_storey"):
         dump_poly["multi_storey"]["solver_timing_ms"] = dump_legacy["multi_storey"]["solver_timing_ms"]
 
-    buf_legacy = generate_pdf_report({"project_id": "test_rect_reg"}, floor_plan=dump_legacy)
-    buf_poly = generate_pdf_report({"project_id": "test_rect_reg"}, floor_plan=dump_poly)
+    # Pin the PDF clock inputs: report_service stamps request_id/timestamp with
+    # datetime.now() per build, so two builds straddling a second boundary emit
+    # different digit strings whose zlib-compressed byte lengths can differ by
+    # more than the parity slack below (latent flake). Same clock in -> the
+    # byte-length comparison measures content, not wall time.
+    _pdf_meta = {
+        "project_id": "test_rect_reg",
+        "request_id": "test_rect_reg",
+        "timestamp": "2026-01-01 00:00:00 UTC",
+    }
+    buf_legacy = generate_pdf_report(dict(_pdf_meta), floor_plan=dump_legacy)
+    buf_poly = generate_pdf_report(dict(_pdf_meta), floor_plan=dump_poly)
     pdf_legacy = buf_legacy.getvalue()
     pdf_poly = buf_poly.getvalue()
     assert len(pdf_legacy) > 1000
@@ -439,7 +449,7 @@ def test_site_sheet_drawing_ir_and_pdf_parity():
 
 
 # ==============================================================================
-# 6. PHASE 5 PROOFS: CURVES, L-SHAPE MULTI-WING, COURTYARD TOPOLOGY
+# 6. PROOFS: CURVES, L-SHAPE MULTI-WING, COURTYARD TOPOLOGY
 # ==============================================================================
 
 def test_curvilinear_boundary_approximation():

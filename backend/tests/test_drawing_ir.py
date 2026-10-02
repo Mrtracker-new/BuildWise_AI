@@ -34,7 +34,7 @@ FLOOR_COUNTS = [1, 2, 3, 4]
 @pytest.mark.parametrize("floors", FLOOR_COUNTS)
 def test_drawing_ir_parity_and_transforms(typology: str, floors: int):
     """
-    Step 10 Regression Test:
+    The drawing IR is the single source both renderers consume:
     For T1-T4 x 1-4 floors, build the IR once, render SVG and PDF;
     1. Assert per-layer primitive counts match expectations.
     2. Assert key coordinates (envelope corners, one room corner per floor, stair core origin,
@@ -178,7 +178,7 @@ def test_drawing_ir_parity_and_transforms(typology: str, floors: int):
 @pytest.mark.parametrize("floors", [1, 3])
 def test_drawing_ir_no_element_outside_bbox(typology: str, floors: int):
     """
-    Step 11 Regression Test:
+    No drawn element may fall outside the envelope + annotation margin:
     Assert no drawn element bbox falls outside envelope + annotation margin in PDF coordinate space.
     Catches flip/offset/coordinate distortion bugs generically.
     """
@@ -329,3 +329,81 @@ def test_single_level_setback_normalization():
     assert ">0.0m²<" not in svg and ">0.00m²<" not in svg
     assert "BUILDWISE GENERATIVE CAD ENGINE" in svg
 
+
+
+def test_drawn_door_leaf_opens_into_its_room_and_the_wall_it_shares():
+    """
+    The drawn door leaf must open into the room it serves:
+    The IR is what the SVG and PDF actually draw, so the drawn leaf - not just the
+    solver's intent - must open into the room the door serves, against the wall the
+    two rooms share. Every door also has to sit in the wall the two rooms have in
+    common: a door cut into a facade or a neighbouring room's wall is a hull breach
+    in the drawing even when the model looks plausible.
+    """
+    req = FloorPlanRequest(
+        plot_width_m=20.0,
+        plot_depth_m=18.0,
+        floors=1,
+        building_typology="T1_SINGLE_FAMILY",
+        vastu_strictness="medium",
+        required_rooms=["living", "kitchen", "master_bed", "bath_1", "dining", "stairs"],
+    )
+    res = generate_floor_plan(req)
+    multi_bldg = res.multi_storey
+    fl = multi_bldg.floors[0]
+
+    ir = build_drawing_ir(
+        floor_data=fl,
+        building_model=multi_bldg,
+        gen_id=multi_bldg.seed,
+        typology=multi_bldg.building_typology,
+    )
+
+    # Room rectangles in IR (y-up) space, keyed by room id.
+    rooms_ir = {
+        r.room_id: (
+            r.x,
+            ir.envelope_d - (r.y + r.depth_m),
+            r.x + r.width_m,
+            ir.envelope_d - r.y,
+        )
+        for r in fl.rooms
+    }
+    door_model = {d.door_id: d for d in fl.doors}
+    rooms_by_id = {r.room_id: r for r in fl.rooms}
+
+    def _served_room_id(op: OpeningPrimitive) -> str:
+        """The room a door opens into: its non-circulation endpoint."""
+        model = door_model.get(op.opening_id)
+        if model is None:
+            return ""
+        endpoints = [rid for rid in (model.from_room, model.to_room) if rid in rooms_ir]
+        non_circ = [rid for rid in endpoints if rooms_by_id[rid].zone_category != "circulation"]
+        return (non_circ or endpoints or [""])[0]
+
+    def _inside(point, box, tol=0.06):
+        return (box[0] - tol) <= point[0] <= (box[2] + tol) and (box[1] - tol) <= point[1] <= (box[3] + tol)
+
+    checked = 0
+    for op in ir.primitives:
+        if not isinstance(op, OpeningPrimitive) or op.opening_type != "door":
+            continue
+        served = rooms_ir.get(_served_room_id(op))
+        if served is None:
+            # Exterior doors (main entry, dock shutters) have no served room.
+            continue
+        checked += 1
+        assert _inside((op.leaf_x, op.leaf_y), served), (
+            f"Door {op.opening_id} leaf ({op.leaf_x:.2f}, {op.leaf_y:.2f}) opens outside "
+            f"the room it serves"
+        )
+        for point in (op.arc_start_pt, op.arc_end_pt):
+            assert _inside(point, served, 0.10), (
+                f"Door {op.opening_id} swing arc reaches outside the room it serves at {point}"
+            )
+        assert -0.05 <= op.leaf_x <= ir.envelope_w + 0.05
+        assert -0.05 <= op.leaf_y <= ir.envelope_d + 0.05
+        assert -0.05 <= op.hinge_x <= ir.envelope_w + 0.05
+        assert -0.05 <= op.hinge_y <= ir.envelope_d + 0.05
+
+    assert checked >= 4, f"Expected several interior doors on the plate, checked {checked}"

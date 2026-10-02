@@ -1,7 +1,7 @@
 ﻿"""
-test_typology_modules.py - Stage 3 Per-Typology Module Property Tests
+test_typology_modules.py - Per-Typology Module Property Tests
 ======================================================================
-Validates the Stage-3 TypologyModuleProtocol for all four typologies:
+Validates the TypologyModuleProtocol for all four typologies:
   T1 Single-Family Residence, T2 Family Apartment,
   T3 Large Commercial Complex, T4 Warehouse.
 

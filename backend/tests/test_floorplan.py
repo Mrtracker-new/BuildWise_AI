@@ -697,7 +697,7 @@ def test_llm_layout_critic_retry_loop():
     2. Verifies re-solve with forced template seed is triggered.
     3. Verifies critic verdict and warnings are recorded in solver output.
     """
-    # STAGE 2: LLM critic retired from geometry loop; engine is deterministic & ontology-driven
+    # LLM critic retired from the geometry loop: the engine is deterministic & ontology-driven
     req = FloorPlanRequest(
         plot_width_m=10.9,
         plot_depth_m=10.6,

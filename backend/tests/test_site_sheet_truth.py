@@ -417,3 +417,70 @@ def test_pdf_report_contains_truth_elements_for_irregular_site():
 
     assert len(pdf_bytes) > 1000
     assert pdf_bytes.startswith(b"%PDF")
+
+
+# ==============================================================================
+# 6. SITE PLAN 10.SP SHEET - PIN-CENTRED (CAPTURED) PLOT FRAME
+# ==============================================================================
+
+def _site_sheet_and_envelope(ox: float, oy: float):
+    """Generates the site sheet and ground-floor envelope for a plot at (ox, oy)."""
+    plot_w, plot_d = 18.4, 29.7
+    vertices = [[ox, oy], [ox + plot_w, oy], [ox + plot_w, oy + plot_d], [ox, oy + plot_d]]
+    poly_model = PlotPolygonModel(
+        vertices=vertices,
+        shape_type="polygon",
+        is_regular_rectangle=True,
+        area_sqm=plot_w * plot_d,
+        perimeter_m=2 * (plot_w + plot_d),
+        origin_lat=12.9716,
+        origin_lon=77.5946,
+    )
+    req = FloorPlanRequest(
+        plot_width_m=plot_w,
+        plot_depth_m=plot_d,
+        floors=1,
+        building_typology="T1_SINGLE_FAMILY",
+        required_rooms=["living", "kitchen", "master_bed", "bath_1", "stairs"],
+        plot_polygon=poly_model,
+    )
+    plan = generate_floor_plan(req)
+    site_plan = SitePlanModel.model_validate(plan.multi_storey.site_plan)
+    ir = build_site_drawing_ir(site_plan, gen_id="42", typology="T1_SINGLE_FAMILY")
+    return render_svg_from_ir(ir, theme="cad"), site_plan, plan.multi_storey.floors[0].envelope
+
+
+def test_site_sheet_frame_is_independent_of_where_the_pin_was_dropped():
+    """
+    A captured boundary is pin-centred, so its local coordinates are negative. The
+    Site Plan 10.SP sheet must be authored in the plot's own frame: rebasing the plot
+    to the origin must not move, clip or restyle a single drawn line.
+
+    Regression: the sheet was previously authored in the pin's frame, pushing the plot
+    off the left edge and stretching the viewBox until the plate was cut off.
+    """
+    origin_sheet, _, _ = _site_sheet_and_envelope(0.0, 0.0)
+    # Pin dropped mid-plot: every local coordinate is negative.
+    pin_sheet, pin_site, _ = _site_sheet_and_envelope(-9.2, -14.85)
+
+    assert pin_sheet == origin_sheet, "Site sheet changed when the same plot was pin-centred"
+
+
+def test_floor_envelope_matches_site_footprint_when_plot_is_pin_centred():
+    """
+    The floor plate must sit on the site footprint at the same (x, y) - both are drawn
+    in the plot's frame, so a pin-centred capture cannot displace one from the other.
+
+    Regression: the floor envelope was computed corner-based and landed half a plot
+    away from the site footprint, which is what tracked the pin as a stray rectangle.
+    """
+    _, origin_site, origin_env = _site_sheet_and_envelope(0.0, 0.0)
+    _, pin_site, pin_env = _site_sheet_and_envelope(-9.2, -14.85)
+
+    for site, env in ((origin_site, origin_env), (pin_site, pin_env)):
+        assert abs(env["x"] - site.footprint.x) <= 0.01, (env, site.footprint)
+        assert abs(env["y"] - site.footprint.y) <= 0.01, (env, site.footprint)
+
+    # Same building, translated by exactly the pin offset.
+    assert abs((pin_env["x"] - origin_env["x"]) - (-9.2)) <= 0.01
+    assert abs((pin_env["y"] - origin_env["y"]) - (-14.85)) <= 0.01
