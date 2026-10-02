@@ -261,16 +261,23 @@ def compute_door_swing_polygon(door: MultiFloorDoorGeometry, segments: int = 12)
 
     theta_closed = math.atan2(dy, dx)
 
-    # 90° swing arc based on swing_direction
-    # right swing: +90° counter-clockwise or -90° clockwise
+    # 90° swing arc based on swing_direction.
+    # Swing side convention (single source of truth, shared with the SVG/PDF
+    # renderer in drawing_ir): the leaf leaves the hinge normal to the wall, on the
+    # negative axis side for "inward_left" and the positive side for
+    # "inward_right". Vertical walls therefore sweep along x, horizontal walls
+    # along y - independent of which endpoint carries the hinge.
     is_left = "left" in door.swing_direction
     is_outward = "outward" in door.swing_direction
 
-    sweep = -math.pi / 2.0 if is_left else math.pi / 2.0
+    vertical_wall = door.wall_edge in ("vertical", "east", "west")
+    leaf_dx, leaf_dy = (-w if is_left else w, 0.0) if vertical_wall else (0.0, -w if is_left else w)
     if is_outward:
-        sweep = -sweep
+        leaf_dx, leaf_dy = -leaf_dx, -leaf_dy
 
-    theta_open = theta_closed + sweep
+    theta_open = math.atan2(leaf_dy, leaf_dx)
+    # Sweep the short way round from the closed jamb direction to the open leaf.
+    sweep = (theta_open - theta_closed + math.pi) % (2 * math.pi) - math.pi
 
     # Generate arc vertices
     poly_pts = [(hx, hy)]
@@ -286,6 +293,223 @@ def compute_door_swing_polygon(door: MultiFloorDoorGeometry, segments: int = 12)
     if not poly.is_valid:
         poly = poly.buffer(0)
     return poly
+
+
+# =============================================================================
+# 2b. DOOR HOSTING (WALL-SHARING PLACEMENT)
+# =============================================================================
+# A door belongs in the wall that actually divides the two rooms it connects.
+# 150mm pier kept at each end of the wall; 700mm shortest wall able to host a door.
+DOOR_JAMB_M = 0.15
+DOOR_MIN_HOST_M = 0.70
+DOOR_HOST_TOL_M = 0.05
+
+
+def shared_wall_segments(
+    a: MultiFloorRoomRectangle,
+    b: MultiFloorRoomRectangle,
+) -> List[Tuple[str, float, float, float]]:
+    """
+    Returns every boundary segment two room rectangles have in common as
+    ``(axis, fixed, lo, hi)``: ``axis`` is ``"v"`` for a wall running along y
+    (shared at x = ``fixed``) or ``"h"`` for a wall running along x (shared at
+    y = ``fixed``); ``lo``/``hi`` bound the overlapping run. Segments shorter than
+    DOOR_MIN_HOST_M cannot host a door and are omitted.
+    """
+    tol = DOOR_HOST_TOL_M
+    a_x0, a_y0 = a.x, a.y
+    a_x1, a_y1 = a.x + a.width_m, a.y + a.depth_m
+    b_x0, b_y0 = b.x, b.y
+    b_x1, b_y1 = b.x + b.width_m, b.y + b.depth_m
+
+    segments: List[Tuple[str, float, float, float]] = []
+    for fixed, other in ((a_x0, b_x1), (a_x1, b_x0)):
+        if abs(fixed - other) <= tol:
+            lo, hi = max(a_y0, b_y0), min(a_y1, b_y1)
+            if hi - lo > DOOR_MIN_HOST_M:
+                segments.append(("v", float(fixed), lo, hi))
+    for fixed, other in ((a_y0, b_y1), (a_y1, b_y0)):
+        if abs(fixed - other) <= tol:
+            lo, hi = max(a_x0, b_x0), min(a_x1, b_x1)
+            if hi - lo > DOOR_MIN_HOST_M:
+                segments.append(("h", float(fixed), lo, hi))
+    return segments
+
+
+def host_door_on_shared_wall(
+    room: MultiFloorRoomRectangle,
+    partner: MultiFloorRoomRectangle,
+    width_m: float = 0.90,
+) -> Optional[Dict[str, Any]]:
+    """
+    Places a door opening in the wall that ``room`` shares with ``partner``.
+
+    The opening is centred on the partner's projection onto the shared wall and is
+    clamped so that a pier (jamb) survives at both ends of that wall; on a wall too
+    short for the nominal width the leaf narrows, never shorter than a 700mm door.
+    The hinge sits on the leading jamb and the leaf is declared to swing into the
+    room the door serves, so the quarter-arc sweeps across that room instead of
+    through an exterior facade or a neighbour.
+
+    Returns a geometry dict of :class:`MultiFloorDoorGeometry` fields, or ``None``
+    when the two rooms share no wall long enough to host a door.
+    """
+    best: Optional[Tuple[Tuple[str, float, float, float], float]] = None
+    for segment in shared_wall_segments(room, partner):
+        run = segment[3] - segment[2]
+        if best is None or run > best[1]:
+            best = (segment, run)
+    if best is None:
+        return None
+
+    axis, fixed, lo, hi = best[0]
+    run = best[1]
+
+    width = min(width_m, run - 2 * 0.05)
+    jamb = DOOR_JAMB_M
+    if run < width_m + 2 * jamb:
+        # Tight wall: trade the pier down to what the wall allows.
+        jamb = max(0.05, (run - width) / 2.0)
+    width = round(max(0.60, width), 2)
+
+    # Centre the opening on the partner, then pull it inside the jamb piers.
+    centre = (partner.y + partner.depth_m / 2.0) if axis == "v" else (partner.x + partner.width_m / 2.0)
+    centre = min(max(centre, lo + jamb + width / 2.0), hi - jamb - width / 2.0)
+    a0, a1 = round(centre - width / 2.0, 2), round(centre + width / 2.0, 2)
+
+    # Leaf opens into `room` - the room being entered - normal to the wall.
+    if axis == "v":
+        room_is_positive = (room.x + room.width_m / 2.0) > fixed
+        wall_edge = "vertical"
+        x1, y1, x2, y2 = fixed, a0, fixed, a1
+        hinge_x, hinge_y = fixed, a0
+    else:
+        room_is_positive = (room.y + room.depth_m / 2.0) > fixed
+        wall_edge = "horizontal"
+        x1, y1, x2, y2 = a0, fixed, a1, fixed
+        hinge_x, hinge_y = a0, fixed
+
+    return {
+        "wall_edge": wall_edge,
+        "x1": round(x1, 2),
+        "y1": round(y1, 2),
+        "x2": round(x2, 2),
+        "y2": round(y2, 2),
+        "hinge_x": round(hinge_x, 2),
+        "hinge_y": round(hinge_y, 2),
+        "swing_direction": "inward_right" if room_is_positive else "inward_left",
+        "width_m": width,
+    }
+
+
+def nominal_door_toward(
+    room: MultiFloorRoomRectangle,
+    partner: Optional[MultiFloorRoomRectangle],
+    width_m: float = 0.90,
+) -> Dict[str, Any]:
+    """
+    Last-resort door for a room that shares no usable wall with any neighbour.
+
+    The opening is cut on the room's own edge facing the partner, with the leaf
+    swinging into the room. Geometrically imperfect, but it keeps circulation
+    graphs, door schedules and BFS egress reachability complete instead of silently
+    dropping the door.
+    """
+    rcx = room.x + room.width_m / 2.0
+    rcy = room.y + room.depth_m / 2.0
+    pcx = (partner.x + partner.width_m / 2.0) if partner is not None else rcx
+    pcy = (partner.y + partner.depth_m / 2.0) if partner is not None else rcy
+
+    if abs(pcx - rcx) >= abs(pcy - rcy):
+        fixed = room.x if pcx < rcx else room.x + room.width_m
+        width = round(max(0.60, min(width_m, room.depth_m - 0.30)), 2)
+        centre = min(max(rcy, room.y + 0.15 + width / 2.0), room.y + room.depth_m - 0.15 - width / 2.0)
+        a0, a1 = round(centre - width / 2.0, 2), round(centre + width / 2.0, 2)
+        return {
+            "wall_edge": "vertical",
+            "x1": round(fixed, 2),
+            "y1": a0,
+            "x2": round(fixed, 2),
+            "y2": a1,
+            "hinge_x": round(fixed, 2),
+            "hinge_y": a0,
+            "swing_direction": "inward_right" if rcx > fixed else "inward_left",
+            "width_m": width,
+        }
+
+    fixed = room.y if pcy < rcy else room.y + room.depth_m
+    width = round(max(0.60, min(width_m, room.width_m - 0.30)), 2)
+    centre = min(max(rcx, room.x + 0.15 + width / 2.0), room.x + room.width_m - 0.15 - width / 2.0)
+    a0, a1 = round(centre - width / 2.0, 2), round(centre + width / 2.0, 2)
+    return {
+        "wall_edge": "horizontal",
+        "x1": a0,
+        "y1": round(fixed, 2),
+        "x2": a1,
+        "y2": round(fixed, 2),
+        "hinge_x": a0,
+        "hinge_y": round(fixed, 2),
+        "swing_direction": "inward_right" if rcy > fixed else "inward_left",
+        "width_m": width,
+    }
+
+
+def find_door_host(
+    room: MultiFloorRoomRectangle,
+    rooms: List[MultiFloorRoomRectangle],
+    width_m: float = 0.90,
+    preferred: Optional[List[MultiFloorRoomRectangle]] = None,
+) -> Tuple[Optional[MultiFloorRoomRectangle], Optional[Dict[str, Any]]]:
+    """
+    Chooses which room a served room's door should connect to, and hosts the door
+    in the wall they actually share.
+
+    Priority: an explicitly preferred partner (the program's logical parent) -
+    then the longest wall shared with a circulation space (lobby, corridor, spine)
+    - then the longest shared wall with any neighbour. Exterior walls are never
+    used for interior doors.
+
+    Returns ``(partner_room, geometry)``, or ``(None, None)`` when no neighbour can
+    host the door.
+    """
+    circulation_keys = ("lobby", "corridor", "spine", "catwalk", "hall", "foyer", "passage")
+
+    def _is_circulation(candidate: MultiFloorRoomRectangle) -> bool:
+        rid = str(candidate.room_id).lower()
+        return candidate.zone_category == "circulation" or any(k in rid for k in circulation_keys)
+
+    def _is_connector(candidate: MultiFloorRoomRectangle) -> bool:
+        # Public / semi-public rooms a door may legitimately open off (NBC 2016
+        # Part 3 Cl 12.2 zoning: no door directly between two private or service rooms).
+        rid = str(candidate.room_id).lower()
+        return candidate.zone_category == "public" or any(
+            k in rid for k in ("living", "dining", "hall", "foyer", "lobby", "reception", "terrace", "balcony")
+        )
+
+    candidates = [r for r in rooms if r is not room and str(r.room_id) != str(room.room_id)]
+
+    for partner in (preferred or []):
+        if partner is None:
+            continue
+        hosted = host_door_on_shared_wall(room, partner, width_m)
+        if hosted is not None:
+            return partner, hosted
+
+    best: Optional[Tuple[MultiFloorRoomRectangle, Dict[str, Any], float, int]] = None
+    for candidate in candidates:
+        walls = shared_wall_segments(room, candidate)
+        if not walls:
+            continue
+        hosted = host_door_on_shared_wall(room, candidate, width_m)
+        if hosted is None:
+            continue
+        run = max(hi - lo for _, _, lo, hi in walls)
+        rank = 0 if _is_circulation(candidate) else (1 if _is_connector(candidate) else 2)
+        if best is None or (rank, -run) < (best[3], -best[2]):
+            best = (candidate, hosted, run, rank)
+    if best is None:
+        return None, None
+    return best[0], best[1]
 
 
 def audit_and_resolve_door_swings(
