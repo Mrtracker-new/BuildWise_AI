@@ -517,3 +517,195 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* ========================================================================= */
+/* LANDING PAGE (marketing site) — porcelain-sky material layer               */
+/* Active only while .bw-landing-open is on <body> (set by LandingPage).     */
+/* ========================================================================= */
+
+/* Unlock page scroll for the landing route (the app shell needs overflow:hidden) */
+body.bw-landing-open {
+  overflow-y: auto;
+  overflow-x: hidden;
+  height: auto;
+  background-color: #eef2f7;
+}
+html.bw-landing-open {
+  overflow-y: auto;
+  scroll-behavior: auto; /* Lenis owns smoothing */
+}
+
+/* Lenis smooth-scroll contract (recommended styles) */
+html.bw-landing-open.lenis,
+html.bw-landing-open.lenis body {
+  height: auto;
+}
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+.lenis.lenis-smooth [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+.lenis.lenis-stopped {
+  overflow: hidden;
+}
+
+:root {
+  /* Landing palette — cool, architectural, calm */
+  --bw-porcelain-1: #eef2f7;
+  --bw-porcelain-2: #dfe7f0;
+  --bw-ink: #0b1220;
+  --bw-slate: #4b5768;
+  --bw-accent-a: #2f6fed;
+  --bw-accent-b: #6aa6ff;
+  --bw-green: #1fa955;
+  --bw-amber: #e8960c;
+  --bw-hairline: rgba(255, 255, 255, 0.18);
+  --bw-glass: rgba(255, 255, 255, 0.55);
+  --bw-glass-strong: rgba(255, 255, 255, 0.72);
+  --bw-ease-apple: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Landing focus ring (visible on light porcelain) */
+.bw-landing :focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px #eef2f7, 0 0 0 4px var(--bw-accent-a);
+  border-radius: 10px;
+}
+
+/* Nav link underline grows from center */
+.bw-nav-link {
+  position: relative;
+}
+.bw-nav-link::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--bw-accent-a), var(--bw-accent-b));
+  transform: translateX(-50%);
+  transition: width 280ms var(--bw-ease-apple);
+}
+.bw-nav-link:hover::after,
+.bw-nav-link:focus-visible::after {
+  width: 100%;
+}
+
+/* Desktop paint defer: below-fold sections skip rendering/layout/paint
+   entirely while offscreen. contain-intrinsic-size keeps the scrollbar
+   stable; the `auto` keyword remembers the real size after first render. */
+.bw-section-defer {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 720px;
+}
+
+/* Filmic grain (~4% opacity, feTurbulence data URI).
+   Deliberately normal blending, NOT mix-blend-mode: overlay — a blend
+   against the changing backdrop recomposites the whole hero every scroll
+   frame and was the single biggest source of scroll jank. */
+.bw-grain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.04;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+}
+
+/* Ambient drifting cloud layer behind the hero (60s loop) */
+@keyframes bwCloudDrift {
+  0% {
+    transform: translate3d(-2.5%, 0, 0) scale(1.04);
+  }
+  50% {
+    transform: translate3d(2.5%, -1.2%, 0) scale(1.07);
+  }
+  100% {
+    transform: translate3d(-2.5%, 0, 0) scale(1.04);
+  }
+}
+.bw-cloud-drift {
+  animation: bwCloudDrift 60s ease-in-out infinite;
+  will-change: transform;
+}
+
+/* Handwritten note breathe (±1°) */
+@keyframes bwNoteBreathe {
+  0%,
+  100% {
+    transform: rotate(-5deg) translateY(0);
+  }
+  50% {
+    transform: rotate(-4deg) translateY(-5px);
+  }
+}
+.bw-note-breathe {
+  animation: bwNoteBreathe 7s ease-in-out infinite;
+}
+
+/* Landing shimmer for the gradient headline + misc keyframes */
+@keyframes bwSheen {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+/* Compass needle wobble (runs once when map enters view) */
+@keyframes bwNeedleWobble {
+  0% {
+    transform: rotate(-38deg);
+  }
+  55% {
+    transform: rotate(9deg);
+  }
+  78% {
+    transform: rotate(-5deg);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}
+.bw-needle-wobble {
+  transform-origin: center;
+  animation: bwNeedleWobble 1400ms var(--bw-ease-apple) 900ms both;
+}
+
+/* Landing reduced-motion: kill ambient loops, keep everything static */
+@media (prefers-reduced-motion: reduce) {
+  .bw-cloud-drift,
+  .bw-note-breathe,
+  .bw-needle-wobble {
+    animation: none;
+  }
+}
+
+/* Landing gradient headline text (clipped accent) */
+.bw-gradient-text {
+  background: linear-gradient(100deg, var(--bw-accent-a) 10%, var(--bw-accent-b) 55%, var(--bw-accent-a) 90%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+/* iOS-style landing toggle track/knob colors (mirror app switches) */
+.bw-switch-track {
+  transition: background-color 300ms var(--bw-ease-apple);
+}
+.bw-switch-knob {
+  box-shadow: 0 2px 5px rgba(11, 18, 32, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+}
+
+/* Print-ready blueprints: crisp rendering of landing SVG mockups */
+.bw-mockup-svg {
+  shape-rendering: geometricPrecision;
+}
+
