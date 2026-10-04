@@ -72,5 +72,62 @@
   },
   "src/components/VastuAdvisoryCard.tsx": {
     "transition-all": 1
+  },
+  "src/landing/Backdrop.tsx": {
+    "hex-color": 8
+  },
+  "src/landing/CtaBand.tsx": {
+    "hex-color": 19
+  },
+  "src/landing/DashboardMockup/AnalysisRail.tsx": {
+    "hex-color": 1
+  },
+  "src/landing/DashboardMockup/CardShell.tsx": {
+    "hex-color": 8,
+    "off-scale-duration": 1
+  },
+  "src/landing/DashboardMockup/MapCanvas.tsx": {
+    "hex-color": 32
+  },
+  "src/landing/DashboardMockup/Sidebar.tsx": {
+    "hex-color": 11
+  },
+  "src/landing/DashboardMockup/cards/BlueprintCard.tsx": {
+    "hex-color": 10
+  },
+  "src/landing/DashboardMockup/cards/CostCard.tsx": {
+    "hex-color": 6
+  },
+  "src/landing/DashboardMockup/cards/FloodCard.tsx": {
+    "hex-color": 5
+  },
+  "src/landing/DashboardMockup/cards/SeismicCard.tsx": {
+    "hex-color": 5
+  },
+  "src/landing/DashboardMockup/cards/SuitabilityCard.tsx": {
+    "hex-color": 2
+  },
+  "src/landing/DashboardMockup/cards/VastuCard.tsx": {
+    "hex-color": 9
+  },
+  "src/landing/FeatureStrip.tsx": {
+    "hex-color": 4,
+    "off-scale-duration": 3
+  },
+  "src/landing/Hero.tsx": {
+    "hex-color": 12
+  },
+  "src/landing/LandingPage.tsx": {
+    "hex-color": 1
+  },
+  "src/landing/Navbar.tsx": {
+    "hex-color": 7
+  },
+  "src/landing/primitives.tsx": {
+    "hex-color": 3,
+    "off-scale-duration": 1
+  },
+  "src/landing/theme.ts": {
+    "hex-color": 11
   }
 }

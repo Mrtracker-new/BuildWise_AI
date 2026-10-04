@@ -2,6 +2,9 @@ const puppeteer = require('puppeteer-core');
 const fs = require('fs');
 const path = require('path');
 
+// The full-screen analysis tool lives at /app ("/" is the marketing landing page).
+const APP_URL = process.env.APP_URL || 'http://localhost:5173/app';
+
 // Candidate Chrome executable paths
 function getChromePath() {
   if (process.env.CHROME_PATH && fs.existsSync(process.env.CHROME_PATH)) {
@@ -180,7 +183,7 @@ function checkDOMViolations(isDrawerOpenIntended) {
   console.log('\n--- 1. AUDITING EMPTY STATE ---');
   for (const vp of VIEWPORTS) {
     await page.setViewport({ width: vp.width, height: vp.height });
-    await page.goto('http://localhost:5173', { waitUntil: 'networkidle0' });
+    await page.goto(APP_URL, { waitUntil: 'networkidle0' });
     await new Promise(r => setTimeout(r, 400));
 
     // Clear location to ensure clean empty state
@@ -203,7 +206,7 @@ function checkDOMViolations(isDrawerOpenIntended) {
   // STEP 2: Audit Loaded State with Full Feasibility Analysis
   console.log('\n--- 2. AUDITING LOADED STATE (FULL FEASIBILITY DATA) ---');
   await page.setViewport({ width: 1920, height: 1080 });
-  await page.goto('http://localhost:5173', { waitUntil: 'networkidle0' });
+  await page.goto(APP_URL, { waitUntil: 'networkidle0' });
   await new Promise(r => setTimeout(r, 400));
 
   console.log('Triggering "Run Site Feasibility Analysis" for live data...');

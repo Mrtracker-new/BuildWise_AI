@@ -21,7 +21,7 @@
 const puppeteer = require('puppeteer-core');
 const fs = require('fs');
 
-const URL = process.env.E2E_URL || 'http://localhost:5173';
+const URL = process.env.E2E_URL || 'http://localhost:5173/app';
 const CHROME_CANDIDATES = [
   process.env.CHROME_PATH,
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
