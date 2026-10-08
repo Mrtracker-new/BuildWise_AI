@@ -583,7 +583,10 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
       )}
 
       {/* Stepped capture panel */}
-      <div className="absolute bottom-14 left-3 lg:left-[364px] z-[1000] pointer-events-auto w-[320px] max-w-[calc(100vw-24px)] vibrancy-panel rounded-[16px] shadow-2xl border border-[var(--panel-border-color)]">
+      <div
+        className="absolute bottom-12 sm:bottom-14 left-2 sm:left-3 lg:left-[364px] z-[1000] pointer-events-auto w-[320px] max-w-[calc(100vw-16px)] vibrancy-panel rounded-[16px] shadow-2xl border border-[var(--panel-border-color)] pb-[var(--safe-area-bottom)]"
+        data-testid="capture-sheet"
+      >
         {/* Step rail */}
         <div className="flex items-center gap-1 px-3.5 pt-3">
           {(['locate', 'trace', 'frontage', 'review'] as CaptureStep[]).map((s, i) => (
@@ -591,7 +594,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
               <button
                 type="button"
                 onClick={() => i <= stepIndex && onStepChange(s)}
-                className={`w-6 h-6 rounded-full text-[11px] font-semibold flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
+                className={`bw-touch-target w-6 h-6 rounded-full text-[11px] font-semibold flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
                   i === stepIndex
                     ? 'bg-[var(--accent)] text-white'
                     : i < stepIndex
@@ -621,12 +624,18 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                   {pin.lat.toFixed(5)}, {pin.lon.toFixed(5)}
                 </div>
               )}
-              <div className="flex justify-end gap-2">
-                <button type="button" onClick={onCancel} className="text-[12px] px-2.5 py-1 rounded-[8px] text-[var(--text-2)] hover:text-[var(--text-1)]">Cancel</button>
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  className="text-[12px] font-medium px-3 py-1.5 min-h-[34px] rounded-[8px] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--fill)] transition-colors active:scale-95 cursor-pointer"
+                >
+                  Cancel
+                </button>
                 <button
                   type="button"
                   onClick={() => onStepChange('trace')}
-                  className="text-[12px] font-semibold px-3 py-1 rounded-[8px] bg-[var(--accent)] text-white hover:brightness-105"
+                  className="text-[12px] font-semibold px-3.5 py-1.5 min-h-[34px] rounded-[8px] bg-[var(--accent)] text-white hover:brightness-105 active:scale-95 transition-colors shadow-sm cursor-pointer"
                 >
                   Trace boundary
                 </button>
@@ -701,16 +710,29 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                 </button>
               </details>
 
-              <div className="flex justify-between items-center">
+              <div className="flex justify-between items-center pt-1">
                 <div className="flex gap-1.5">
-                  <button type="button" onClick={undoVertex} disabled={vertices.length === 0} className="text-[11px] px-2 py-1 rounded-[6px] bg-[var(--fill)] text-[var(--text-1)] disabled:opacity-40">Undo</button>
-                  <button type="button" onClick={resetTrace} className="text-[11px] px-2 py-1 rounded-[6px] bg-[var(--fill)] text-[var(--text-1)]">Clear</button>
+                  <button
+                    type="button"
+                    onClick={undoVertex}
+                    disabled={vertices.length === 0}
+                    className="text-[11px] font-medium px-2.5 py-1 min-h-[32px] rounded-[6px] bg-[var(--fill)] text-[var(--text-1)] hover:bg-[var(--fill-hover)] disabled:opacity-40 active:scale-95 transition-colors cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    Undo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={resetTrace}
+                    className="text-[11px] font-medium px-2.5 py-1 min-h-[32px] rounded-[6px] bg-[var(--fill)] text-[var(--text-1)] hover:bg-[var(--fill-hover)] active:scale-95 transition-colors cursor-pointer"
+                  >
+                    Clear
+                  </button>
                 </div>
                 <button
                   type="button"
                   onClick={finishTrace}
                   disabled={!canClose}
-                  className="text-[12px] font-semibold px-3 py-1 rounded-[8px] bg-[var(--accent)] text-white hover:brightness-105 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="text-[12px] font-semibold px-3.5 py-1.5 min-h-[32px] rounded-[8px] bg-[var(--accent)] text-white hover:brightness-105 active:scale-95 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm cursor-pointer"
                 >
                   Close shape
                 </button>
@@ -842,13 +864,19 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                   </div>
                 );
               })()}
-              <div className="flex justify-between items-center">
-                <button type="button" onClick={() => onStepChange('trace')} className="text-[11px] px-2 py-1 rounded-[6px] bg-[var(--fill)] text-[var(--text-1)]">Back</button>
+              <div className="flex justify-between items-center pt-1">
+                <button
+                  type="button"
+                  onClick={() => onStepChange('trace')}
+                  className="text-[11px] font-medium px-2.5 py-1 min-h-[32px] rounded-[6px] bg-[var(--fill)] text-[var(--text-1)] hover:bg-[var(--fill-hover)] active:scale-95 transition-colors cursor-pointer"
+                >
+                  Back
+                </button>
                 <button
                   type="button"
                   onClick={() => onStepChange('review')}
                   disabled={frontageEdge === null && suggestion === null}
-                  className="text-[12px] font-semibold px-3 py-1 rounded-[8px] bg-[var(--accent)] text-white hover:brightness-105 disabled:opacity-40"
+                  className="text-[12px] font-semibold px-3.5 py-1.5 min-h-[32px] rounded-[8px] bg-[var(--accent)] text-white hover:brightness-105 active:scale-95 transition-colors disabled:opacity-40 shadow-sm cursor-pointer disabled:cursor-not-allowed"
                 >
                   Review
                 </button>
@@ -872,13 +900,19 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                   {!frontageConfirmed && suggestion !== null && suggestion.edgeIndex === activeFrontage ? ' (suggested)' : ''}
                 </div>
               )}
-              <div className="flex justify-between items-center">
-                <button type="button" onClick={() => onStepChange('frontage')} className="text-[11px] px-2 py-1 rounded-[6px] bg-[var(--fill)] text-[var(--text-1)]">Back</button>
+              <div className="flex justify-between items-center pt-1">
+                <button
+                  type="button"
+                  onClick={() => onStepChange('frontage')}
+                  className="text-[11px] font-medium px-2.5 py-1 min-h-[32px] rounded-[6px] bg-[var(--fill)] text-[var(--text-1)] hover:bg-[var(--fill-hover)] active:scale-95 transition-colors cursor-pointer"
+                >
+                  Back
+                </button>
                 <button
                   type="button"
                   onClick={commit}
                   disabled={!canCommit}
-                  className="text-[12px] font-semibold px-3 py-1.5 rounded-[8px] bg-[var(--accent)] text-white hover:brightness-105 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="text-[12px] font-semibold px-3.5 py-1.5 min-h-[34px] rounded-[8px] bg-[var(--accent)] text-white hover:brightness-105 active:scale-95 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm cursor-pointer"
                 >
                   Use this boundary
                 </button>

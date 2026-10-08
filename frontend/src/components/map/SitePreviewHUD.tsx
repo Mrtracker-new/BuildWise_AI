@@ -13,7 +13,7 @@ function StatusPill({ status }: { status: AnnotationStatus }) {
   const badge = ANNOTATION_BADGE[status];
   return (
     <span
-      className={`px-1.5 py-0.5 rounded-full text-[9px] font-semibold tracking-[0.06em] ${badge.className}`}
+      className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold tracking-[0.06em] ${badge.className}`}
       title={`Annotation status: ${status}`}
     >
       {badge.label}
@@ -43,11 +43,12 @@ export const SitePreviewHUD: React.FC<SitePreviewHUDProps> = ({
 
   return (
     <div
-      className="absolute bottom-16 right-3 lg:right-[384px] z-[999] pointer-events-none max-w-[calc(100vw-24px)]"
+      data-testid="site-preview-hud"
+      className="absolute bottom-[96px] sm:bottom-[104px] right-2 sm:right-3 lg:right-[384px] z-[999] pointer-events-none max-w-[calc(100vw-16px)] sm:max-w-[calc(100vw-24px)]"
       role="status"
       aria-label="Site preview measurements"
     >
-      <div className="vibrancy-panel rounded-[14px] shadow-lg border border-[var(--panel-border-color)] px-3 py-2 pointer-events-auto max-w-full">
+      <div className="vibrancy-panel rounded-[14px] shadow-lg border border-[var(--panel-border-color)] px-2.5 sm:px-3 py-1.5 sm:py-2 pointer-events-auto max-w-full">
         <div className="flex items-center gap-2 flex-wrap">
           <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--text-1)] shrink-0">
             <Icon name="layers" size={13} className="text-[var(--accent)]" />
@@ -102,7 +103,7 @@ export const SitePreviewHUD: React.FC<SitePreviewHUDProps> = ({
                 </span>
               )}
               {preview.cached && (
-                <span className="px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-[var(--fill)] text-[var(--text-3)]" title="Served from the deterministic hash cache">
+                <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-[var(--fill)] text-[var(--text-3)]" title="Served from the deterministic hash cache">
                   CACHED
                 </span>
               )}
@@ -114,7 +115,7 @@ export const SitePreviewHUD: React.FC<SitePreviewHUDProps> = ({
               <button
                 type="button"
                 onClick={onEditBoundary}
-                className="w-6 h-6 rounded-[6px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text-1)] flex items-center justify-center cursor-pointer"
+                className="bw-touch-target w-6 h-6 rounded-[6px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text-1)] flex items-center justify-center cursor-pointer"
                 title="Edit boundary on map"
                 aria-label="Edit boundary on map"
               >
@@ -124,7 +125,7 @@ export const SitePreviewHUD: React.FC<SitePreviewHUDProps> = ({
             <button
               type="button"
               onClick={onDismiss}
-              className="w-6 h-6 rounded-[6px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text-1)] flex items-center justify-center cursor-pointer"
+              className="bw-touch-target w-6 h-6 rounded-[6px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text-1)] flex items-center justify-center cursor-pointer"
               title="Dismiss site preview"
               aria-label="Dismiss site preview"
             >

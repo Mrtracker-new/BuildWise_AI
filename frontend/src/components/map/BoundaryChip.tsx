@@ -18,7 +18,7 @@ export const BoundaryChip: React.FC<BoundaryChipProps> = ({ boundary, onEdit }) 
   return (
     <div
       data-testid="boundary-chip"
-      className="vibrancy-pill rounded-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-[var(--text-1)] border border-[var(--panel-border-color)] shadow-md"
+      className="vibrancy-pill rounded-full flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-[12px] text-[var(--text-1)] border border-[var(--panel-border-color)] shadow-md max-w-[calc(100vw-64px)]"
     >
       <Icon name="maximize" size={13} className="text-[var(--accent)] shrink-0" />
       <span className="ui-font-tabular font-medium">{m.areaSqm.toFixed(0)} m²</span>

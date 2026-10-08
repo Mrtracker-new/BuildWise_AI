@@ -19,6 +19,87 @@ interface BlueprintViewerProps {
   isStale?: boolean;
 }
 
+type SheetGestureState = {
+  mode: 'none' | 'pan' | 'pinch';
+  dist: number;
+  zoom: number;
+  x: number;
+  y: number;
+};
+
+interface SheetGestureOpts {
+  gestureRef: { current: SheetGestureState };
+  panStartRef: { current: { x: number; y: number } };
+  movedRef: { current: boolean };
+  lastTapRef: { current: { t: number; x: number; y: number } };
+  getPan: () => { x: number; y: number };
+  setPan: (p: { x: number; y: number }) => void;
+  getZoom: () => number;
+  setZoom: (z: number) => void;
+  minZoom: number;
+  maxZoom: number;
+  onDoubleTap?: () => void;
+}
+
+/**
+ * Direct-manipulation gestures for a fixed-fidelity drawing sheet: one-finger
+ * drag pans, two-finger pinch zooms, and a double-tap steps the zoom. The
+ * sheet itself is never reflowed — touch only moves the viewport over it.
+ */
+function makeSheetGestures(opts: SheetGestureOpts) {
+  const { gestureRef, panStartRef, movedRef, lastTapRef, getPan, setPan, getZoom, setZoom, minZoom, maxZoom, onDoubleTap } = opts;
+  return {
+    onTouchStart(e: React.TouchEvent<HTMLDivElement>) {
+      const g = gestureRef.current;
+      if (e.touches.length === 2) {
+        const a = e.touches[0];
+        const b = e.touches[1];
+        g.mode = 'pinch';
+        g.dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        g.zoom = getZoom();
+      } else if (e.touches.length === 1) {
+        g.mode = 'pan';
+        g.x = e.touches[0].clientX;
+        g.y = e.touches[0].clientY;
+        panStartRef.current = { ...getPan() };
+        movedRef.current = false;
+      }
+    },
+    onTouchMove(e: React.TouchEvent<HTMLDivElement>) {
+      const g = gestureRef.current;
+      if (g.mode === 'pinch' && e.touches.length === 2) {
+        const a = e.touches[0];
+        const b = e.touches[1];
+        const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        if (g.dist > 0) {
+          const next = Math.min(maxZoom, Math.max(minZoom, g.zoom * (dist / g.dist)));
+          setZoom(Number(next.toFixed(2)));
+        }
+      } else if (g.mode === 'pan' && e.touches.length === 1) {
+        const dx = e.touches[0].clientX - g.x;
+        const dy = e.touches[0].clientY - g.y;
+        if (Math.abs(dx) + Math.abs(dy) > 6) movedRef.current = true;
+        setPan({ x: panStartRef.current.x + dx, y: panStartRef.current.y + dy });
+      }
+    },
+    onTouchEnd(e: React.TouchEvent<HTMLDivElement>) {
+      const g = gestureRef.current;
+      if (g.mode === 'pan' && e.changedTouches.length > 0 && !movedRef.current) {
+        const t = e.changedTouches[0];
+        const now = Date.now();
+        const last = lastTapRef.current;
+        if (now - last.t < 300 && Math.hypot(t.clientX - last.x, t.clientY - last.y) < 24) {
+          onDoubleTap?.();
+          lastTapRef.current = { t: 0, x: 0, y: 0 };
+        } else {
+          lastTapRef.current = { t: now, x: t.clientX, y: t.clientY };
+        }
+      }
+      g.mode = 'none';
+    },
+  };
+}
+
 const ROOM_METADATA: Record<string, { dotColor: string; label: string; zone: string; isCore?: boolean }> = {
   // T1 Residence
   master_bed: { dotColor: '#0284C7', label: 'Master Bedroom', zone: 'SW' },
@@ -285,6 +366,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     setIsPanning(true);
+    dragMovedRef.current = false;
     dragStartRef.current = { x: e.clientX, y: e.clientY };
     panStartRef.current = { ...pan };
   };
@@ -292,6 +374,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       if (!isPanning) return;
+      dragMovedRef.current = true;
       const dx = e.clientX - dragStartRef.current.x;
       const dy = e.clientY - dragStartRef.current.y;
       setPan({
@@ -304,10 +387,71 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
 
   const handleMouseUp = () => setIsPanning(false);
 
+  /* ---------- sheet gestures (touch pan/pinch; fixed-fidelity artifact) ---------- */
+  const cardGestureRef = useRef<SheetGestureState>({ mode: 'none', dist: 0, zoom: 1, x: 0, y: 0 });
+  const modalGestureRef = useRef<SheetGestureState>({ mode: 'none', dist: 0, zoom: 1, x: 0, y: 0 });
+  const lastTapRef = useRef<{ t: number; x: number; y: number }>({ t: 0, x: 0, y: 0 });
+  const dragMovedRef = useRef<boolean>(false);
+  const cardCanvasRef = useRef<HTMLDivElement>(null);
+  const modalCanvasRef = useRef<HTMLDivElement>(null);
+
+  const cardGestures = makeSheetGestures({
+    gestureRef: cardGestureRef,
+    panStartRef: panStartRef,
+    movedRef: dragMovedRef,
+    lastTapRef,
+    getPan: () => pan,
+    setPan: setPan,
+    getZoom: () => zoom,
+    setZoom: setZoom,
+    minZoom: 0.75,
+    maxZoom: 2.5,
+    onDoubleTap: () => setZoom((z) => (z > 1.5 ? 1.0 : Math.min(2.5, z + 0.5))),
+  });
+  const modalGestures = makeSheetGestures({
+    gestureRef: modalGestureRef,
+    panStartRef: modalPanStartRef,
+    movedRef: dragMovedRef,
+    lastTapRef,
+    getPan: () => modalPan,
+    setPan: setModalPan,
+    getZoom: () => modalZoom,
+    setZoom: setModalZoom,
+    minZoom: 0.5,
+    maxZoom: 3.5,
+    onDoubleTap: () => setModalZoom((z) => (z > 1.5 ? 1.0 : Math.min(3.5, z + 0.5))),
+  });
+
+  // ctrl/cmd + wheel (trackpad pinch) zooms the sheet without hijacking page
+  // scroll: plain wheel keeps scrolling the surrounding report.
+  useEffect(() => {
+    const el = cardCanvasRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      setZoom((z) => Number(Math.min(2.5, Math.max(0.75, z * (e.deltaY < 0 ? 1.12 : 1 / 1.12))).toFixed(2)));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+  useEffect(() => {
+    const el = modalCanvasRef.current;
+    if (!el || !isModalOpen) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      setModalZoom((z) => Number(Math.min(3.5, Math.max(0.5, z * (e.deltaY < 0 ? 1.12 : 1 / 1.12))).toFixed(2)));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [isModalOpen]);
+
   // Modal pan listeners
   const handleModalMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     setIsModalPanning(true);
+    dragMovedRef.current = false;
     modalDragStartRef.current = { x: e.clientX, y: e.clientY };
     modalPanStartRef.current = { ...modalPan };
   };
@@ -315,6 +459,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   const handleModalMouseMove = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       if (!isModalPanning) return;
+      dragMovedRef.current = true;
       const dx = e.clientX - modalDragStartRef.current.x;
       const dy = e.clientY - modalDragStartRef.current.y;
       setModalPan({
@@ -357,11 +502,11 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
 
     return (
       <div
-        className={`flex items-center gap-1.5 overflow-x-auto py-1.5 px-3.5 border-b border-[var(--hairline)] ${
+        className={`flex items-center gap-1.5 overflow-x-auto py-1.5 px-2.5 sm:px-3.5 border-b border-[var(--hairline)] ${
           isModal ? 'bg-[var(--fill)]/40' : 'bg-[var(--fill)]/20'
-        } scrollbar-none`}
+        } overscroll-x-contain touch-pan-x [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden`}
       >
-        <div className="flex items-center gap-1 mr-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-3)] shrink-0 select-none">
+        <div className="flex items-center gap-1 mr-1 text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-[var(--text-3)] shrink-0 select-none">
           <Icon name="layers" size={13} className="text-[var(--accent)]" />
           <span>Views:</span>
         </div>
@@ -372,9 +517,9 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
             type="button"
             data-testid="tab-site-plan"
             onClick={() => setViewTab('site')}
-            className={`px-3 py-1.5 rounded-[9px] text-[12px] transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${
+            className={`px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-[8px] sm:rounded-[9px] text-[11px] sm:text-[12px] transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer ${
               viewTab === 'site'
-                ? 'bg-emerald-600 text-white shadow-sm font-semibold ring-1 ring-white/20'
+                ? 'bg-emerald-600 text-white shadow-xs font-semibold ring-1 ring-white/20'
                 : 'bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--fill-hover)] font-medium'
             }`}
           >
@@ -409,9 +554,9 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                 setViewTab('floor');
                 setActiveFloorIndex(idx);
               }}
-              className={`px-3 py-1.5 rounded-[9px] text-[12px] transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${
+              className={`px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-[8px] sm:rounded-[9px] text-[11px] sm:text-[12px] transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer ${
                 isActive
-                  ? 'bg-[var(--accent)] text-white shadow-sm font-semibold ring-1 ring-white/20'
+                  ? 'bg-[var(--accent)] text-white shadow-xs font-semibold ring-1 ring-white/20'
                   : 'bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--fill-hover)] font-medium'
               }`}
             >
@@ -445,37 +590,49 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
       className="flex flex-col w-full min-w-0 rounded-[16px] vibrancy-panel border border-[var(--panel-border-color)] shadow-md overflow-hidden @container"
     >
       {/* 1. Header: title + visible freshness token + CAD/Storey chip */}
-      <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 border-b border-[var(--hairline)]">
-        <div className="flex items-center gap-2 min-w-0">
-          <Icon name="blueprint" size={15} className="text-[var(--accent)] shrink-0" />
-          <h3 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight truncate">
-            {isMultiStorey && currentFloor ? `${currentFloor.floor_name}` : 'Architectural Blueprint'}
-          </h3>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-2 px-3 sm:px-3.5 py-2 sm:py-2.5 border-b border-[var(--hairline)]">
+        <div className="flex items-center justify-between sm:justify-start gap-2 min-w-0 w-full sm:w-auto">
+          <div className="flex items-center gap-2 min-w-0">
+            <Icon name="blueprint" size={15} className="text-[var(--accent)] shrink-0" />
+            <h3 className="text-[13px] sm:text-[15px] font-semibold text-[var(--text-1)] tracking-tight truncate">
+              {isMultiStorey && currentFloor ? `${currentFloor.floor_name}` : 'Architectural Blueprint'}
+            </h3>
+          </div>
+          <div className="flex items-center gap-1 shrink-0 sm:hidden">
+            {isMultiStorey && currentFloor && (
+              <span className="font-mono text-[10px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-1.5 py-0.5 rounded-[5px] whitespace-nowrap">
+                +{(currentFloor.floor_index * 3.0).toFixed(1)}m
+              </span>
+            )}
+            <span className="text-[10px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-1.5 py-0.5 rounded-[5px] uppercase tracking-wider whitespace-nowrap">
+              {isMultiStorey ? `${multiStorey?.total_storeys}F CAD` : 'CAD 2D'}
+            </span>
+          </div>
         </div>
-        <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+        <div className="flex items-center gap-1.5 flex-wrap w-full sm:w-auto min-w-0">
           {isStale && (
             <span
               data-testid="stale-plan-chip"
               title="Parameters have changed since this blueprint was generated. Please regenerate."
-              className="font-mono text-[11px] font-semibold text-amber-800 dark:text-amber-200 bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 rounded-[6px] whitespace-nowrap flex items-center gap-1.5 select-none animate-pulse shadow-xs"
+              className="font-mono text-[10px] sm:text-[11px] font-semibold text-amber-800 dark:text-amber-200 bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 rounded-[6px] whitespace-nowrap flex items-center gap-1.5 select-none animate-pulse shadow-xs"
             >
-              <Icon name="alert-triangle" size={13} className="text-amber-600 dark:text-amber-400 shrink-0" />
+              <Icon name="alert-triangle" size={12} className="text-amber-600 dark:text-amber-400 shrink-0" />
               <span>Parameters changed - regenerate</span>
             </span>
           )}
           <span
             data-testid="blueprint-freshness-token"
-            title="Blueprint Generation Freshness Token (Generation ID | Dimensions | Levels)"
-            className="font-mono text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-2 py-0.5 rounded-[6px] whitespace-nowrap border border-[var(--accent)]/20"
+            title={`Blueprint Generation Freshness Token (${freshnessToken})`}
+            className="font-mono text-[10px] sm:text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-2 py-0.5 rounded-[6px] border border-[var(--accent)]/20 max-w-full truncate"
           >
             {freshnessToken}
           </span>
           {isMultiStorey && currentFloor && (
-            <span className="font-mono text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-2 py-0.5 rounded-[6px] whitespace-nowrap">
+            <span className="hidden sm:inline-block font-mono text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-2 py-0.5 rounded-[6px] whitespace-nowrap">
               +{(currentFloor.floor_index * 3.0).toFixed(1)}m LVL
             </span>
           )}
-          <span className="text-[10px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-1.5 py-0.5 rounded-[6px] uppercase tracking-wider whitespace-nowrap">
+          <span className="hidden sm:inline-block text-[10px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-1.5 py-0.5 rounded-[6px] uppercase tracking-wider whitespace-nowrap">
             {isMultiStorey ? `${multiStorey?.total_storeys}F CAD` : 'CAD 2D'}
           </span>
         </div>
@@ -485,14 +642,14 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
       {renderFloorSwitcher(false)}
 
       {/* 3. Toolbar row below header */}
-      <div className="flex items-center justify-between gap-2 px-3.5 py-2 border-b border-[var(--hairline)] bg-[var(--fill)]/30">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 sm:py-2 border-b border-[var(--hairline)] bg-[var(--fill)]/30 flex-wrap sm:flex-nowrap">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           {/* Mode Selector: CAD vs Paper */}
-          <div className="flex items-center bg-[var(--fill)] rounded-[9px] p-[3px] shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
+          <div className="flex items-center bg-[var(--fill)] rounded-[8px] sm:rounded-[9px] p-[2px] sm:p-[3px] shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
             <button
               type="button"
               onClick={() => setMode('cad')}
-              className={`h-6 px-2.5 rounded-[7px] text-[11px] font-semibold flex items-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
+              className={`h-6 px-2 sm:px-2.5 rounded-[6px] sm:rounded-[7px] text-[10px] sm:text-[11px] font-semibold flex items-center transition-colors duration-150 ease-out cursor-pointer active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
                 mode === 'cad'
                   ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
                   : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
@@ -503,7 +660,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
             <button
               type="button"
               onClick={() => setMode('paper')}
-              className={`h-6 px-2.5 rounded-[7px] text-[11px] font-semibold flex items-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
+              className={`h-6 px-2 sm:px-2.5 rounded-[6px] sm:rounded-[7px] text-[10px] sm:text-[11px] font-semibold flex items-center transition-colors duration-150 ease-out cursor-pointer active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
                 mode === 'paper'
                   ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
                   : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
@@ -526,7 +683,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                   ? 'Hide F0 Core Ghost Overlay'
                   : 'Show F0 Core Ghost Overlay (Verifying vertical stacking alignment)'
               }
-              className={`h-7 px-2.5 rounded-[9px] text-[11px] font-semibold flex items-center gap-1.5 transition-all duration-150 ease-out cursor-pointer select-none active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 disabled:active:scale-100 ${
+              className={`h-6 sm:h-7 px-2 sm:px-2.5 rounded-[7px] sm:rounded-[9px] text-[10px] sm:text-[11px] font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors duration-150 ease-out cursor-pointer select-none active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 disabled:active:scale-100 ${
                 activeFloorIndex === 0
                   ? 'opacity-50 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)]'
                   : showGhostOverlay
@@ -536,28 +693,29 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
             >
               <Icon
                 name="layers"
-                size={13}
+                size={12}
                 className={showGhostOverlay && safeFloorIndex > 0 ? 'text-amber-500 animate-pulse' : ''}
               />
-              <span>{safeFloorIndex === 0 ? 'F0 Anchor' : showGhostOverlay ? 'Ghost Core: ON' : 'Ghost Core: OFF'}</span>
+              <span className="hidden sm:inline">{safeFloorIndex === 0 ? 'F0 Anchor' : showGhostOverlay ? 'Ghost Core: ON' : 'Ghost Core: OFF'}</span>
+              <span className="inline sm:hidden">{safeFloorIndex === 0 ? 'Anchor' : showGhostOverlay ? 'Ghost: ON' : 'Ghost: OFF'}</span>
             </button>
           )}
         </div>
 
         {/* Zoom Controls & Expand Action (segmented cluster) */}
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-0.5 bg-[var(--fill)] rounded-[9px] p-[3px] shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          <div className="flex items-center gap-0.5 bg-[var(--fill)] rounded-[8px] sm:rounded-[9px] p-[2px] sm:p-[3px] shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
             <button
               type="button"
               onClick={handleZoomOut}
               disabled={zoom <= 0.75}
               title="Zoom Out"
               aria-label="Zoom Out"
-              className="w-6 h-6 rounded-[6px] hover:bg-[var(--fill-hover)] disabled:opacity-40 disabled:hover:bg-transparent text-[var(--text-1)] flex items-center justify-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
+              className="bw-touch-target w-6 h-6 sm:w-7 sm:h-7 rounded-[5px] sm:rounded-[6px] hover:bg-[var(--fill-hover)] disabled:opacity-40 disabled:hover:bg-transparent text-[var(--text-1)] flex items-center justify-center transition-colors duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
             >
-              <Icon name="minus" size={14} />
+              <Icon name="minus" size={13} />
             </button>
-            <span className="font-mono text-[12px] text-[var(--text-2)] tabular-nums min-w-[38px] text-center font-semibold select-none">
+            <span className="font-mono text-[11px] sm:text-[12px] text-[var(--text-2)] tabular-nums min-w-[32px] sm:min-w-[38px] text-center font-semibold select-none">
               {Math.round(zoom * 100)}%
             </span>
             <button
@@ -566,18 +724,18 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
               disabled={zoom >= 2.5}
               title="Zoom In"
               aria-label="Zoom In"
-              className="w-6 h-6 rounded-[6px] hover:bg-[var(--fill-hover)] disabled:opacity-40 disabled:hover:bg-transparent text-[var(--text-1)] flex items-center justify-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
+              className="bw-touch-target w-6 h-6 sm:w-7 sm:h-7 rounded-[5px] sm:rounded-[6px] hover:bg-[var(--fill-hover)] disabled:opacity-40 disabled:hover:bg-transparent text-[var(--text-1)] flex items-center justify-center transition-colors duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
             >
-              <Icon name="plus" size={14} />
+              <Icon name="plus" size={13} />
             </button>
             <button
               type="button"
               onClick={handleReset}
               title="Reset Zoom & Pan"
               aria-label="Reset View"
-              className="w-6 h-6 rounded-[6px] hover:bg-[var(--fill-hover)] text-[var(--text-1)] flex items-center justify-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
+              className="bw-touch-target w-6 h-6 sm:w-7 sm:h-7 rounded-[5px] sm:rounded-[6px] hover:bg-[var(--fill-hover)] text-[var(--text-1)] flex items-center justify-center transition-colors duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
             >
-              <Icon name="refresh" size={14} />
+              <Icon name="refresh" size={13} />
             </button>
           </div>
 
@@ -593,7 +751,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                 : 'Export Multi-Page Architectural PDF Dossier (Cover Sheet 10.0 + Floor Sheets 10.1-10.N)'
             }
             aria-label="Export Dossier (PDF)"
-            className={`h-7 px-2.5 rounded-[9px] text-[11px] font-semibold flex items-center gap-1.5 transition-all duration-150 ease-out select-none ${
+            className={`h-6 sm:h-7 px-2 sm:px-2.5 rounded-[7px] sm:rounded-[9px] text-[10px] sm:text-[11px] font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors duration-150 ease-out select-none ${
               isStale
                 ? 'opacity-40 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)] border border-[var(--hairline)]'
                 : 'bg-red-500/10 hover:bg-red-500/20 active:bg-red-500/25 text-red-600 dark:text-red-400 border border-red-500/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.15),0_1px_2px_rgba(220,38,38,0.12)] cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100'
@@ -601,13 +759,15 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
           >
             {isExportingPdf ? (
               <>
-                <Icon name="loader" size={13} className="animate-spin text-red-500" />
-                <span>Exporting...</span>
+                <Icon name="loader" size={12} className="animate-spin text-red-500" />
+                <span className="whitespace-nowrap hidden sm:inline">Exporting...</span>
+                <span className="whitespace-nowrap inline sm:hidden">...</span>
               </>
             ) : (
               <>
-                <Icon name="file-text" size={13} />
-                <span className="whitespace-nowrap">Export Dossier (PDF)</span>
+                <Icon name="file-text" size={12} />
+                <span className="whitespace-nowrap hidden sm:inline">Export Dossier (PDF)</span>
+                <span className="whitespace-nowrap inline sm:hidden">PDF</span>
               </>
             )}
           </button>
@@ -617,9 +777,9 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
             onClick={() => setIsModalOpen(true)}
             title="Open Fullscreen Blueprint Modal"
             aria-label="Open Fullscreen Blueprint"
-            className="w-7 h-7 rounded-[9px] bg-[var(--accent-tint)] text-[var(--accent)] hover:brightness-105 active:scale-[0.92] flex items-center justify-center transition-all duration-150 ease-out cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
+            className="bw-touch-target w-6 h-6 sm:w-8 sm:h-8 rounded-[7px] sm:rounded-[9px] bg-[var(--accent-tint)] text-[var(--accent)] hover:brightness-105 active:scale-[0.92] flex items-center justify-center transition-colors duration-150 ease-out cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
           >
-            <Icon name="maximize" size={14} />
+            <Icon name="maximize" size={13} />
           </button>
         </div>
       </div>
@@ -628,7 +788,12 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
       <div
         className="relative w-full min-h-[320px] h-[360px] overflow-hidden select-none cursor-pointer group"
         style={{ backgroundColor: 'var(--blueprint-bg)' }}
-        onClick={() => setIsModalOpen(true)}
+        onClick={() => {
+          // The whole canvas opens the modal — but a drag that ended here is a
+          // pan gesture, not a click (mouse and touch alike).
+          if (dragMovedRef.current) return;
+          setIsModalOpen(true);
+        }}
         title="Click to open full-size blueprint modal"
       >
         {/* Subtle grid pattern */}
@@ -644,17 +809,23 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
           <rect width="100%" height="100%" fill="url(#viewer-ambient-grid)" className="text-[var(--hairline)]" />
         </svg>
 
-        {/* Pan & Zoom Transform Wrapper */}
+        {/* Pan & Zoom Transform Wrapper (mouse + touch: the sheet is a
+            fixed-fidelity artifact — gestures move the viewport over it) */}
         <div
+          ref={cardCanvasRef}
           className="w-full h-full flex items-center justify-center p-3 transition-transform will-change-transform"
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
             transformOrigin: 'center center',
             transition: isPanning ? 'none' : 'transform 0.15s ease-out',
+            touchAction: 'none',
           }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
+          onTouchStart={cardGestures.onTouchStart}
+          onTouchMove={cardGestures.onTouchMove}
+          onTouchEnd={cardGestures.onTouchEnd}
         >
           <div
             key={containerKey}
@@ -663,8 +834,9 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
           />
         </div>
 
-        {/* Hover Sheet Overlay Cue */}
-        <div className="absolute bottom-2.5 right-2.5 px-2.5 py-1 rounded-full vibrancy-pill text-[11px] font-medium text-[var(--text-1)] border border-[var(--panel-border-color)] opacity-80 group-hover:opacity-100 transition-opacity flex items-center gap-1 shadow-sm pointer-events-none">
+        {/* Expand Sheet cue: always visible — a hover-only affordance would
+            never be discovered on touch, and a persistent cue helps everywhere. */}
+        <div className="absolute bottom-2.5 right-2.5 px-2.5 py-1 rounded-full vibrancy-pill text-[11px] font-medium text-[var(--text-1)] border border-[var(--panel-border-color)] flex items-center gap-1 shadow-sm pointer-events-none">
           <Icon name="maximize" size={12} className="text-[var(--accent)]" />
           <span>Expand Sheet</span>
         </div>
@@ -924,47 +1096,58 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
               onClick={(e) => e.stopPropagation()}
             >
               {/* Modal Header */}
-              <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--hairline)]">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-8 h-8 rounded-[10px] bg-[var(--accent-tint)] text-[var(--accent)] flex items-center justify-center shrink-0">
-                    <Icon name="blueprint" size={16} />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-[16px] font-semibold text-[var(--text-1)] tracking-tight whitespace-nowrap">
-                        {isMultiStorey && currentFloor ? `${currentFloor.floor_name}` : 'Architectural Floor Plan'}
-                      </h3>
-                      {isStale && (
-                        <span
-                          data-testid="modal-stale-plan-chip"
-                          title="Parameters changed — regenerate blueprint before exporting."
-                          className="font-mono text-[11px] font-semibold text-amber-800 dark:text-amber-200 bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 rounded-[6px] whitespace-nowrap flex items-center gap-1 select-none animate-pulse"
-                        >
-                          <Icon name="alert-triangle" size={12} className="text-amber-600 dark:text-amber-400 shrink-0" />
-                          <span>Parameters changed - regenerate</span>
-                        </span>
-                      )}
-                      <span
-                        data-testid="modal-blueprint-freshness-token"
-                        className="font-mono text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-2 py-0.5 rounded-[6px] whitespace-nowrap border border-[var(--accent)]/20 min-w-0 truncate"
-                      >
-                        {freshnessToken}
-                      </span>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 px-3 sm:px-5 py-2.5 sm:py-3 border-b border-[var(--hairline)]">
+                <div className="flex items-center justify-between sm:justify-start gap-3 min-w-0 w-full sm:w-auto">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-8 h-8 rounded-[10px] bg-[var(--accent-tint)] text-[var(--accent)] flex items-center justify-center shrink-0">
+                      <Icon name="blueprint" size={16} />
                     </div>
-                    <p className="text-[12px] text-[var(--text-2)] truncate">
-                      {isMultiStorey ? `Multi-Storey CAD Drafting (${multiStorey?.total_storeys} Levels)` : 'CAD 2D Drafting (Single Level Ground)'} &bull; {(plotWidthM || 10).toFixed(1)}m × {(plotDepthM || 12).toFixed(1)}m Grid
-                      {isMultiStorey && currentFloor && ` • Elevation +${(currentFloor.floor_index * 3.0).toFixed(1)}m`}
-                    </p>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <h3 className="text-[14px] sm:text-[16px] font-semibold text-[var(--text-1)] tracking-tight whitespace-nowrap">
+                          {isMultiStorey && currentFloor ? `${currentFloor.floor_name}` : 'Architectural Floor Plan'}
+                        </h3>
+                        {isStale && (
+                          <span
+                            data-testid="modal-stale-plan-chip"
+                            title="Parameters changed — regenerate blueprint before exporting."
+                            className="font-mono text-[10px] sm:text-[11px] font-semibold text-amber-800 dark:text-amber-200 bg-amber-500/20 border border-amber-500/40 px-1.5 py-0.5 rounded-[6px] whitespace-nowrap flex items-center gap-1 select-none animate-pulse"
+                          >
+                            <Icon name="alert-triangle" size={11} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                            <span>Parameters changed</span>
+                          </span>
+                        )}
+                        <span
+                          data-testid="modal-blueprint-freshness-token"
+                          className="font-mono text-[10px] sm:text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-1.5 py-0.5 rounded-[6px] whitespace-nowrap border border-[var(--accent)]/20 max-w-[180px] sm:max-w-xs truncate"
+                        >
+                          {freshnessToken}
+                        </span>
+                      </div>
+                      <p className="text-[11px] sm:text-[12px] text-[var(--text-2)] truncate">
+                        {isMultiStorey ? `Multi-Storey CAD Drafting (${multiStorey?.total_storeys} Levels)` : 'CAD 2D Drafting (Single Level Ground)'} &bull; {(plotWidthM || 10).toFixed(1)}m × {(plotDepthM || 12).toFixed(1)}m Grid
+                        {isMultiStorey && currentFloor && ` • Elevation +${(currentFloor.floor_index * 3.0).toFixed(1)}m`}
+                      </p>
+                    </div>
                   </div>
+                  {/* Mobile-only close button */}
+                  <button
+                    type="button"
+                    onClick={() => setIsModalOpen(false)}
+                    className="sm:hidden w-8 h-8 rounded-[9px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text-1)] flex items-center justify-center transition-colors duration-150 cursor-pointer active:scale-[0.92] shrink-0"
+                    aria-label="Close modal"
+                  >
+                    <Icon name="x" size={16} />
+                  </button>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap sm:flex-nowrap justify-between sm:justify-end w-full sm:w-auto">
                   {/* Mode switcher in modal */}
-                  <div className="flex items-center bg-[var(--fill)] rounded-[9px] p-[3px] mr-1 shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
+                  <div className="flex items-center bg-[var(--fill)] rounded-[8px] sm:rounded-[9px] p-[2px] sm:p-[3px] mr-1 shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
                     <button
                       type="button"
                       onClick={() => setMode('cad')}
-                      className={`h-6 px-3 rounded-[7px] text-[12px] font-semibold flex items-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
+                      className={`h-6 px-2.5 sm:px-3 rounded-[6px] sm:rounded-[7px] text-[11px] sm:text-[12px] font-semibold flex items-center transition-colors duration-150 ease-out cursor-pointer active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
                         mode === 'cad'
                           ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
                           : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
@@ -975,7 +1158,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                     <button
                       type="button"
                       onClick={() => setMode('paper')}
-                      className={`h-6 px-3 rounded-[7px] text-[12px] font-semibold flex items-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
+                      className={`h-6 px-2.5 sm:px-3 rounded-[6px] sm:rounded-[7px] text-[11px] sm:text-[12px] font-semibold flex items-center transition-colors duration-150 ease-out cursor-pointer active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
                         mode === 'paper'
                           ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
                           : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
@@ -998,7 +1181,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                           ? 'Hide F0 Core Ghost Overlay'
                           : 'Show F0 Core Ghost Overlay'
                       }
-                      className={`h-8 px-2.5 rounded-[9px] text-[11px] font-semibold flex items-center gap-1.5 transition-all duration-150 ease-out cursor-pointer mr-1 select-none active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 disabled:active:scale-100 ${
+                      className={`h-7 sm:h-8 px-2 sm:px-2.5 rounded-[8px] sm:rounded-[9px] text-[10px] sm:text-[11px] font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors duration-150 ease-out cursor-pointer mr-1 select-none active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 disabled:active:scale-100 ${
                         safeFloorIndex === 0
                           ? 'opacity-50 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)]'
                           : showGhostOverlay
@@ -1008,26 +1191,27 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                     >
                       <Icon
                         name="layers"
-                        size={13}
+                        size={12}
                         className={showGhostOverlay && safeFloorIndex > 0 ? 'text-amber-500 animate-pulse' : ''}
                       />
-                      <span>{safeFloorIndex === 0 ? 'F0 Anchor' : showGhostOverlay ? 'Ghost: ON' : 'Ghost: OFF'}</span>
+                      <span className="hidden sm:inline">{safeFloorIndex === 0 ? 'F0 Anchor' : showGhostOverlay ? 'Ghost: ON' : 'Ghost: OFF'}</span>
+                      <span className="inline sm:hidden">{safeFloorIndex === 0 ? 'Anchor' : showGhostOverlay ? 'Ghost: ON' : 'Ghost: OFF'}</span>
                     </button>
                   )}
 
                   {/* Modal Zoom Controls (segmented cluster) */}
-                  <div className="flex items-center gap-0.5 bg-[var(--fill)] rounded-[9px] p-[3px] mr-2 shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
+                  <div className="flex items-center gap-0.5 bg-[var(--fill)] rounded-[8px] sm:rounded-[9px] p-[2px] sm:p-[3px] mr-1 sm:mr-2 shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
                     <button
                       type="button"
                       onClick={handleModalZoomOut}
                       disabled={modalZoom <= 0.5}
                       title="Zoom Out"
                       aria-label="Zoom Out"
-                      className="w-7 h-6 rounded-[6px] hover:bg-[var(--fill-hover)] disabled:opacity-40 disabled:hover:bg-transparent text-[var(--text-1)] flex items-center justify-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
+                      className="bw-touch-target w-6 h-6 sm:w-7 sm:h-8 rounded-[5px] sm:rounded-[6px] hover:bg-[var(--fill-hover)] disabled:opacity-40 disabled:hover:bg-transparent text-[var(--text-1)] flex items-center justify-center transition-colors duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
                     >
-                      <Icon name="minus" size={14} />
+                      <Icon name="minus" size={13} />
                     </button>
-                    <span className="font-mono text-[12px] text-[var(--text-2)] tabular-nums min-w-[40px] text-center font-semibold select-none">
+                    <span className="font-mono text-[11px] sm:text-[12px] text-[var(--text-2)] tabular-nums min-w-[34px] sm:min-w-[40px] text-center font-semibold select-none">
                       {Math.round(modalZoom * 100)}%
                     </span>
                     <button
@@ -1036,18 +1220,18 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                       disabled={modalZoom >= 3.5}
                       title="Zoom In"
                       aria-label="Zoom In"
-                      className="w-7 h-6 rounded-[6px] hover:bg-[var(--fill-hover)] disabled:opacity-40 disabled:hover:bg-transparent text-[var(--text-1)] flex items-center justify-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
+                      className="bw-touch-target w-6 h-6 sm:w-7 sm:h-8 rounded-[5px] sm:rounded-[6px] hover:bg-[var(--fill-hover)] disabled:opacity-40 disabled:hover:bg-transparent text-[var(--text-1)] flex items-center justify-center transition-colors duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
                     >
-                      <Icon name="plus" size={14} />
+                      <Icon name="plus" size={13} />
                     </button>
                     <button
                       type="button"
                       onClick={handleModalReset}
                       title="Reset View"
                       aria-label="Reset View"
-                      className="w-7 h-6 rounded-[6px] hover:bg-[var(--fill-hover)] text-[var(--text-1)] flex items-center justify-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
+                      className="bw-touch-target w-6 h-6 sm:w-7 sm:h-8 rounded-[5px] sm:rounded-[6px] hover:bg-[var(--fill-hover)] text-[var(--text-1)] flex items-center justify-center transition-colors duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
                     >
-                      <Icon name="refresh" size={14} />
+                      <Icon name="refresh" size={13} />
                     </button>
                   </div>
 
@@ -1061,7 +1245,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                         ? 'Parameters changed — regenerate blueprint before exporting.'
                         : 'Export Multi-Page Architectural PDF Dossier'
                     }
-                    className={`h-8 px-3 rounded-[9px] text-[12px] font-semibold flex items-center gap-1.5 transition-all duration-150 ease-out mr-2 select-none ${
+                    className={`h-7 sm:h-8 px-2 sm:px-3 rounded-[8px] sm:rounded-[9px] text-[11px] sm:text-[12px] font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors duration-150 ease-out mr-1 sm:mr-2 select-none ${
                       isStale
                         ? 'opacity-40 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)] border border-[var(--hairline)]'
                         : 'bg-red-500/10 hover:bg-red-500/20 active:bg-red-500/25 text-red-600 dark:text-red-400 border border-red-500/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.15),0_1px_2px_rgba(220,38,38,0.15)] cursor-pointer active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100'
@@ -1069,13 +1253,15 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                   >
                     {isExportingPdf ? (
                       <>
-                        <Icon name="loader" size={14} className="animate-spin text-red-500" />
-                        <span>Exporting PDF...</span>
+                        <Icon name="loader" size={13} className="animate-spin text-red-500" />
+                        <span className="whitespace-nowrap hidden sm:inline">Exporting PDF...</span>
+                        <span className="whitespace-nowrap inline sm:hidden">...</span>
                       </>
                     ) : (
                       <>
-                        <Icon name="file-text" size={14} />
-                        <span className="whitespace-nowrap">Export Dossier (PDF)</span>
+                        <Icon name="file-text" size={13} />
+                        <span className="whitespace-nowrap hidden sm:inline">Export Dossier (PDF)</span>
+                        <span className="whitespace-nowrap inline sm:hidden">PDF</span>
                       </>
                     )}
                   </button>
@@ -1090,20 +1276,22 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                         ? 'Parameters changed — regenerate blueprint before exporting.'
                         : 'Export SVG'
                     }
-                    className={`h-8 px-3.5 rounded-[9px] text-[12px] font-semibold flex items-center gap-1.5 transition-all duration-150 ease-out select-none mr-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/60 ${
+                    className={`h-7 sm:h-8 px-2.5 sm:px-3.5 rounded-[8px] sm:rounded-[9px] text-[11px] sm:text-[12px] font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors duration-150 ease-out select-none mr-1 sm:mr-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/60 ${
                       isStale
                         ? 'opacity-40 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)] border border-[var(--hairline)]'
                         : 'bg-[var(--accent)] text-white hover:brightness-105 active:bg-[var(--accent-press)] active:scale-[0.97] cursor-pointer shadow-[0_1px_3px_rgba(0,113,227,0.35)]'
                     }`}
                   >
-                    <Icon name="download" size={14} />                        <span className="whitespace-nowrap">Export SVG</span>
+                    <Icon name="download" size={13} />
+                    <span className="whitespace-nowrap hidden sm:inline">Export SVG</span>
+                    <span className="whitespace-nowrap inline sm:hidden">SVG</span>
                   </button>
 
-                  {/* Close Button */}
+                  {/* Close Button on Desktop */}
                   <button
                     type="button"
                     onClick={() => setIsModalOpen(false)}
-                    className="w-8 h-8 rounded-[9px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text-1)] flex items-center justify-center transition-all duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
+                    className="hidden sm:flex w-8 h-8 rounded-[9px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text-1)] items-center justify-center transition-colors duration-150 ease-out cursor-pointer active:scale-[0.92] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
                     aria-label="Close modal"
                   >
                     <Icon name="x" size={16} />
@@ -1116,11 +1304,15 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
 
               {/* Modal Body Canvas */}
               <div
+                ref={modalCanvasRef}
                 className="relative flex-1 w-full overflow-hidden select-none"
-                style={{ backgroundColor: 'var(--blueprint-bg)' }}
+                style={{ backgroundColor: 'var(--blueprint-bg)', touchAction: 'none' }}
                 onMouseDown={handleModalMouseDown}
                 onMouseMove={handleModalMouseMove}
                 onMouseUp={handleModalMouseUp}
+                onTouchStart={modalGestures.onTouchStart}
+                onTouchMove={modalGestures.onTouchMove}
+                onTouchEnd={modalGestures.onTouchEnd}
               >
                 <div
                   className="w-full h-full flex items-center justify-center p-8 transition-transform will-change-transform"

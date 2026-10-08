@@ -56,6 +56,7 @@ const CUSTOM_LAYER_IDS = new Set([
   'tree-clusters-line',
   'water-bodies-fill',
   'water-bodies-line',
+  'osm-fallback-layer',
 ]);
 
 // Animated map-mode switching (Apple Maps feel): a quick base cross-fade with labels
@@ -130,6 +131,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const [showTreeLayer, setShowTreeLayer] = useState<boolean>(true);
   const [showWaterLayer, setShowWaterLayer] = useState<boolean>(true);
   const [mapStyle, setMapStyle] = useState<MapStyleMode>('standard');
+  const [isFallbackActive, setIsFallbackActive] = useState<boolean>(false);
+  const fallbackAppliedRef = useRef<boolean>(false);
+  const prevCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
+  const prevThemeRef = useRef<'light' | 'dark' | null>(null);
 
   const onMapReadyRef = useRef(onMapReady);
   onMapReadyRef.current = onMapReady;
@@ -214,6 +219,40 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     t === 'dark'
       ? 'https://tiles.openfreemap.org/styles/dark'
       : 'https://tiles.openfreemap.org/styles/liberty';
+
+  const getOsmRasterFallbackStyle = (t: 'light' | 'dark'): maplibregl.StyleSpecification => ({
+    version: 8,
+    name: 'OSM Raster Fallback',
+    sources: {
+      'osm-fallback-source': {
+        type: 'raster',
+        tiles:
+          t === 'dark'
+            ? [
+                'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+              ]
+            : [
+                'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
+              ],
+        tileSize: 256,
+        maxzoom: 19,
+        attribution: t === 'dark' ? '© CARTO © OpenStreetMap' : '© OpenStreetMap contributors',
+      },
+    },
+    layers: [
+      {
+        id: 'osm-fallback-layer',
+        type: 'raster',
+        source: 'osm-fallback-source',
+        minzoom: 0,
+        maxzoom: 19,
+      },
+    ],
+  });
 
   const createPinElement = (t: 'light' | 'dark') => {
     const accentColor = t === 'dark' ? '#0A84FF' : '#0071E3';
@@ -369,6 +408,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       }
       if (layer.id === 'terrain-layer' || layer.id === 'hillshade-layer') {
         fadeTargets.push({ layerId: layer.id, type: layer.type, target: mode === 'terrain' ? 1 : 0 });
+        continue;
+      }
+      if (layer.id === 'osm-fallback-layer') {
+        fadeTargets.push({ layerId: layer.id, type: layer.type, target: mode === 'standard' ? 1 : 0 });
         continue;
       }
       if (layer.id === '3d-buildings') {
@@ -799,41 +842,43 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       } catch {}
     }
 
-    // Add standardized 3D Buildings Fill-Extrusion Layer
+    // Add standardized 3D Buildings Fill-Extrusion Layer (if vector source available)
     if (!map.getLayer('3d-buildings')) {
       const vectorSourceId =
         Object.keys(style.sources || {}).find(
           (id) => (map.getSource(id) as any)?.type === 'vector'
-        ) || 'openmaptiles';
+        );
 
-      map.addLayer(
-        {
-          id: '3d-buildings',
-          source: vectorSourceId,
-          'source-layer': 'building',
-          type: 'fill-extrusion',
-          // Low enough that Terrain mode shows extruded blocks over the relief;
-          // below ~14.5 tile detail is too coarse for meaningful building shapes.
-          minzoom: 14.5,
-          paint: {
-            'fill-extrusion-color': currentTheme === 'dark' ? '#1F2430' : '#E8E6E1',
-            'fill-extrusion-height': [
-              'coalesce',
-              ['get', 'render_height'],
-              ['get', 'height'],
-              0,
-            ],
-            'fill-extrusion-base': [
-              'coalesce',
-              ['get', 'render_min_height'],
-              ['get', 'min_height'],
-              0,
-            ],
-            'fill-extrusion-opacity': 0.9,
+      if (vectorSourceId && map.getSource(vectorSourceId)) {
+        map.addLayer(
+          {
+            id: '3d-buildings',
+            source: vectorSourceId,
+            'source-layer': 'building',
+            type: 'fill-extrusion',
+            // Low enough that Terrain mode shows extruded blocks over the relief;
+            // below ~14.5 tile detail is too coarse for meaningful building shapes.
+            minzoom: 14.5,
+            paint: {
+              'fill-extrusion-color': currentTheme === 'dark' ? '#1F2430' : '#E8E6E1',
+              'fill-extrusion-height': [
+                'coalesce',
+                ['get', 'render_height'],
+                ['get', 'height'],
+                0,
+              ],
+              'fill-extrusion-base': [
+                'coalesce',
+                ['get', 'render_min_height'],
+                ['get', 'min_height'],
+                0,
+              ],
+              'fill-extrusion-opacity': 0.9,
+            },
           },
-        },
-        firstSymbolId
-      );
+          firstSymbolId
+        );
+      }
     }
     // Re-assert massing visibility after every style (re)load: satellite never shows
     // extrusions, and neither does an active capture/site session (hideMassing).
@@ -1058,7 +1103,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       longitude ?? defaultLon,
       latitude ?? defaultLat,
     ];
-    const initialZoom = latitude && longitude ? 14 : defaultZoom;
+    const initialZoom = latitude && longitude ? 16 : defaultZoom;
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
@@ -1082,8 +1127,48 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     });
     popupRef.current = popup;
 
+    // Failsafe: if vector style fails to load (e.g. OpenFreeMap network block, rate limit, timeout),
+    // gracefully fall back to OSM raster tiles so the user never sees a blank canvas.
+    let styleFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const triggerFallbackStyle = () => {
+      if (fallbackAppliedRef.current) return;
+      fallbackAppliedRef.current = true;
+      setIsFallbackActive(true);
+      try {
+        map.setStyle(getOsmRasterFallbackStyle(themeRef.current));
+      } catch (err) {
+        console.warn('Failed to apply fallback map style:', err);
+      }
+    };
+
+    styleFallbackTimer = setTimeout(() => {
+      if (!map.isStyleLoaded() && !fallbackAppliedRef.current) {
+        console.warn('Vector map style timed out. Falling back to OSM raster tiles.');
+        triggerFallbackStyle();
+      }
+    }, 4500);
+
+    const handleMapError = (e: any) => {
+      // If error occurs while initial vector style is loading or tiles fail, activate fallback
+      if (!map.isStyleLoaded() && !fallbackAppliedRef.current) {
+        console.warn('Map style loading error detected, activating fallback:', e);
+        triggerFallbackStyle();
+      }
+    };
+    map.on('error', handleMapError);
+
     map.on('style.load', () => {
+      if (styleFallbackTimer) {
+        clearTimeout(styleFallbackTimer);
+        styleFallbackTimer = null;
+      }
       setupCustomLayersAndSources(map);
+      map.resize();
+    });
+
+    map.on('load', () => {
+      map.resize();
     });
 
     // Click handler for location selection
@@ -1206,9 +1291,44 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     };
     window.addEventListener('resize', handleWindowResize);
 
+    // Double-frame + timer layout calibration to ensure mobile viewports calculate accurately
+    const rafId = requestAnimationFrame(() => {
+      map.resize();
+    });
+    const layoutTimer = setTimeout(() => {
+      map.resize();
+    }, 250);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        map.resize();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    const handleContextLost = (e: Event) => {
+      e.preventDefault();
+      console.warn('Map WebGL context lost.');
+    };
+    const handleContextRestored = () => {
+      console.info('Map WebGL context restored.');
+      map.resize();
+      setupCustomLayersAndSources(map);
+    };
+
+    map.on('webglcontextlost', handleContextLost as any);
+    map.on('webglcontextrestored', handleContextRestored as any);
+
     return () => {
+      if (styleFallbackTimer) clearTimeout(styleFallbackTimer);
+      cancelAnimationFrame(rafId);
+      clearTimeout(layoutTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('resize', handleWindowResize);
       resizeObserver.disconnect();
+      map.off('error', handleMapError);
+      map.off('webglcontextlost', handleContextLost as any);
+      map.off('webglcontextrestored', handleContextRestored as any);
       if (popupRef.current) {
         popupRef.current.remove();
         popupRef.current = null;
@@ -1236,14 +1356,21 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     const map = mapInstanceRef.current;
     if (!map) return;
 
-    map.setStyle(getVectorStyleUrl(theme));
+    if (prevThemeRef.current !== null && prevThemeRef.current !== theme) {
+      if (fallbackAppliedRef.current) {
+        map.setStyle(getOsmRasterFallbackStyle(theme));
+      } else {
+        map.setStyle(getVectorStyleUrl(theme));
+      }
 
-    if (markerRef.current) {
-      const pinEl = createPinElement(theme);
-      // Replace DOM contents inside marker
-      const markerEl = markerRef.current.getElement();
-      markerEl.innerHTML = pinEl.innerHTML;
+      if (markerRef.current) {
+        const pinEl = createPinElement(theme);
+        // Replace DOM contents inside marker
+        const markerEl = markerRef.current.getElement();
+        markerEl.innerHTML = pinEl.innerHTML;
+      }
     }
+    prevThemeRef.current = theme;
   }, [theme]);
 
   // Map Details style change: Standard / Satellite / Terrain
@@ -1591,7 +1718,23 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         );
       }
 
-      map.panTo(lngLat);
+      const currentZoom = map.getZoom();
+      const prevCoords = prevCoordsRef.current;
+      const isFirstCoordPass = prevCoords === null;
+      const coordsChanged =
+        !isFirstCoordPass &&
+        (Math.abs(prevCoords.lat - latitude) > 0.00005 ||
+          Math.abs(prevCoords.lng - longitude) > 0.00005);
+
+      prevCoordsRef.current = { lat: latitude, lng: longitude };
+
+      if (coordsChanged) {
+        if (currentZoom < 15) {
+          map.flyTo({ center: lngLat, zoom: 16, duration: 1000, essential: true });
+        } else {
+          map.panTo(lngLat);
+        }
+      }
     } else {
       if (markerRef.current) {
         markerRef.current.remove();
@@ -1787,7 +1930,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       )}
 
       {/* Floating Bottom-Left Group: Map Details Selector + Coordinate Chip */}
-      <div className="absolute bottom-3 left-3 lg:left-[364px] z-[1000] pointer-events-auto flex items-center gap-2">
+      <div className="absolute bottom-2 sm:bottom-3 left-2 sm:left-3 lg:left-[364px] z-[1000] pointer-events-auto flex items-center gap-1.5 sm:gap-2 max-w-[calc(100vw-110px)] sm:max-w-none">
         <MapStyleSelector
           currentStyle={mapStyle}
           onStyleChange={(s) => setMapStyle(s)}
@@ -1795,15 +1938,15 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         />
 
         {latitude !== null && longitude !== null && (
-          <div className="vibrancy-pill px-3 py-1.5 rounded-full flex items-center gap-2 text-[12px] font-medium text-[var(--text-1)] border border-[var(--panel-border-color)] shadow-md">
-            <Icon name="crosshair" size={14} className="text-[var(--text-2)] shrink-0" />
-            <span className="font-mono tabular-nums">
-              {latitude.toFixed(5)}, {longitude.toFixed(5)}
+          <div className="vibrancy-pill px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-[12px] font-medium text-[var(--text-1)] border border-[var(--panel-border-color)] shadow-md min-w-0">
+            <Icon name="crosshair" size={13} className="text-[var(--text-2)] shrink-0" />
+            <span className="font-mono tabular-nums truncate">
+              {latitude.toFixed(4)}, {longitude.toFixed(4)}
             </span>
             {orientationDegrees !== undefined && (
               <>
-                <span className="text-[var(--hairline)]">|</span>
-                <span className="text-[11px] text-[var(--text-2)] flex items-center gap-1">
+                <span className="text-[var(--hairline)] hidden xs:inline">|</span>
+                <span className="text-[11px] text-[var(--text-2)] hidden xs:flex items-center gap-1 shrink-0">
                   <Icon name="compass" size={12} className="text-[var(--accent)]" />
                   {orientationDegrees.toFixed(0)}°
                 </span>
@@ -1814,11 +1957,11 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       </div>
 
       {/* Floating Zoom Controls: Vertical group, two 32px vibrancy squares radius 10 with hairline divider */}
-      <div className="absolute top-[76px] lg:top-[118px] map-controls-anchor z-[1000] pointer-events-auto flex flex-col rounded-[10px] vibrancy-panel overflow-hidden border border-[var(--panel-border-color)] shadow-md">
+      <div className="absolute top-[62px] sm:top-[76px] lg:top-[118px] map-controls-anchor z-[1000] pointer-events-auto flex flex-col rounded-[10px] vibrancy-panel overflow-hidden border border-[var(--panel-border-color)] shadow-md">
         <button
           type="button"
           onClick={handleZoomIn}
-          className="w-8 h-8 flex items-center justify-center text-[var(--text-1)] hover:bg-[var(--fill)] transition-colors active:brightness-95"
+          className="bw-touch-target w-8 h-8 flex items-center justify-center text-[var(--text-1)] hover:bg-[var(--fill)] transition-colors active:brightness-95"
           title="Zoom In"
           aria-label="Zoom In"
         >
@@ -1828,7 +1971,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         <button
           type="button"
           onClick={handleZoomOut}
-          className="w-8 h-8 flex items-center justify-center text-[var(--text-1)] hover:bg-[var(--fill)] transition-colors active:brightness-95"
+          className="bw-touch-target w-8 h-8 flex items-center justify-center text-[var(--text-1)] hover:bg-[var(--fill)] transition-colors active:brightness-95"
           title="Zoom Out"
           aria-label="Zoom Out"
         >
@@ -1837,11 +1980,11 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       </div>
 
       {/* Floating Recenter & Layer Chips */}
-      <div className="absolute top-[152px] lg:top-[194px] map-controls-anchor z-[1000] pointer-events-auto flex flex-col items-end gap-1.5">
+      <div className="absolute top-[138px] sm:top-[152px] lg:top-[194px] map-controls-anchor z-[1000] pointer-events-auto flex flex-col items-end gap-1.5">
         <button
           type="button"
           onClick={handleResetView}
-          className="w-8 h-8 rounded-[10px] vibrancy-panel flex items-center justify-center text-[var(--text-1)] hover:bg-[var(--fill)] transition-colors border border-[var(--panel-border-color)] shadow-md"
+          className="bw-touch-target w-8 h-8 rounded-[10px] vibrancy-panel flex items-center justify-center text-[var(--text-1)] hover:bg-[var(--fill)] transition-colors border border-[var(--panel-border-color)] shadow-md"
           title="Recenter Map View"
           aria-label="Recenter Map View"
         >
@@ -1856,7 +1999,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
               <button
                 type="button"
                 onClick={() => setShowTreeLayer((prev) => !prev)}
-                className={`flex items-center gap-1 px-2 py-1 rounded-[8px] transition-colors text-[11px] font-medium cursor-pointer ${
+                className={`bw-touch-target flex items-center gap-1 px-2 py-1 rounded-[8px] transition-colors text-[11px] font-medium cursor-pointer ${
                   showTreeLayer
                     ? 'bg-[var(--accent-tint)] text-[var(--accent)]'
                     : 'text-[var(--text-2)] hover:bg-[var(--fill)]'
@@ -1876,7 +2019,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
               <button
                 type="button"
                 onClick={() => setShowWaterLayer((prev) => !prev)}
-                className={`flex items-center gap-1 px-2 py-1 rounded-[8px] transition-colors text-[11px] font-medium cursor-pointer ${
+                className={`bw-touch-target flex items-center gap-1 px-2 py-1 rounded-[8px] transition-colors text-[11px] font-medium cursor-pointer ${
                   showWaterLayer
                     ? 'bg-[var(--accent-tint)] text-[var(--accent)]'
                     : 'text-[var(--text-2)] hover:bg-[var(--fill)]'
@@ -1897,38 +2040,45 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       </div>
 
       {/* Dynamic Attribution Compliance Pill (bottom-right) */}
-      <div className="absolute bottom-3 map-controls-anchor z-[1000] pointer-events-auto">
-        <div className="vibrancy-pill px-2.5 py-1 rounded-full text-[10px] text-[var(--text-2)] flex items-center gap-1 border border-[var(--panel-border-color)] shadow-sm">
+      <div className="absolute bottom-2 sm:bottom-3 right-2 sm:right-4 z-[1000] pointer-events-auto">
+        <div className="vibrancy-pill px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full text-[10px] text-[var(--text-2)] flex items-center gap-1 border border-[var(--panel-border-color)] shadow-sm max-w-[calc(100vw-16px)]">
           <span>&copy;</span>
           <a
-            href="https://openfreemap.org"
+            href={isFallbackActive ? 'https://www.openstreetmap.org/copyright' : 'https://openfreemap.org'}
             target="_blank"
             rel="noreferrer"
             className="hover:underline text-[var(--text-1)] font-medium"
           >
-            OpenFreeMap
+            <span className="xs:hidden">{isFallbackActive ? 'OSM' : 'OFM'}</span>
+            <span className="hidden xs:inline">{isFallbackActive ? 'OpenStreetMap' : 'OpenFreeMap'}</span>
           </a>
-          <span>&copy;</span>
-          <a
-            href="https://www.openstreetmap.org/copyright"
-            target="_blank"
-            rel="noreferrer"
-            className="hover:underline text-[var(--text-1)] font-medium"
-          >
-            OpenStreetMap contributors
-          </a>
+          {!isFallbackActive && (
+            <>
+              <span>&copy;</span>
+              <a
+                href="https://www.openstreetmap.org/copyright"
+                target="_blank"
+                rel="noreferrer"
+                className="hover:underline text-[var(--text-1)] font-medium"
+              >
+                <span className="xs:hidden">OSM</span>
+                <span className="hidden xs:inline">OpenStreetMap contributors</span>
+              </a>
+            </>
+          )}
 
           {mapStyle === 'satellite' && (
             <>
               <span className="text-[var(--hairline)]">|</span>
-              <span>Imagery:</span>
+              <span className="hidden xs:inline">Imagery:</span>
               <a
                 href="https://www.esri.com"
                 target="_blank"
                 rel="noreferrer"
                 className="hover:underline text-[var(--text-1)] font-medium"
               >
-                Esri, Maxar, Earthstar Geographics
+                <span className="xs:hidden">Esri</span>
+                <span className="hidden xs:inline">Esri, Maxar, Earthstar Geographics</span>
               </a>
             </>
           )}
@@ -1936,21 +2086,21 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           {mapStyle === 'terrain' && (
             <>
               <span className="text-[var(--hairline)]">|</span>
-              <span>&copy;</span>
               <a
                 href="https://opentopomap.org"
                 target="_blank"
                 rel="noreferrer"
                 className="hover:underline text-[var(--text-1)] font-medium"
               >
-                OpenTopoMap (CC-BY-SA)
+                <span className="xs:hidden">Topo</span>
+                <span className="hidden xs:inline">OpenTopoMap (CC-BY-SA)</span>
               </a>
-              <span className="text-[var(--hairline)]">|</span>
+              <span className="text-[var(--hairline)] hidden xs:inline">|</span>
               <a
                 href="https://registry.opendata.aws/terrain-tiles/"
                 target="_blank"
                 rel="noreferrer"
-                className="hover:underline text-[var(--text-1)] font-medium"
+                className="hover:underline text-[var(--text-1)] font-medium hidden xs:inline"
               >
                 Terrain: AWS Open Data
               </a>
