@@ -2,8 +2,11 @@ import pytest
 from app.services.suitability_service import (
     calculate_slope_score,
     calculate_flood_score,
+    calculate_road_access_score,
+    calculate_facility_score,
     evaluate_land_suitability
 )
+from app.schemas.response import FloodProfile
 
 def test_slope_score_boundaries():
     score_flat, status_flat, _ = calculate_slope_score(2.0)
@@ -45,3 +48,76 @@ def test_overall_suitability_weights():
     assert pytest.approx(total_weight, 0.001) == 1.0
     assert 0.0 <= score <= 100.0
     assert verdict in ["Suitable", "Conditionally Suitable", "Challenging"]
+
+
+def test_road_access_score_uses_real_distance_not_trig_proxy():
+    """
+    Road accessibility derives from the measured
+    Overpass distance, or reports an honest unknown - never a coordinate
+    trigonometry proxy presented as measured data.
+    """
+    score_close, status_close, details_close, raw_close = calculate_road_access_score(30.0, True)
+    assert score_close == 90.0
+    assert status_close == "optimal"
+    assert raw_close == 30.0
+    assert "30 m" in details_close
+
+    score_far, status_far, _, raw_far = calculate_road_access_score(400.0, True)
+    assert score_far == 55.0
+    assert status_far == "acceptable"
+    assert raw_far == 400.0
+
+    # Overpass reachable but no mapped road within 500 m -> critical, disclosed
+    score_none, status_none, details_none, raw_none = calculate_road_access_score(None, True)
+    assert status_none == "critical"
+    assert raw_none is None
+    assert "No mapped road within 500 m" in details_none
+
+    # Service unreachable -> honest 'unknown', never fabricated
+    score_unknown, status_unknown, details_unknown, raw_unknown = calculate_road_access_score(None, False)
+    assert status_unknown == "unknown"
+    assert raw_unknown is None
+    assert "not measured" in details_unknown.lower()
+
+
+def test_facility_score_is_labelled_proxy():
+    """Facility proximity must disclose that it is a modelled proxy."""
+    _, _, details = calculate_facility_score(12.97, 77.59)
+    assert "proxy" in details.lower()
+    assert "verify" in details.lower()
+
+
+def test_flood_score_fuses_hazard_profile_conservatively():
+    """
+    When a hazard FloodProfile is supplied, the worse of the
+    elevation proxy and the discharge pressure level governs, so the report
+    carries one consistent flood signal.
+    """
+    # Elevation proxy alone would score high (920 m AMSL, modest rain)
+    base_score, _, _ = calculate_flood_score(920.0, 900.0)
+    assert base_score >= 75.0
+
+    high_profile = FloodProfile(
+        discharge_peak_to_mean_ratio=8.0,
+        pressure_level="high",
+        ndma_flood_prone=False,
+        elevation_amsl_m=920.0,
+        confidence="high",
+    )
+    fused_score, fused_status, fused_details = calculate_flood_score(920.0, 900.0, flood_profile=high_profile)
+    assert fused_score < base_score  # conservative fusion
+    assert fused_status == "critical"
+    assert "HIGH flood pressure" in fused_details
+
+    low_profile = FloodProfile(
+        discharge_peak_to_mean_ratio=1.2,
+        pressure_level="low",
+        ndma_flood_prone=False,
+        elevation_amsl_m=920.0,
+        confidence="high",
+    )
+    fused_low, _, details_low = calculate_flood_score(920.0, 900.0, flood_profile=low_profile)
+    # Conservative fusion: 'low' pressure caps the proxy at 85.0
+    assert fused_low == 85.0
+    assert fused_low <= base_score
+    assert "low flood pressure" in details_low

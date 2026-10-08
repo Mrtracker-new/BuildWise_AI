@@ -95,3 +95,41 @@ def test_plot_area_derivation_from_ground_coverage():
     )
     assert result.plot_area_sqft == 2000.0
     assert result.ground_coverage_ratio_applied == 0.60
+
+
+def test_stale_guidance_rate_warning(monkeypatch):
+    """
+    A circle rate older than two years must carry an
+    explicit staleness confidence warning instead of reading as current.
+    """
+    from app.services import landvalue_service as lv
+
+    stale_table = {
+        "_meta": {"mandatory_disclaimer": "test disclaimer"},
+        "entries": [{
+            "id": "stale_zone",
+            "city": "Stalecity",
+            "zone_label": "Stale Zone A",
+            "center_lat": 12.9716,
+            "center_lon": 77.5946,
+            "radius_km": 20.0,
+            "rate_inr_per_sqft": 5000.0,
+            "publication_source": "Historic Registry",
+            "effective_year": 2020,
+        }],
+    }
+    monkeypatch.setattr(lv, "_load_guidance_table", lambda: stale_table)
+
+    result = lv.calculate_land_value(
+        lat=12.9716,
+        lon=77.5946,
+        address="Anywhere",
+        road_score=70.0,
+        facility_score=70.0,
+        built_up_area_sqft=2000.0,
+        floors=1,
+        total_construction_cost_inr=4_400_000.0,
+    )
+    assert result.as_of_year == 2020
+    assert result.confidence_warning is not None
+    assert "stale" in result.confidence_warning.lower()

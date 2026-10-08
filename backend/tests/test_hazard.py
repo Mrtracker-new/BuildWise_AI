@@ -31,12 +31,29 @@ def test_seismic_zone_lookup_hits():
 
 
 def test_seismic_zone_lookup_miss():
-    # Completely unknown district outside India / unlisted
+    # Coordinates outside India must return zone=None
+    # ("Not Assessed") - never a fabricated default Zone III.
     z, f, std, dist, warn = match_seismic_zone("Remote Outpost, Atlantis", 0.0, 0.0)
-    assert z == "Zone III"
-    assert f == 0.16
+    assert z is None
+    assert f is None
     assert warn is not None
-    assert "moderate confidence" in warn
+    assert "outside the IS 1893:2016" in warn
+
+    # In-India unlisted district still gets the conservative default with a warning
+    z_in, f_in, std_in, dist_in, warn_in = match_seismic_zone("Unknown Taluk, Unlisted State", 15.0, 75.0)
+    assert z_in == "Zone III"
+    assert f_in == 0.16
+    assert warn_in is not None
+    assert "not matched" in warn_in.lower()
+
+
+def test_seismic_zone_coordinate_box_is_moderate_confidence():
+    # Coordinate-cluster box matches carry a
+    # moderate-confidence warning instead of silently claiming high confidence.
+    z, f, std, dist, warn = match_seismic_zone("Some Locality", 12.9, 77.4)  # Bengaluru box
+    assert z == "Zone II"
+    assert warn is not None
+    assert "coordinate cluster" in warn
 
 
 def test_ndma_flags():
@@ -162,3 +179,29 @@ async def test_evaluate_hazard_profile_offline_fallback():
         assert profile.seismic.zone == "Zone II"
         assert profile.flood.pressure_level in ["low", "moderate"]
         assert len(warnings) > 0
+
+
+@pytest.mark.asyncio
+async def test_geocode_failure_does_not_silently_misfire_ndma():
+    """
+    When the reverse-geocode fallback identifier is
+    passed, NDMA district name matching must be skipped with an explicit
+    warning instead of silently returning false flags.
+    """
+    with patch("httpx.AsyncClient.get", side_effect=Exception("Network error")):
+        profile, warnings = await evaluate_hazard_profile(26.14, 91.73, 55.0, "Site Location (26.1400N, 91.7362E)")
+        joined = " ".join(warnings)
+        assert "Reverse geocoding unavailable" in joined
+        assert profile.flood.ndma_flood_prone is False
+        assert profile.flood.confidence == "low"
+
+
+@pytest.mark.asyncio
+async def test_hazard_profile_outside_india_not_assessed():
+    """Non-India coordinates yield zone=None, never a default zone."""
+    with patch("httpx.AsyncClient.get", side_effect=Exception("Network error")):
+        profile, warnings = await evaluate_hazard_profile(51.5074, -0.1278, 11.0, "London, United Kingdom")
+        assert profile.seismic.zone is None
+        assert profile.seismic.zone_factor is None
+        assert profile.seismic.confidence == "low"
+        assert any("outside the IS 1893:2016" in w for w in warnings)
