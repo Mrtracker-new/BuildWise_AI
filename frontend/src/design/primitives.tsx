@@ -851,7 +851,9 @@ export const Select: React.FC<SelectProps> = ({
     const menuMaxHeight = 260;
     const spaceBelow = window.innerHeight - rect.bottom;
     const above = spaceBelow < menuMaxHeight && rect.top > menuMaxHeight;
-    setCoords({ top: above ? rect.top - 4 : rect.bottom + 4, left: rect.left, width: rect.width, above });
+    const maxW = Math.min(rect.width, window.innerWidth - 16);
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - maxW - 8));
+    setCoords({ top: above ? rect.top - 4 : rect.bottom + 4, left, width: maxW, above });
   }, []);
 
   const toggle = () => {
@@ -889,13 +891,18 @@ export const Select: React.FC<SelectProps> = ({
         setOpen(false);
       }
     };
+    const handleReposition = () => updateCoords();
     window.addEventListener('keydown', onKey);
     document.addEventListener('mousedown', onDown);
+    window.addEventListener('resize', handleReposition);
+    window.addEventListener('scroll', handleReposition, true);
     return () => {
       window.removeEventListener('keydown', onKey);
       document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('resize', handleReposition);
+      window.removeEventListener('scroll', handleReposition, true);
     };
-  }, [open, options, value, onChange]);
+  }, [open, options, value, onChange, updateCoords]);
 
   return (
     <>
@@ -924,7 +931,7 @@ export const Select: React.FC<SelectProps> = ({
             id={listboxId}
             role="listbox"
             aria-labelledby={selectId}
-            className="animate-popover-open fixed z-[1050] min-w-[120px] overflow-hidden rounded-[12px] vibrancy-panel shadow-xl"
+            className="animate-popover-open fixed z-[1050] min-w-[120px] max-w-[calc(100vw-16px)] overflow-hidden rounded-[12px] vibrancy-panel shadow-xl"
             style={{ top: coords.top, left: coords.left, minWidth: coords.width, transformOrigin: coords.above ? 'bottom' : 'top' }}
           >
             {options.map((opt) => {

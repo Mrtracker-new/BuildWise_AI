@@ -79,6 +79,18 @@ export const RADII = { xs: 6, sm: 8, md: 10, lg: 12, xl: 16, full: 9999 } as con
 export const SPACING = { 1: 4, 2: 8, 3: 12, 4: 16, 5: 20, 6: 24, 8: 32 } as const;
 
 /* ------------------------------------------------------------------ */
+/* DENSITY — chrome compactness per breakpoint class.                  */
+/* Mirrors --density-* vars in index.css (compact media query).        */
+/* Touch targets NEVER shrink below HIT_TARGETS.minTarget effective.   */
+/* ------------------------------------------------------------------ */
+export type DensityClass = 'default' | 'compact';
+
+export const DENSITY = {
+  default: { rowH: 40, padCard: 16, padControlY: 6 },
+  compact: { rowH: 44, padCard: 12, padControlY: 8 },
+} as const;
+
+/* ------------------------------------------------------------------ */
 /* TYPOGRAPHY — SF-adjacent stack; tabular figures for every number    */
 /* that changes or compares (apply class `ui-font-tabular`).           */
 /* ------------------------------------------------------------------ */

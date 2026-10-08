@@ -36,6 +36,11 @@
   --motion-duration-slow: 200ms;
   --motion-duration-sheet: 250ms;
   --motion-ease-out: cubic-bezier(0.25, 0.1, 0.25, 1);
+  /* Density tokens (design/tokens.ts DENSITY mirrors these) */
+  --density-row-h: 40px;
+  --density-pad-card: 16px;
+  --density-pad-control-y: 6px;
+  --touch-target: 44px;
 }
 
 [data-theme="dark"] {
@@ -71,6 +76,11 @@
   --motion-duration-slow: 200ms;
   --motion-duration-sheet: 250ms;
   --motion-ease-out: cubic-bezier(0.25, 0.1, 0.25, 1);
+  /* Density tokens (design/tokens.ts DENSITY mirrors these) */
+  --density-row-h: 40px;
+  --density-pad-card: 16px;
+  --density-pad-control-y: 6px;
+  --touch-target: 44px;
 }
 
 @layer base {
@@ -126,6 +136,126 @@
 @media (max-width: 1023.98px) {
   .map-controls-anchor {
     right: 16px !important;
+  }
+}
+
+/* ========================================================================= */
+/* RESPONSIVE FOUNDATION — density, safe-area, scroll & touch               */
+/* ========================================================================= */
+
+/* Compact density: below the md edge the spec asks for tighter chrome with
+   FULL-SIZE touch targets — paddings shrink, hit areas do not. */
+@media (max-width: 767.98px) {
+  :root {
+    --density-row-h: 44px;
+    --density-pad-card: 12px;
+    --density-pad-control-y: 8px;
+  }
+}
+
+/* iOS safe-area insets (0 where not applicable so the vars are always set) */
+:root {
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left: env(safe-area-inset-left, 0px);
+  --safe-area-right: env(safe-area-inset-right, 0px);
+}
+
+/* Scroll chaining: pane-level scroll containers contain their momentum so
+   a scroll gesture inside a sheet/drawer never scrolls the page behind. */
+.bw-scroll-pane {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Horizontal tab strips: scrollable, snap to tab starts, hide the bar
+   scrollbar but keep wheel/drag scrolling. */
+.bw-tab-strip {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+}
+.bw-tab-strip::-webkit-scrollbar {
+  display: none;
+}
+.bw-tab-strip > * {
+  scroll-snap-align: start;
+}
+
+/* Edge fade for horizontal strips (mask, not gradient overlays, so the
+   fade works over any surface incl. vibrancy). Pair with .bw-tab-strip. */
+.bw-fade-x {
+  --bw-fade-x-w: 24px;
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    black var(--bw-fade-x-w),
+    black calc(100% - var(--bw-fade-x-w)),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    black var(--bw-fade-x-w),
+    black calc(100% - var(--bw-fade-x-w)),
+    transparent 100%
+  );
+}
+
+/* Fluid chrome type: primary control labels stay >=12px on compact
+   viewports without redesigning the desktop type ramp. */
+.bw-fluid-label {
+  font-size: 11px;
+}
+@media (max-width: 767.98px) {
+  .bw-fluid-label {
+    font-size: 12px;
+  }
+}
+
+/* Touch-target slop: keeps the rendered control compact (32px) while the
+   interactive area reaches the 44px minimum (tokens HIT_TARGETS). Apply
+   to any small chrome control; uses a transparent ::after overlay. */
+.bw-touch-target {
+  position: relative;
+}
+.bw-touch-target.absolute,
+.bw-touch-target.\!absolute {
+  position: absolute;
+}
+.bw-touch-target::after {
+  content: '';
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: var(--touch-target);
+  height: var(--touch-target);
+  transform: translate(-50%, -50%);
+  border-radius: inherit;
+  pointer-events: auto;
+}
+
+/* Bottom sheet drawer body helpers (Drawer primitive) */
+.bw-drawer {
+  /* 150-200ms ease-out per the motion contract */
+  transition: transform var(--motion-duration-slow) var(--motion-ease-out);
+  will-change: transform;
+}
+.bw-drawer-bottom {
+  padding-bottom: var(--safe-area-bottom);
+}
+.bw-drawer-grabber {
+  width: 36px;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--text-3);
+  opacity: 0.5;
+  margin: 8px auto 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bw-drawer {
+    transition: none;
   }
 }
 

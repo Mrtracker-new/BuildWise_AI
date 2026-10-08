@@ -7,6 +7,17 @@ export default {
   darkMode: ['selector', '[data-theme="dark"]'],
   theme: {
     extend: {
+      /* Responsive breakpoints:
+         xs <480 | sm 480-767 | md 768-1023 | lg 1024-1439 | xl >=1440.
+         Tailwind screens are min-width edges, so sm/xs share the 480 edge;
+         max-* variants give the "below" ranges. 2xl stays at default 1536. */
+      screens: {
+        xs: '480px',
+        sm: '480px',
+        md: '768px',
+        lg: '1024px',
+        xl: '1440px',
+      },
       colors: {
         apple: {
           panel: 'var(--panel)',
