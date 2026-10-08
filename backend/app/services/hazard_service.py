@@ -245,11 +245,25 @@ async def fetch_era5_storm_data(lat: float, lon: float) -> Tuple[float, float, b
     return fallback_gust, fallback_ext_days, True
 
 
-def match_seismic_zone(address: str, lat: float, lon: float) -> Tuple[str, float, str, str, Optional[str]]:
+def match_seismic_zone(address: str, lat: float, lon: float) -> Tuple[Optional[str], Optional[float], str, str, Optional[str]]:
     """
     Matches district/city/state against BIS IS 1893:2016 static catalog.
     Returns (zone, zone_factor, standard, district_name, confidence_warning).
+
+    Coordinates outside the IS 1893:2016 (India)
+    mapping extent return zone=None ("Not Assessed") - never a default Zone.
+    Regional coordinate-cluster matches carry an explicit moderate-confidence warning.
     """
+    # IS 1893 applies to Indian territory only. Extent gate: approximate
+    # national bounding box (lat 6.0-37.5, lon 68.0-97.5).
+    if not (6.0 <= lat <= 37.5 and 68.0 <= lon <= 97.5):
+        warning = (
+            "Site coordinates are outside the IS 1893:2016 (India) mapping extent. "
+            "No seismic zone was assigned; engage the governing national seismic code "
+            "for the site jurisdiction."
+        )
+        return None, None, "Outside IS 1893:2016 extent", "Outside IS 1893 Jurisdiction", warning
+
     table = _load_seismic_table()
     city_overrides = table.get("city_district_overrides", {})
     state_baselines = table.get("state_baselines", {})
@@ -268,16 +282,20 @@ def match_seismic_zone(address: str, lat: float, lon: float) -> Tuple[str, float
         if st_key in addr_lower:
             return st_val["zone"], st_val["factor"], "BIS IS 1893:2016", st_key.title(), None
 
-    # 3. Known regional coordinate clusters
+    # 3. Known regional coordinate clusters (moderate confidence only)
     # Guwahati / Assam box: lat 25.5 - 27.5, lon 90.0 - 94.0
+    box_warning = (
+        "Seismic zone matched via regional coordinate cluster, not a jurisdiction name. "
+        "Moderate confidence - verify against the official IS 1893:2016 zone map."
+    )
     if 25.0 <= lat <= 28.5 and 89.5 <= lon <= 96.0:
-        return "Zone V", 0.36, "BIS IS 1893:2016", "Northeast Tectonic Belt", None
+        return "Zone V", 0.36, "BIS IS 1893:2016", "Northeast Tectonic Belt", box_warning
     # Delhi NCR box: lat 28.2 - 28.9, lon 76.8 - 77.5
     if 28.0 <= lat <= 29.0 and 76.5 <= lon <= 77.8:
-        return "Zone IV", 0.24, "BIS IS 1893:2016", "Delhi National Capital Region", None
+        return "Zone IV", 0.24, "BIS IS 1893:2016", "Delhi National Capital Region", box_warning
     # Bengaluru box: lat 12.7 - 13.3, lon 77.3 - 77.9
     if 12.5 <= lat <= 13.5 and 77.0 <= lon <= 78.0:
-        return "Zone II", 0.10, "BIS IS 1893:2016", "Bengaluru Urban", None
+        return "Zone II", 0.10, "BIS IS 1893:2016", "Bengaluru Urban", box_warning
 
     warning = (
         f"Site jurisdiction was not matched in IS 1893:2016 version 1.0.0 registry. "
@@ -357,6 +375,9 @@ async def evaluate_hazard_profile(
         warnings.append("Earthquake catalog query reached 250 event limit. Regional seismic event count capped at 250+.")
 
     s_confidence = "high" if not s_fallback and not z_warn else ("moderate" if not s_fallback else "low")
+    if zone is None:
+        # "Not Assessed" jurisdiction - lowest confidence by definition
+        s_confidence = "low"
     recent_events = [SeismicEvent(**e) for e in seismic_res.get("recent_major_events", [])]
 
     seismic_profile = SeismicProfile(
@@ -375,11 +396,31 @@ async def evaluate_hazard_profile(
     )
 
     # 2. Flood & River Discharge
-    flood_prone_ndma, cyclone_prone_ndma = check_ndma_flags(address)
+    # When reverse geocoding failed, the address is a
+    # synthetic coordinate identifier - jurisdiction/NDMA name matching would
+    # silently mis-fire, so district flags are skipped with an explicit warning.
+    geocode_unavailable = (not address) or address.startswith("Site Location (")
+    if geocode_unavailable:
+        warnings.append(
+            "Reverse geocoding unavailable: jurisdiction name matching was skipped, "
+            "so NDMA district hazard flags may be incomplete for this site."
+        )
+        flood_prone_ndma = False
+        cyclone_prone_ndma = False
+    else:
+        flood_prone_ndma, cyclone_prone_ndma = check_ndma_flags(address)
     ratio, f_fallback = await fetch_open_meteo_flood_data(lat, lon)
 
-    f_warning = None
-    if f_fallback:
+    f_warning: Optional[str] = None
+    f_confidence = "low"
+    if geocode_unavailable:
+        f_warning = (
+            "Reverse geocoding unavailable: flood assessment relies on terrain elevation "
+            "and discharge telemetry only (NDMA district flags not applied)."
+        )
+        warnings.append(f_warning)
+        f_confidence = "low"
+    elif f_fallback:
         f_warning = "Open-Meteo Flood API unavailable. Inferred from elevation AMSL and NDMA atlas."
         warnings.append(f_warning)
         f_confidence = "low"

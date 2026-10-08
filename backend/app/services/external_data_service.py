@@ -1,4 +1,5 @@
 import httpx
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Tuple
 from app.utils.geo_utils import get_cardinal_offsets, calculate_synthetic_elevation
 from app.utils.cache_utils import cache
@@ -37,15 +38,20 @@ async def fetch_reverse_geocode(lat: float, lon: float) -> Tuple[str, bool]:
     fallback_name = f"Site Location ({abs(lat):.4f}{'N' if lat>=0 else 'S'}, {abs(lon):.4f}{'E' if lon>=0 else 'W'})"
     return fallback_name, True
 
-async def fetch_elevation_and_slope(lat: float, lon: float) -> Tuple[float, float, bool]:
+async def fetch_elevation_samples(lat: float, lon: float) -> Tuple[Dict[str, float], bool]:
     """
-    Fetches elevation for center and 4 cardinal offset points (30m distance)
-    to calculate true topographic slope.
-    Returns (center_elevation_m, slope_percentage, is_fallback).
+    Fetches real elevation for the center and 4 cardinal
+    offset points (33 m spacing) and returns the full sample set so downstream
+    modules (e.g. Vastu slope reading) consume measured terrain, not the
+    synthetic fallback.
+
+    Returns (samples_dict, is_fallback) where samples_dict keys are
+    center/north/south/east/west (metres AMSL). is_fallback=True means every
+    consumer MUST treat the values as a synthetic mathematical model.
     """
-    cached = cache.get(lat, lon, "elevation_slope")
+    cached = cache.get(lat, lon, "elevation_samples")
     if cached:
-        return cached[0], cached[1], False
+        return cached, False
 
     offsets = get_cardinal_offsets(lat, lon, distance_meters=33.0)
     lats = [offsets["center"][0], offsets["north"][0], offsets["south"][0], offsets["east"][0], offsets["west"][0]]
@@ -61,30 +67,46 @@ async def fetch_elevation_and_slope(lat: float, lon: float) -> Tuple[float, floa
             if resp.status_code == 200:
                 elevations = resp.json().get("elevation", [])
                 if len(elevations) == 5:
-                    h0 = float(elevations[0])
-                    h_n = float(elevations[1])
-                    h_s = float(elevations[2])
-                    h_e = float(elevations[3])
-                    h_w = float(elevations[4])
-
-                    max_dh = max(abs(h_n - h0), abs(h_s - h0), abs(h_e - h0), abs(h_w - h0))
-                    # Slope percentage = (rise / run) * 100
-                    slope_pct = round((max_dh / 33.0) * 100.0, 2)
-                    cache.set(lat, lon, "elevation_slope", (h0, slope_pct))
-                    return h0, slope_pct, False
+                    samples = {
+                        "center": float(elevations[0]),
+                        "north": float(elevations[1]),
+                        "south": float(elevations[2]),
+                        "east": float(elevations[3]),
+                        "west": float(elevations[4]),
+                    }
+                    cache.set(lat, lon, "elevation_samples", samples)
+                    return samples, False
     except Exception:
         pass
 
-    # Mathematical synthetic fallback
-    h0 = calculate_synthetic_elevation(lat, lon)
-    h_n = calculate_synthetic_elevation(offsets["north"][0], offsets["north"][1])
-    h_s = calculate_synthetic_elevation(offsets["south"][0], offsets["south"][1])
-    h_e = calculate_synthetic_elevation(offsets["east"][0], offsets["east"][1])
-    h_w = calculate_synthetic_elevation(offsets["west"][0], offsets["west"][1])
+    # Deterministic synthetic fallback - flagged as such
+    samples = {
+        "center": calculate_synthetic_elevation(lat, lon),
+        "north": calculate_synthetic_elevation(offsets["north"][0], offsets["north"][1]),
+        "south": calculate_synthetic_elevation(offsets["south"][0], offsets["south"][1]),
+        "east": calculate_synthetic_elevation(offsets["east"][0], offsets["east"][1]),
+        "west": calculate_synthetic_elevation(offsets["west"][0], offsets["west"][1]),
+    }
+    return samples, True
 
-    max_dh = max(abs(h_n - h0), abs(h_s - h0), abs(h_e - h0), abs(h_w - h0))
+
+async def fetch_elevation_and_slope(lat: float, lon: float) -> Tuple[float, float, bool]:
+    """
+    Fetches elevation for center and 4 cardinal offset points (33m distance)
+    to calculate true topographic slope.
+    Returns (center_elevation_m, slope_percentage, is_fallback).
+    """
+    samples, is_fallback = await fetch_elevation_samples(lat, lon)
+    h0 = samples["center"]
+    max_dh = max(
+        abs(samples["north"] - h0),
+        abs(samples["south"] - h0),
+        abs(samples["east"] - h0),
+        abs(samples["west"] - h0),
+    )
+    # Slope percentage = (rise / run) * 100
     slope_pct = round((max_dh / 33.0) * 100.0, 2)
-    return h0, slope_pct, True
+    return h0, slope_pct, is_fallback
 
 async def fetch_climate_data(lat: float, lon: float) -> Tuple[Dict[str, float], bool]:
     """
@@ -121,6 +143,26 @@ async def fetch_climate_data(lat: float, lon: float) -> Tuple[Dict[str, float], 
                 avg_max = sum(max_temps) / max(len(max_temps), 1)
                 avg_min = sum(min_temps) / max(len(min_temps), 1)
                 est_annual_precip = sum(precips) * 52.0  # approximate annual mm
+                precip_source = "7day_forecast_extrapolation"
+
+                # Prefer the ERA5 archive's observed
+                # 365-day precipitation total over a 7-day x 52 extrapolation.
+                try:
+                    end_date = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+                    start_date = (datetime.now(timezone.utc) - timedelta(days=366)).strftime("%Y-%m-%d")
+                    archive_url = (
+                        f"https://archive-api.open-meteo.com/v1/archive?latitude={lat:.4f}&longitude={lon:.4f}"
+                        f"&start_date={start_date}&end_date={end_date}&daily=precipitation_sum&timezone=auto"
+                    )
+                    arch_resp = await client.get(archive_url, headers={"User-Agent": USER_AGENT})
+                    if arch_resp.status_code == 200:
+                        arch_daily = arch_resp.json().get("daily", {})
+                        arch_precips = [float(v) for v in arch_daily.get("precipitation_sum", []) if v is not None]
+                        if len(arch_precips) >= 300:
+                            est_annual_precip = round(sum(arch_precips), 1)
+                            precip_source = "era5_observed_365d"
+                except Exception:
+                    pass  # keep extrapolated estimate, source label discloses it
 
                 climate = {
                     "temperature_current_c": round(temp_now, 1),
@@ -128,7 +170,8 @@ async def fetch_climate_data(lat: float, lon: float) -> Tuple[Dict[str, float], 
                     "temperature_min_c": round(avg_min, 1),
                     "wind_direction_deg": round(wind_dir, 1),
                     "wind_speed_kmh": round(wind_speed, 1),
-                    "annual_precipitation_mm": round(est_annual_precip, 1)
+                    "annual_precipitation_mm": round(est_annual_precip, 1),
+                    "annual_precipitation_source": precip_source
                 }
                 cache.set(lat, lon, "climate", climate)
                 return climate, False
@@ -144,6 +187,7 @@ async def fetch_climate_data(lat: float, lon: float) -> Tuple[Dict[str, float], 
         "temperature_min_c": round(22.0 - lat_factor * 22.0, 1),
         "wind_direction_deg": 240.0,  # Southwest monsoon baseline for India
         "wind_speed_kmh": 14.5,
-        "annual_precipitation_mm": 950.0
+        "annual_precipitation_mm": 950.0,
+        "annual_precipitation_source": "latitudinal_synthetic_fallback"
     }
     return fallback_climate, True

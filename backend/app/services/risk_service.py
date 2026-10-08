@@ -6,10 +6,14 @@ def identify_site_risks(
     elevation_m: float,
     climate: dict,
     road_score: float,
-    floors: int
+    floors: int,
+    road_score_measured: bool = True
 ) -> List[RiskItem]:
     """
     Deterministically evaluates specific site risks and generates structured mitigation strategies.
+
+    When road_score_measured is False the road score
+    is a neutral placeholder - no fabricated access risk is emitted.
     """
     risks: List[RiskItem] = []
 
@@ -41,12 +45,25 @@ def identify_site_risks(
 
     # 2. Hydrological & Flood Risk
     annual_precip = climate.get("annual_precipitation_mm", 900.0)
+    # When microclimate telemetry was unavailable the precipitation
+    # figure is a latitudinal model baseline - the risk narrative must disclose
+    # that instead of citing it as if it were gauge-measured data.
+    precip_source = str(climate.get("annual_precipitation_source") or "")
+    climate_is_modelled = precip_source in (
+        "latitudinal_synthetic_fallback",
+        "7day_forecast_extrapolation",
+    )
+    modelled_note = (
+        " Note: precipitation figure is a modelled climate baseline, not gauge-measured telemetry."
+        if climate_is_modelled
+        else ""
+    )
     if elevation_m < 15.0 or annual_precip > 1600.0:
         risks.append(RiskItem(
             severity="high" if elevation_m < 10.0 else "medium",
             category="flood",
             title="Low Invert Elevation & High Precipitation Surcharge",
-            description=f"Elevation of {elevation_m:.0f}m AMSL combined with {annual_precip:.0f}mm precipitation increases localized waterlogging vulnerability.",
+            description=f"Elevation of {elevation_m:.0f}m AMSL combined with {annual_precip:.0f}mm precipitation increases localized waterlogging vulnerability.{modelled_note}",
             mitigation_strategy="Elevate finished plinth level to minimum +750mm above road crown; implement dual sump-pump rainwater evacuation and waterproofing membrane on substructures."
         ))
     else:
@@ -58,8 +75,8 @@ def identify_site_risks(
             mitigation_strategy="Implement standard perimeter recharge pits and rainwater harvesting collection tanks."
         ))
 
-    # 3. Transportation & Accessibility Risk
-    if road_score < 60.0:
+    # 3. Transportation & Accessibility Risk (only from a measured road score)
+    if road_score_measured and road_score < 60.0:
         risks.append(RiskItem(
             severity="high",
             category="access",
@@ -71,11 +88,16 @@ def identify_site_risks(
     # 4. Thermal & Microclimate Risk
     temp_max = climate.get("temperature_max_c", 32.0)
     if temp_max > 36.0:
+        thermal_note = (
+            " Temperature figure is a modelled climate baseline, not station telemetry."
+            if climate_is_modelled
+            else ""
+        )
         risks.append(RiskItem(
             severity="medium",
             category="climate",
             title="Extreme Peak Summer Solar Heat Gain",
-            description=f"Maximum ambient temperature of {temp_max:.1f} deg C will create substantial cooling energy demand on exposed unshaded surfaces.",
+            description=f"Maximum ambient temperature of {temp_max:.1f} deg C will create substantial cooling energy demand on exposed unshaded surfaces.{thermal_note}",
             mitigation_strategy="Apply high-albedo reflective roof coatings (SRI > 78); specify AAC block walling (U-value < 0.6 W/m2K) and double-glazed low-E windows on West/East facades."
         ))
 

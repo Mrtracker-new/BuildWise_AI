@@ -1,6 +1,7 @@
 import math
-from typing import List, Tuple
+from typing import Any, List, Optional, Tuple
 from app.schemas.response import FactorScore
+
 
 def calculate_slope_score(slope_pct: float) -> Tuple[float, str, str]:
     """
@@ -29,48 +30,114 @@ def calculate_slope_score(slope_pct: float) -> Tuple[float, str, str]:
 
     return round(score, 1), status, details
 
-def calculate_flood_score(elevation_m: float, annual_precip_mm: float) -> Tuple[float, str, str]:
+
+def calculate_flood_score(
+    elevation_m: float,
+    annual_precip_mm: float,
+    flood_profile: Optional[Any] = None
+) -> Tuple[float, str, str]:
     """
     Computes hydrological flood risk approximation score (0-100), status, and description.
+
+    When a hazard-module FloodProfile is supplied, the
+    river-discharge / NDMA pressure level is fused with the elevation/precip
+    proxy so the report carries ONE consistent flood signal (conservative: the
+    worse of the two signals governs).
     """
     # Coastal or extreme low-lying penalty (< 10m AMSL)
     elevation_penalty = max(0.0, (15.0 - elevation_m) * 2.5) if elevation_m < 15.0 else 0.0
     precip_penalty = max(0.0, (annual_precip_mm - 1200.0) * 0.02)
-    
+
     score = max(15.0, min(100.0, 95.0 - elevation_penalty - precip_penalty))
-    
+    source_note = "terrain elevation and rainfall proxy"
+
+    if flood_profile is not None:
+        level = getattr(flood_profile, "pressure_level", None)
+        if level is None and isinstance(flood_profile, dict):
+            level = flood_profile.get("pressure_level")
+        if level in ("low", "moderate", "high"):
+            pressure_score = {"low": 85.0, "moderate": 55.0, "high": 30.0}[level]
+            score = min(score, pressure_score)
+            if level == "high":
+                source_note = "river discharge telemetry / NDMA atlas (HIGH flood pressure)"
+            elif level == "moderate":
+                source_note = "river discharge telemetry / NDMA atlas (moderate flood pressure)"
+            else:
+                source_note = "river discharge telemetry / NDMA atlas (low flood pressure)"
+
     if score >= 75.0:
         status = "optimal"
-        details = f"Favorable elevation ({elevation_m:.0f}m AMSL) with controlled surface runoff vulnerability."
+        details = f"Favorable elevation ({elevation_m:.0f}m AMSL) with controlled surface runoff vulnerability ({source_note})."
     elif score >= 50.0:
         status = "acceptable"
-        details = f"Moderate elevation ({elevation_m:.0f}m AMSL) and {annual_precip_mm:.0f}mm rainfall require plinth height elevation (+600mm) and perimeter swales."
+        details = (
+            f"Moderate elevation ({elevation_m:.0f}m AMSL) and {annual_precip_mm:.0f}mm rainfall require plinth height "
+            f"elevation (+600mm) and perimeter swales ({source_note})."
+        )
     else:
         status = "critical"
-        details = f"Low elevation ({elevation_m:.0f}m AMSL) subject to waterlogging risk during peak precipitation ({annual_precip_mm:.0f}mm/yr)."
+        details = (
+            f"Elevated flood vulnerability: low elevation ({elevation_m:.0f}m AMSL), {annual_precip_mm:.0f}mm/yr rainfall, "
+            f"{source_note}."
+        )
 
     return round(score, 1), status, details
 
-def calculate_road_score(lat: float, lon: float) -> Tuple[float, str, str]:
-    """
-    Computes road accessibility score (0-100) based on spatial density proxy.
-    """
-    # Deterministic spatial infrastructure proxy
-    # In urban centers (higher population density bands), score is high
-    dense_factor = (math.sin(lat * 1.5) ** 2 + math.cos(lon * 1.5) ** 2) / 2.0
-    score = round(65.0 + dense_factor * 30.0, 1)
-    
-    if score >= 80.0:
-        status = "optimal"
-        details = "Direct access to paved arterial/secondary roadway infrastructure within 200m."
-    elif score >= 60.0:
-        status = "acceptable"
-        details = "Connected via secondary or local street network. Heavy construction vehicle access feasible."
-    else:
-        status = "critical"
-        details = "Restricted road connectivity. May require site access track grading for material haulage."
 
-    return score, status, details
+def calculate_road_access_score(
+    road_distance_m: Optional[float],
+    road_service_available: bool
+) -> Tuple[float, str, str, Optional[float]]:
+    """
+    Road accessibility is scored from the real
+    OpenStreetMap/Overpass distance to the nearest mapped road (500 m query
+    radius) instead of a coordinate trigonometry proxy.
+
+    Returns (score, status, details, raw_value_meters).
+    - road_service_available=False  -> honest 'unknown' neutral score (50),
+      never a fabricated claim.
+    - available but no mapped road within 500 m -> explicit critical status.
+    """
+    if not road_service_available:
+        return (
+            50.0,
+            "unknown",
+            "Road access not measured (OpenStreetMap road service unavailable). "
+            "Neutral score applied; verify physical access manually.",
+            None,
+        )
+
+    if road_distance_m is None:
+        return (
+            35.0,
+            "critical",
+            "No mapped road within 500 m in OpenStreetMap. Restricted connectivity - "
+            "confirm physical site access and haulage route manually.",
+            None,
+        )
+
+    d = float(road_distance_m)
+    if d <= 50.0:
+        score, status = 90.0, "optimal"
+    elif d <= 100.0:
+        score, status = 80.0, "optimal"
+    elif d <= 250.0:
+        score, status = 70.0, "acceptable"
+    else:
+        score, status = 55.0, "acceptable"
+
+    return (
+        score,
+        status,
+        f"Nearest mapped road (OpenStreetMap) is {d:.0f} m from the site pin. "
+        + (
+            "Direct frontage access feasible for construction vehicle movement."
+            if d <= 100.0
+            else "Internal approach road/track may be required for heavy vehicle access."
+        ),
+        round(d, 1),
+    )
+
 
 def calculate_environmental_comfort_score(climate: dict) -> Tuple[float, str, str]:
     """
@@ -98,40 +165,57 @@ def calculate_environmental_comfort_score(climate: dict) -> Tuple[float, str, st
 
     return round(score, 1), status, details
 
+
 def calculate_facility_score(lat: float, lon: float) -> Tuple[float, str, str]:
     """
     Computes proximity to municipal utilities and civic services (0-100).
+
+    This remains a DETERMINISTIC MODELLED PROXY (no
+    municipal-utility dataset is integrated yet). It is explicitly labelled as
+    a proxy, its weight is reduced (0.10), and it never emits factual claims
+    about specific infrastructure being present.
     """
     utility_factor = (math.sin(lat * 0.8 + 1.2) ** 2 + math.cos(lon * 0.8 - 0.4) ** 2) / 2.0
     score = round(60.0 + utility_factor * 35.0, 1)
 
+    proxy_prefix = "Modelled proxy index (not a measured survey): "
     if score >= 80.0:
         status = "optimal"
-        details = "Municipal electrical grid, water supply mains, and civic services proximate."
+        details = proxy_prefix + (
+            "Locality model suggests municipal electrical grid, water supply mains, and civic services are likely proximate. "
+            "Verify with the local authority."
+        )
     elif score >= 60.0:
         status = "acceptable"
-        details = "Suburban infrastructure zone. Utility lines available; on-site stormwater soakway and septic connection required."
+        details = proxy_prefix + (
+            "Locality model suggests a suburban infrastructure zone; utility lines likely available but on-site stormwater "
+            "soakway and septic connection may be required. Verify with the local authority."
+        )
     else:
         status = "critical"
-        details = "Developing peripheral zone. Independent borewell, rainwater harvesting, and off-grid power provisions recommended."
+        details = proxy_prefix + (
+            "Locality model suggests a developing peripheral zone; independent borewell, rainwater harvesting, and off-grid "
+            "power provisions may be required. Verify with the local authority."
+        )
 
     return score, status, details
+
 
 def evaluate_land_suitability(
     lat: float,
     lon: float,
     elevation_m: float,
     slope_pct: float,
-    climate: dict
+    climate: dict,
+    road_distance_m: Optional[float] = None,
+    road_service_available: bool = False,
+    flood_profile: Optional[Any] = None
 ) -> Tuple[float, str, List[FactorScore]]:
     """
     Executes full Multi-Criteria Decision Analysis (MCDA) across 5 standard engineering factors.
     Weights:
-      Slope: 25%
-      Flood Risk: 20%
-      Road Access: 20%
-      Environmental Comfort: 15%
-      Facility Proximity: 20%
+      Slope: 25% | Flood Risk: 20% | Road Access: 25% (real OSM distance)
+      Environmental Comfort: 20% | Facility Proximity: 10% (modelled proxy)
     """
     # 1. Slope
     s_score, s_status, s_details = calculate_slope_score(slope_pct)
@@ -146,11 +230,13 @@ def evaluate_land_suitability(
         details=s_details
     )
 
-    # 2. Flood Risk
-    f_score, f_status, f_details = calculate_flood_score(elevation_m, climate.get("annual_precipitation_mm", 900.0))
+    # 2. Flood Risk (unified with hazard-module FloodProfile when supplied)
+    f_score, f_status, f_details = calculate_flood_score(
+        elevation_m, climate.get("annual_precipitation_mm", 900.0), flood_profile=flood_profile
+    )
     factor_flood = FactorScore(
         factor_id="flood_risk",
-        name="Flood Risk Approximation",
+        name="Flood Risk Assessment",
         weight=0.20,
         raw_value=round(elevation_m, 1),
         unit="m AMSL",
@@ -159,14 +245,14 @@ def evaluate_land_suitability(
         details=f_details
     )
 
-    # 3. Road Access
-    r_score, r_status, r_details = calculate_road_score(lat, lon)
+    # 3. Road Access (real Overpass distance; honest unknown state)
+    r_score, r_status, r_details, r_raw = calculate_road_access_score(road_distance_m, road_service_available)
     factor_road = FactorScore(
         factor_id="road_access",
         name="Road Accessibility",
-        weight=0.20,
-        raw_value=round(100.0 + (100.0 - r_score) * 4.0, 0),
-        unit="m distance",
+        weight=0.25,
+        raw_value=r_raw,
+        unit="m distance" if r_raw is not None else "not measured",
         score=r_score,
         status=r_status,
         details=r_details
@@ -177,7 +263,7 @@ def evaluate_land_suitability(
     factor_env = FactorScore(
         factor_id="environmental_comfort",
         name="Environmental Comfort",
-        weight=0.15,
+        weight=0.20,
         raw_value=climate.get("temperature_max_c", 32.0),
         unit="deg C peak",
         score=e_score,
@@ -185,14 +271,14 @@ def evaluate_land_suitability(
         details=e_details
     )
 
-    # 5. Facility Proximity
+    # 5. Facility Proximity (modelled proxy, honestly labelled, reduced weight)
     p_score, p_status, p_details = calculate_facility_score(lat, lon)
     factor_facility = FactorScore(
         factor_id="facility_proximity",
-        name="Proximity to Facilities",
-        weight=0.20,
+        name="Proximity to Facilities (Modelled Proxy)",
+        weight=0.10,
         raw_value=p_score,
-        unit="index (0-100)",
+        unit="modelled index (0-100)",
         score=p_score,
         status=p_status,
         details=p_details

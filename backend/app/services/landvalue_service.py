@@ -138,7 +138,17 @@ def calculate_land_value(
         as_of_year = matched_entry.get("effective_year", 2024)
         jurisdiction = matched_entry.get("zone_label")
         source_pub = matched_entry.get("publication_source")
-        conf_warning = None
+        # Disclose rate-table staleness so an old
+        # circle rate is never presented as current-market guidance.
+        current_year = datetime.now(timezone.utc).year
+        rate_year = as_of_year if isinstance(as_of_year, int) else current_year
+        if current_year - rate_year >= 2:
+            conf_warning = (
+                f"Guidance rate is effective {rate_year} and may be stale relative to current market. "
+                "Verify the latest sub-registrar guidance value before financial decisions."
+            )
+        else:
+            conf_warning = None
     else:
         # Table miss without override -> return null rate with confidence warning (Amendment 8)
         base_table_rate = None

@@ -1304,6 +1304,43 @@ def generate_pdf_report(
     story.append(top_band)
     story.append(Spacer(1, 10))
 
+    # -------------------------------------------------------------------------
+    # DEGRADED-MODE WARNING BANNER: degradation notices collected
+    # during analysis are surfaced as a visible amber banner near the top of the
+    # PDF - they must never be buried in appendix prose or dropped entirely.
+    # -------------------------------------------------------------------------
+    pdf_warnings = [str(w).strip() for w in (data.get("warnings") or []) if str(w).strip()]
+    if pdf_warnings or bool(data.get("degraded_mode")):
+        banner_style = ParagraphStyle(
+            'DegradedBanner',
+            fontName=FONT_REGULAR,
+            fontSize=8.5,
+            leading=12.5,
+            textColor=COLOR_TEXT_PRIMARY,
+            alignment=0
+        )
+        items_html = "".join(f"<br/>• {html.escape(w)}" for w in pdf_warnings)
+        if not items_html:
+            items_html = "<br/>• One or more telemetry services were unreachable; deterministic fallback models were applied."
+        banner_p = Paragraph(
+            f'<font color="{COLOR_AMBER_TEXT.hexval()}"><b>DATA DEGRADATION NOTICE — read before relying on figures</b></font>'
+            f'{items_html}',
+            banner_style
+        )
+        banner_tbl = Table([[banner_p]], colWidths=[CONTENT_WIDTH_PT])
+        banner_tbl.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), COLOR_AMBER_TINT),
+            ('ROUNDEDCORNERS', [6, 6, 6, 6]),
+            ('LINEBEFORE', (0, 0), (0, -1), 2.0, COLOR_AMBER_BORDER),
+            ('TOPPADDING', (0, 0), (-1, -1), 7.0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 7.0),
+            ('LEFTPADDING', (0, 0), (-1, -1), 10.0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8.0),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        story.append(banner_tbl)
+        story.append(Spacer(1, 8))
+
     if not is_dossier_only:
         # -------------------------------------------------------------------------
         # PAGE 1: HERO BAND (SCORE & 2x2 SPEC GRID)
@@ -1409,22 +1446,34 @@ def generate_pdf_report(
         factor_rows = [factor_headers]
 
         for f in (data.get("factors") or []):
-            st = str(f.get("status") or "Optimal").capitalize()
+            status_raw = str(f.get("status") or "optimal")
+            st = status_raw.replace("_", " ").capitalize()
             weight_val = _safe_float(f.get("weight"), 0.0)
             score_val = _safe_float(f.get("score"), 0.0)
-            raw_val = f.get("raw_value") if f.get("raw_value") is not None else 0
+            raw_val = f.get("raw_value")
+            unit_str = str(f.get("unit", "") or "")
 
-            if score_val >= 75:
+            # Unmeasured factors (status 'unknown' / raw_value null)
+            # render as a neutral gray "Unknown" pill and "Not measured" field
+            # value - never a fabricated 0 or a green/amber/red severity color.
+            if status_raw == "unknown" or raw_val is None:
+                pill = make_pill(st, COLOR_BG_SUBTLE, COLOR_TEXT_SECONDARY, width=65)
+            elif score_val >= 75:
                 pill = make_pill(st, COLOR_GREEN_TINT, COLOR_GREEN_TEXT, width=65)
             elif score_val >= 50:
                 pill = make_pill(st, COLOR_AMBER_TINT, COLOR_AMBER_TEXT, width=65)
             else:
                 pill = make_pill(st, COLOR_RED_TINT, COLOR_RED_TEXT, width=65)
 
+            field_value_text = (
+                "<i>Not measured</i>" if raw_val is None
+                else f"{html.escape(str(raw_val))} {html.escape(unit_str)}"
+            )
+
             factor_rows.append([
                 Paragraph(f"<b>{html.escape(str(f.get('name', '')))}</b>", table_text),
                 Paragraph(f"{weight_val*100:.0f}%", table_num),
-                Paragraph(f"{html.escape(str(raw_val))} {html.escape(str(f.get('unit', '')))}", table_text),
+                Paragraph(field_value_text, table_text),
                 Paragraph(f"{score_val:.1f}/100", table_num),
                 pill,
                 Paragraph(html.escape(str(f.get("details", ""))), table_text)

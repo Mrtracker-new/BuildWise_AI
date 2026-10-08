@@ -31,7 +31,22 @@ def generate_recommendations(
 
     # 1. Structural & Seismic Safety (STR)
     seismic = hazard_profile.seismic
-    if seismic.zone in ["Zone IV", "Zone V"]:
+    if seismic.zone is None:
+        # Jurisdiction outside IS 1893 coverage.
+        items.append(RecommendationItem(
+            category="structure",
+            category_label="Structural & Seismic Engineering",
+            severity="advisory",
+            rule_id="STR-000",
+            trigger_condition="Seismic zone not assessed (site outside IS 1893:2016 mapping extent)",
+            source_data_ref="IS 1893:2016 Jurisdiction Extent Gate",
+            recommendation_text=(
+                "No seismic zone was assigned because the site coordinates are outside the IS 1893:2016 (India) "
+                "mapping extent. Engage the governing national seismic code for the site jurisdiction and commission "
+                "a licensed structural engineer before any design work."
+            )
+        ))
+    elif seismic.zone in ["Zone IV", "Zone V"]:
         items.append(RecommendationItem(
             category="structure",
             category_label="Structural & Seismic Engineering",

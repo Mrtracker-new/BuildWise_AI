@@ -65,13 +65,23 @@ _overpass_last_call: float = 0.0
 
 
 async def _overpass_throttle() -> None:
-    """Ensures at most 1 Overpass call per second (shared across the app)."""
+    """
+    Ensures at most 1 Overpass call per second (shared across the app).
+
+    The steady-state wait happens OUTSIDE the lock so
+    concurrent callers do not serialize behind a sleep; the lock only guards
+    the timestamp stamp itself (with a final re-check for racing callers).
+    """
     global _overpass_last_call
+    now = time.monotonic()
+    wait = _RATE_INTERVAL - (now - _overpass_last_call)
+    if wait > 0:
+        await asyncio.sleep(wait)
+
     async with _overpass_lock:
         now = time.monotonic()
-        wait = _RATE_INTERVAL - (now - _overpass_last_call)
-        if wait > 0:
-            await asyncio.sleep(wait)
+        if now - _overpass_last_call < _RATE_INTERVAL:
+            await asyncio.sleep(_RATE_INTERVAL - (now - _overpass_last_call))
         _overpass_last_call = time.monotonic()
 
 

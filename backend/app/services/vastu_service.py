@@ -81,20 +81,37 @@ async def fetch_nearest_road_approach(lat: float, lon: float) -> Tuple[RoadAppro
 def compute_slope_reading(
     elevation_m: float,
     lat: float,
-    lon: float
+    lon: float,
+    elevation_samples: Optional[Dict[str, float]] = None
 ) -> SlopeReading:
     """
     Computes topographic downhill drainage aspect using cardinal elevation samples.
+
+    When real elevation samples (from
+    fetch_elevation_samples) are supplied they govern the gradient; otherwise
+    the synthetic terrain model is used and the reading is explicitly labelled
+    as SYNTHETIC so it is never mistaken for measured terrain.
     """
     offsets = get_cardinal_offsets(lat, lon, distance_meters=33.0)
-    # Estimate gradient using synthetic/cached elevation differentials
-    # d_lat = h_north - h_south; d_lon = h_east - h_west
-    from app.utils.geo_utils import calculate_synthetic_elevation
-    h0 = calculate_synthetic_elevation(lat, lon)
-    h_n = calculate_synthetic_elevation(offsets["north"][0], offsets["north"][1])
-    h_s = calculate_synthetic_elevation(offsets["south"][0], offsets["south"][1])
-    h_e = calculate_synthetic_elevation(offsets["east"][0], offsets["east"][1])
-    h_w = calculate_synthetic_elevation(offsets["west"][0], offsets["west"][1])
+
+    synthetic = True
+    if (
+        isinstance(elevation_samples, dict)
+        and all(k in elevation_samples for k in ("center", "north", "south", "east", "west"))
+    ):
+        h0 = float(elevation_samples["center"])
+        h_n = float(elevation_samples["north"])
+        h_s = float(elevation_samples["south"])
+        h_e = float(elevation_samples["east"])
+        h_w = float(elevation_samples["west"])
+        synthetic = False
+    else:
+        from app.utils.geo_utils import calculate_synthetic_elevation
+        h0 = calculate_synthetic_elevation(lat, lon)
+        h_n = calculate_synthetic_elevation(offsets["north"][0], offsets["north"][1])
+        h_s = calculate_synthetic_elevation(offsets["south"][0], offsets["south"][1])
+        h_e = calculate_synthetic_elevation(offsets["east"][0], offsets["east"][1])
+        h_w = calculate_synthetic_elevation(offsets["west"][0], offsets["west"][1])
 
     d_lat = h_n - h_s
     d_lon = h_e - h_w
@@ -117,6 +134,9 @@ def compute_slope_reading(
 
     status = rule.get("status", "neutral")
     desc = rule.get("description", "")
+    if synthetic:
+        desc = ("SYNTHETIC TERRAIN MODEL (live elevation service unavailable; not a measured survey): "
+                + desc)
     remedy = None
 
     if status == "requires_remedy":
@@ -200,7 +220,8 @@ def rank_entrances(
 async def evaluate_vastu_advisory(
     lat: float,
     lon: float,
-    elevation_m: float
+    elevation_m: float,
+    elevation_samples: Optional[Dict[str, float]] = None
 ) -> Tuple[VastuAdvisory, List[str]]:
     """
     Generates deterministic Vastu and functional planning advisory.
@@ -221,8 +242,8 @@ async def evaluate_vastu_advisory(
     room_grid_data = table.get("room_grid", [])
     room_grid = [RoomGridZone(**zone) for zone in room_grid_data]
 
-    # 4. Slope Reading
-    slope_reading = compute_slope_reading(elevation_m, lat, lon)
+    # 4. Slope Reading (real elevation samples when available)
+    slope_reading = compute_slope_reading(elevation_m, lat, lon, elevation_samples=elevation_samples)
 
     # 5. Reconciliation Notes
     recon_data = table.get("reconciliation_principles", [])

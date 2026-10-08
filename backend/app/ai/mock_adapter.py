@@ -38,8 +38,9 @@ class MockExplanationAdapter(BaseExplanationAdapter):
         # Module 1 Hazard data
         hazard = analysis_data.get("hazard_profile", {})
         seismic = hazard.get("seismic", {})
-        seismic_zone = seismic.get("zone", "Zone III")
-        seismic_factor = seismic.get("zone_factor", 0.16)
+        # Zone may be None ("Not Assessed") outside India
+        seismic_zone = seismic.get("zone") or "Not Assessed (outside IS 1893 extent)"
+        seismic_factor = seismic.get("zone_factor") or 0.0
         flood_prof = hazard.get("flood", {})
         flood_pressure = flood_prof.get("pressure_level", "low").upper()
         storm_prof = hazard.get("storm_cyclone", {})
