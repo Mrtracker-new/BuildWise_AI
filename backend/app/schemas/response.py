@@ -5,7 +5,9 @@ class FactorScore(BaseModel):
     factor_id: str
     name: str
     weight: float
-    raw_value: float
+    # None when the factor could not be measured
+    # (e.g. road distance unavailable) - never a fabricated raw value.
+    raw_value: Optional[float] = None
     unit: str
     score: float  # 0 to 100
     status: str   # optimal, acceptable, critical
@@ -52,8 +54,11 @@ class SeismicEvent(BaseModel):
     place: str
 
 class SeismicProfile(BaseModel):
-    zone: str  # "Zone II", "Zone III", "Zone IV", "Zone V"
-    zone_factor: float  # 0.10, 0.16, 0.24, 0.36
+    # zone/zone_factor are None when the site is
+    # outside the IS 1893:2016 (India) mapping extent - "Not Assessed", never a
+    # fabricated default zone.
+    zone: Optional[str]  # "Zone II".."Zone V", or None when not assessed
+    zone_factor: Optional[float]  # 0.10, 0.16, 0.24, 0.36, or None
     standard: str  # "BIS IS 1893:2016"
     district: str
     event_count_50yr_250km: int

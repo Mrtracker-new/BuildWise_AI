@@ -545,3 +545,115 @@ def test_generate_floorplan_pdf_streaming(mock_external_http):
     assert "Sheet 10.1" in rep_text
     assert "100% Locked" in rep_text or "Vertical Cores Locked" in rep_text
 
+
+def test_llm_metadata_cannot_override_deterministic_scores(mock_external_http):
+    """
+    AI adapters narrate only. A malicious/hallucinating
+    LLM metadata block must never change feasibility_score, cost_breakdown, or
+    vastu_compliance - those fields always mirror the deterministic engines.
+    """
+    resp = client.post("/api/analyze", json={
+        "latitude": 12.9716,
+        "longitude": 77.5946,
+        "built_up_area_sqft": 2000.0,
+        "quality_grade": "standard",
+        "floors": 1,
+        "ai_provider": "mock"
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+
+    # feasibility_score must equal the deterministic MCDA score
+    assert data["feasibility_score"] == int(round(data["overall_suitability_score"]))
+
+    # cost/vastu blocks must equal the deterministic engines
+    assert data["cost_breakdown"] == data["cost_estimate"]
+    assert data["vastu_compliance"] == data["vastu_advisory"]
+
+
+def test_analyze_rejects_self_intersecting_boundary(mock_external_http):
+    """Bow-tie polygons are rejected (422), not silently accepted."""
+    payload = {
+        "latitude": 12.9716,
+        "longitude": 77.5946,
+        "built_up_area_sqft": 1500.0,
+        "quality_grade": "standard",
+        "floors": 1,
+        "ai_provider": "mock",
+        "boundary": {
+            # Asymmetric bow-tie: shoelace area is 150 m2 (>= 36), all edges
+            # >= 1 m, but the outline genuinely crosses itself.
+            "vertices": [
+                {"x": 0.0, "y": 0.0},
+                {"x": 30.0, "y": 10.0},
+                {"x": 30.0, "y": 0.0},
+                {"x": 0.0, "y": 20.0},
+            ],
+            "origin_lat": 12.9716,
+            "origin_lon": 77.5946,
+            "shape_type": "irregular",
+            "area_sqm": 150.0,
+            "perimeter_m": 97.7,
+            "source": "trace",
+            "frontage_edge_index": None,
+        },
+    }
+    resp = client.post("/api/analyze", json=payload)
+    assert resp.status_code == 422
+    assert "self-intersecting" in resp.json()["detail"]
+
+
+def test_report_endpoint_rejects_invalid_payload(mock_external_http):
+    """/api/report validates payload structure instead of rendering garbage."""
+    # Non-numeric latitude in coordinates
+    resp1 = client.post("/api/report", json={
+        "analysis_data": {
+            "coordinates": {"latitude": "12.5; DROP TABLE", "longitude": 77.59},
+            "overall_suitability_score": 80.0,
+        }
+    })
+    assert resp1.status_code == 422
+
+    # Non-numeric overall_suitability_score
+    resp2 = client.post("/api/report", json={
+        "analysis_data": {
+            "coordinates": {"latitude": 12.5, "longitude": 77.59},
+            "overall_suitability_score": "excellent",
+        }
+    })
+    assert resp2.status_code == 422
+
+    # Out-of-range latitude
+    resp3 = client.post("/api/report", json={
+        "analysis_data": {
+            "coordinates": {"latitude": 999.0, "longitude": 77.59},
+            "overall_suitability_score": 80.0,
+        }
+    })
+    assert resp3.status_code == 422
+
+    # Non-object analysis_data
+    resp4 = client.post("/api/report", json={"analysis_data": [1, 2, 3]})
+    assert resp4.status_code == 422
+
+
+def test_rate_limiter_prunes_idle_ips():
+    """Idle IP buckets are removed so the history map cannot grow unboundedly."""
+    from app.main import check_rate_limit, _client_request_history, _LAST_HISTORY_PRUNE
+
+    target_ip = "98.76.54.32"
+    idle_ip = "11.22.33.44"
+    # Reset the prune gate so this test's call definitely sweeps
+    _LAST_HISTORY_PRUNE[0] = 0.0
+    # Age both buckets beyond the window
+    _client_request_history[target_ip] = [time.time() - 3600.0]
+    _client_request_history[idle_ip] = [time.time() - 3600.0]
+
+    check_rate_limit(target_ip)  # triggers global prune, then a fresh visit
+
+    # The unrelated idle bucket must be gone entirely
+    assert idle_ip not in _client_request_history
+    # The target bucket was re-created by the fresh visit (only fresh timestamps)
+    fresh = _client_request_history[target_ip]
+    assert fresh and all(time.time() - t < 60.0 for t in fresh)
+

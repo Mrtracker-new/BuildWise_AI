@@ -6,11 +6,13 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from typing import Optional
 from pydantic import BaseModel, ValidationError
 
 from app.config import settings
+
+from app.utils.geo_utils import polygon_is_self_intersecting
 
 logger = logging.getLogger(__name__)
 from app.schemas.request import AnalysisRequest, ReportRequest
@@ -47,6 +49,8 @@ from app.services import (
 
 from app.ai import get_ai_adapter, generate_room_program
 from app.services.geocode_service import geocode_search
+from app.services.external_data_service import fetch_elevation_samples
+from app.services.road_service import fetch_nearest_road
 from app.schemas.site_intelligence import (
     NearestRoadResponse,
     RoadHit,
@@ -83,13 +87,51 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Reject oversized request bodies early - the PDF
+# and floorplan endpoints accept large nested JSON payloads, and unbounded
+# bodies are a memory-exhaustion vector.
+MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
+
+@app.middleware("http")
+async def limit_request_body_size(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > MAX_REQUEST_BODY_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": f"Request body too large ({content_length} bytes; limit {MAX_REQUEST_BODY_BYTES} bytes)."},
+        )
+    return await call_next(request)
+
 # Sliding window in-memory rate limiter: 30 requests per 60 seconds per IP
 RATE_LIMIT_WINDOW_SEC = 60.0
 RATE_LIMIT_MAX_REQUESTS = 30
 _client_request_history = defaultdict(list)
 
+# Global sweep removes idle IP buckets so the
+# in-memory history maps cannot grow without bound under IP scanning.
+_LAST_HISTORY_PRUNE = [0.0]
+
+def _prune_rate_histories(now: float) -> None:
+    if now - _LAST_HISTORY_PRUNE[0] < 60.0:
+        return
+    _LAST_HISTORY_PRUNE[0] = now
+    for store in (_client_request_history, _proxy_request_history):
+        idle = [ip for ip, ts in store.items() if not ts or now - ts[-1] >= RATE_LIMIT_WINDOW_SEC]
+        for ip in idle:
+            store.pop(ip, None)
+
+def _client_ip(request: Request) -> str:
+    """Client IP with X-Forwarded-For support for deployments behind a proxy."""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        first = xff.split(",")[0].strip()
+        if first:
+            return first
+    return request.client.host if request.client else "127.0.0.1"
+
 def check_rate_limit(client_ip: str):
     now = time.time()
+    _prune_rate_histories(now)
     timestamps = _client_request_history[client_ip]
     # Prune timestamps older than window
     _client_request_history[client_ip] = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW_SEC]
@@ -108,6 +150,7 @@ _proxy_request_history = defaultdict(list)
 
 def check_proxy_rate_limit(client_ip: str):
     now = time.time()
+    _prune_rate_histories(now)
     timestamps = _proxy_request_history[client_ip]
     _proxy_request_history[client_ip] = [t for t in timestamps if now - t < PROXY_RATE_LIMIT_WINDOW_SEC]
     if len(_proxy_request_history[client_ip]) >= PROXY_RATE_LIMIT_MAX_REQUESTS:
@@ -180,7 +223,7 @@ async def nearest_road_endpoint(request: Request, lat: float = Query(..., ge=-90
       user-facing warning and the frontage stays manual (ASSUMED annotation).
     - Attribution: © OpenStreetMap contributors (Overpass API).
     """
-    client_ip = request.client.host if request.client else "127.0.0.1"
+    client_ip = _client_ip(request)
     check_proxy_rate_limit(client_ip)
     request_id = f"BW-NR-{uuid.uuid4().hex[:8].upper()}"
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -236,7 +279,7 @@ async def analyze_site(req: AnalysisRequest, request: Request):
     CPWD construction cost estimation, risk synthesis, hazard profiling,
     indicative circle rate land valuation, Vastu advisory, and traceable engineering recommendations.
     """
-    client_ip = request.client.host if request.client else "127.0.0.1"
+    client_ip = _client_ip(request)
     check_rate_limit(client_ip)
     request_id = f"BW-{uuid.uuid4().hex[:8].upper()}"
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -265,6 +308,15 @@ async def analyze_site(req: AnalysisRequest, request: Request):
         )
         if min_edge < 1.0:
             raise HTTPException(status_code=422, detail=f"Boundary edge {min_edge:.2f} m is below the statutory minimum 1.00 m.")
+        # Reject bow-tie/self-intersecting outlines -
+        # the shoelace formula yields a meaningless area for them, which would
+        # silently corrupt plot area, land value, and footprint calculations.
+        verts_xy = [(v.x, v.y) for v in b.vertices]
+        if polygon_is_self_intersecting(verts_xy):
+            raise HTTPException(
+                status_code=422,
+                detail="Boundary polygon is self-intersecting (bow-tie outline). Re-capture a simple, non-crossing plot boundary.",
+            )
         boundary_summary = {
             "vertex_count": n,
             "area_sqm": area,
@@ -293,18 +345,57 @@ async def analyze_site(req: AnalysisRequest, request: Request):
         warnings.append("Topographic elevation service unreachable. Synthetic contour gradient applied.")
         is_degraded = True
 
+    # Real cardinal elevation samples (cache hit after
+    # the call above) are threaded into the Vastu slope reading.
+    elevation_samples, _samples_fallback = await fetch_elevation_samples(req.latitude, req.longitude)
+
     climate, climate_fallback = await fetch_climate_data(req.latitude, req.longitude)
     if climate_fallback:
         warnings.append("Microclimate telemetry unavailable. Latitudinal climate averages applied.")
         is_degraded = True
+    elif climate.get("annual_precipitation_source") == "7day_forecast_extrapolation":
+        # Disclose the quality of the rainfall estimate
+        warnings.append(
+            "Annual rainfall estimated from a short forecast window; verify against "
+            "IMD climatological normals before design decisions."
+        )
 
-    # 2. Deterministic calculations (MCDA, orientation, CPWD costs, risks)
+    # 1b. Real nearest-road measurement for the MCDA road factor.
+    # Shared Overpass service; result also feeds the Vastu approach cache.
+    road_result, _road_cache_hit, road_warning = await fetch_nearest_road(req.latitude, req.longitude)
+    if not road_result["is_fallback"]:
+        road_service_available = True
+        road_distance_m = road_result["distance_meters"]
+    else:
+        # Overpass reachable but no road within 500 m is still a real answer
+        road_service_available = "No mapped road" in (road_warning or "")
+        road_distance_m = None
+
+    # 2. Module 1: Hazard History & Climate Stress Profile (moved ahead of MCDA
+    # so the river-discharge flood signal can be fused into the suitability
+    # flood factor)
+    hazard_profile, hazard_warnings = await evaluate_hazard_profile(
+        lat=req.latitude,
+        lon=req.longitude,
+        elevation_m=elevation_m,
+        address=address
+    )
+    for w in hazard_warnings:
+        if w not in warnings:
+            warnings.append(w)
+    if any("unreachable" in w.lower() or "unavailable" in w.lower() for w in hazard_warnings):
+        is_degraded = True
+
+    # 3. Deterministic calculations (MCDA, orientation, CPWD costs, risks)
     overall_score, verdict, factors = evaluate_land_suitability(
         lat=req.latitude,
         lon=req.longitude,
         elevation_m=elevation_m,
         slope_pct=slope_pct,
-        climate=climate
+        climate=climate,
+        road_distance_m=road_distance_m,
+        road_service_available=road_service_available,
+        flood_profile=hazard_profile.flood
     )
 
     orientation = calculate_building_orientation(
@@ -319,9 +410,13 @@ async def analyze_site(req: AnalysisRequest, request: Request):
         floors=req.floors
     )
 
-    # Road and facility scores from factors
+    # Road and facility scores from factors: an unmeasured road
+    # factor carries a neutral 70.0 into the locality multiplier instead of
+    # an unknown score, and never triggers a fabricated access risk.
     road_factor = next((f for f in factors if f.factor_id == "road_access"), None)
+    road_measured = road_factor is not None and road_factor.status != "unknown"
     road_score = road_factor.score if road_factor else 75.0
+    road_score_for_value = road_score if road_measured else 70.0
 
     facility_factor = next((f for f in factors if f.factor_id == "facility_proximity"), None)
     facility_score = facility_factor.score if facility_factor else 75.0
@@ -331,28 +426,16 @@ async def analyze_site(req: AnalysisRequest, request: Request):
         elevation_m=elevation_m,
         climate=climate,
         road_score=road_score,
-        floors=req.floors
+        floors=req.floors,
+        road_score_measured=road_measured
     )
-
-    # 3. Module 1: Hazard History & Climate Stress Profile
-    hazard_profile, hazard_warnings = await evaluate_hazard_profile(
-        lat=req.latitude,
-        lon=req.longitude,
-        elevation_m=elevation_m,
-        address=address
-    )
-    for w in hazard_warnings:
-        if w not in warnings:
-            warnings.append(w)
-    if any("unreachable" in w.lower() or "unavailable" in w.lower() for w in hazard_warnings):
-        is_degraded = True
 
     # 4. Module 2: Indicative Land Value Engine
     land_value = calculate_land_value(
         lat=req.latitude,
         lon=req.longitude,
         address=address,
-        road_score=road_score,
+        road_score=road_score_for_value,
         facility_score=facility_score,
         built_up_area_sqft=req.built_up_area_sqft,
         floors=req.floors,
@@ -368,7 +451,8 @@ async def analyze_site(req: AnalysisRequest, request: Request):
     vastu_advisory, vastu_warnings = await evaluate_vastu_advisory(
         lat=req.latitude,
         lon=req.longitude,
-        elevation_m=elevation_m
+        elevation_m=elevation_m,
+        elevation_samples=elevation_samples
     )
     for w in vastu_warnings:
         if w not in warnings:
@@ -419,27 +503,17 @@ async def analyze_site(req: AnalysisRequest, request: Request):
     if ai_meta.get("fallback_reason"):
         warnings.append(f"AI Provider note: {ai_meta.get('fallback_reason')}")
 
+    # AI adapters narrate only. Numeric report fields are
+    # NEVER sourced from LLM metadata - feasibility_score always mirrors the
+    # deterministic MCDA result, and cost/vastu blocks always come from the
+    # deterministic engines (base_adapter contract in app/ai/base_adapter.py).
     param_reflection = ai_meta.get("parameter_reflection") or (
         f"Site analysis reflects {req.built_up_area_sqft:,.0f} sq ft built-up area with {req.quality_grade.capitalize()} "
         f"specification grade and {f'G+{req.floors-1}' if req.floors > 1 else 'G'} storeys."
     )
-    feasibility_score_val = int(ai_meta.get("feasibility_score", round(overall_score)))
-
-    ai_cost_bd = None
-    if ai_meta.get("cost_breakdown"):
-        try:
-            ai_cost_bd = json.loads(ai_meta["cost_breakdown"]) if isinstance(ai_meta["cost_breakdown"], str) else ai_meta["cost_breakdown"]
-        except Exception:
-            ai_cost_bd = None
-    cost_breakdown_val = ai_cost_bd or cost_estimate.model_dump()
-
-    ai_vastu_comp = None
-    if ai_meta.get("vastu_compliance"):
-        try:
-            ai_vastu_comp = json.loads(ai_meta["vastu_compliance"]) if isinstance(ai_meta["vastu_compliance"], str) else ai_meta["vastu_compliance"]
-        except Exception:
-            ai_vastu_comp = None
-    vastu_compliance_val = ai_vastu_comp or vastu_advisory.model_dump()
+    feasibility_score_val = int(round(overall_score))
+    cost_breakdown_val = cost_estimate.model_dump()
+    vastu_compliance_val = vastu_advisory.model_dump()
 
     try:
         return AnalysisResponse(
@@ -513,6 +587,25 @@ async def create_pdf_report(req: ReportRequest):
     """
     if not req.analysis_data:
         raise HTTPException(status_code=400, detail="Invalid request: Missing analysis data payload.")
+
+    # Structural sanity validation of the
+    # client-supplied payload before it is rendered into the PDF dossier.
+    analysis = req.analysis_data
+    if not isinstance(analysis, dict):
+        raise HTTPException(status_code=422, detail="analysis_data must be a JSON object.")
+    coords = analysis.get("coordinates")
+    if coords is not None:
+        if not isinstance(coords, dict):
+            raise HTTPException(status_code=422, detail="analysis_data.coordinates must be an object.")
+        lat_v = coords.get("latitude")
+        lon_v = coords.get("longitude")
+        if lat_v is not None and (not isinstance(lat_v, (int, float)) or not -90.0 <= lat_v <= 90.0):
+            raise HTTPException(status_code=422, detail="analysis_data.coordinates.latitude must be a number in [-90, 90].")
+        if lon_v is not None and (not isinstance(lon_v, (int, float)) or not -180.0 <= lon_v <= 180.0):
+            raise HTTPException(status_code=422, detail="analysis_data.coordinates.longitude must be a number in [-180, 180].")
+    score_v = analysis.get("overall_suitability_score")
+    if score_v is not None and (not isinstance(score_v, (int, float)) or isinstance(score_v, bool)):
+        raise HTTPException(status_code=422, detail="analysis_data.overall_suitability_score must be a number.")
 
     try:
         fp_payload = req.floor_plan
@@ -621,8 +714,13 @@ async def create_generative_floorplan(
             mock_analysis = {
                 "request_id": f"BW-FP-{int(time.time())}",
                 "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
-                "coordinates": {"latitude": 12.9716, "longitude": 77.5946},
-                "formatted_address": f"{typ_label} Multi-Storey Architectural Dossier",
+                # Use the caller's actual site coordinates when
+                # provided instead of a hardcoded Bengaluru placeholder.
+                "coordinates": {"latitude": req.latitude if req.latitude is not None else 0.0, "longitude": req.longitude if req.longitude is not None else 0.0},
+                "formatted_address": (
+                    f"{typ_label} Multi-Storey Architectural Dossier"
+                    + (f" (WGS84 {req.latitude:.5f}, {req.longitude:.5f})" if req.latitude is not None and req.longitude is not None else "")
+                ),
                 "overall_suitability_score": 90.0,
                 "suitability_verdict": "Architectural Design Complete",
                 "built_up_area_sqft": built_up_sqft,
@@ -686,8 +784,12 @@ async def create_generative_floorplan(
             mock_analysis = {
                 "request_id": f"BW-FP-{int(time.time())}",
                 "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
-                "coordinates": {"latitude": 12.9716, "longitude": 77.5946},
-                "formatted_address": f"{typ_label} Floor Plan Dossier",
+                # Use the caller's actual site coordinates when provided.
+                "coordinates": {"latitude": req.latitude if req.latitude is not None else 0.0, "longitude": req.longitude if req.longitude is not None else 0.0},
+                "formatted_address": (
+                    f"{typ_label} Floor Plan Dossier"
+                    + (f" (WGS84 {req.latitude:.5f}, {req.longitude:.5f})" if req.latitude is not None and req.longitude is not None else "")
+                ),
                 "overall_suitability_score": 90.0,
                 "suitability_verdict": "Architectural Design Complete",
                 "built_up_area_sqft": req.built_up_area_sqft or (req.plot_width_m * req.plot_depth_m * 10.764 * (req.ground_coverage_ratio or 0.6)),

@@ -1,5 +1,5 @@
 import math
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 EARTH_RADIUS_METERS = 6371000.0
 
@@ -83,3 +83,65 @@ def calculate_solar_profile(latitude: float) -> Dict[str, float]:
         "winter_noon_altitude": round(max(0.0, 90.0 - winter_zenith), 1),
         "equinox_noon_altitude": round(90.0 - equinox_zenith, 1)
     }
+
+# --------------------------------------------------------------------------- #
+# Simple-polygon (non-self-intersecting) validation                           #
+# --------------------------------------------------------------------------- #
+
+def _cross(o: Tuple[float, float], a: Tuple[float, float], b: Tuple[float, float]) -> float:
+    """2D cross product of vectors OA and OB."""
+    return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+def _segments_properly_intersect(
+    p1: Tuple[float, float], p2: Tuple[float, float],
+    p3: Tuple[float, float], p4: Tuple[float, float]
+) -> bool:
+    """True when closed segments p1-p2 and p3-p4 intersect at any point
+    (proper crossing or collinear touch)."""
+    d1 = _cross(p3, p4, p1)
+    d2 = _cross(p3, p4, p2)
+    d3 = _cross(p1, p2, p3)
+    d4 = _cross(p1, p2, p4)
+
+    if ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and \
+       ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)):
+        return True
+
+    def _on_seg(p, q, r):
+        return (
+            min(p[0], q[0]) <= r[0] <= max(p[0], q[0])
+            and min(p[1], q[1]) <= r[1] <= max(p[1], q[1])
+            and _cross(p, q, r) == 0
+        )
+
+    if d1 == 0 and _on_seg(p3, p4, p1):
+        return True
+    if d2 == 0 and _on_seg(p3, p4, p2):
+        return True
+    if d3 == 0 and _on_seg(p1, p2, p3):
+        return True
+    if d4 == 0 and _on_seg(p1, p2, p4):
+        return True
+    return False
+
+def polygon_is_self_intersecting(vertices: List[Tuple[float, float]]) -> bool:
+    """
+    Returns True when the closed ring crosses or touches itself at a
+    non-adjacent edge pair (bow-tie / figure-eight outline). O(n^2), fine for
+    the <= 64-vertex boundary payloads.
+    """
+    n = len(vertices)
+    if n < 4:
+        return False
+    for i in range(n):
+        a1 = vertices[i]
+        a2 = vertices[(i + 1) % n]
+        for j in range(i + 1, n):
+            # Skip edges that share a vertex (adjacent in the ring)
+            if j == i + 1 or (i == 0 and j == n - 1):
+                continue
+            b1 = vertices[j]
+            b2 = vertices[(j + 1) % n]
+            if _segments_properly_intersect(a1, a2, b1, b2):
+                return True
+    return False

@@ -54,6 +54,8 @@ class FloorPlanRequest(BaseModel):
         default=None,
         description="Optional pre-generated multi-storey building model for direct PDF export or re-rendering"
     )
+    latitude: Optional[float] = Field(default=None, ge=-90.0, le=90.0, description="Site latitude for the dossier header (avoids a hardcoded placeholder city)")
+    longitude: Optional[float] = Field(default=None, ge=-180.0, le=180.0, description="Site longitude for the dossier header")
     floor_plate_masks: Optional[Dict[str, Dict[str, Literal["present", "terrace", "void"]]] | Dict[int, Dict[str, Literal["present", "terrace", "void"]]]] = Field(
         default=None,
         description="Per-floor wing presence mask: floor_index -> wing_id -> present|terrace|void"
