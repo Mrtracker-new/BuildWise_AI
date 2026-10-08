@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type {
   AnalysisRequest,
   AnalysisResponse,
@@ -19,7 +19,9 @@ import { TelemetryStrip, ErrorBanner } from './components/StatusBanner';
 import { EmptyState } from './components/EmptyState';
 import { SiteMoveDialog } from './components/SiteMoveDialog';
 import { AnalysisHUD } from './components/AnalysisHUD';
-import { DesignProvider, ToastViewport, ShortcutsSheet, useShortcuts } from './design';
+import { DesignProvider, ToastViewport, ShortcutsSheet, useShortcuts, Drawer, useTier, useViewportClass, useCompactAuthoring, useDesign } from './design';
+import { AssistedBar } from './components/AssistedBar';
+import { isAssistedNoticeSessionDismissed, dismissAssistedNoticeForSession } from './services/sessionPrefs';
 import { CaptureSheet, type CaptureStep } from './components/map/CaptureSheet';
 import { BoundaryChip } from './components/map/BoundaryChip';
 import { SitePreviewHUD } from './components/map/SitePreviewHUD';
@@ -40,12 +42,39 @@ const PIPELINE_STAGES = [
   'Synthesizing report...',
 ] as const;
 
+/**
+ * Parse a shared-site deep link written by handleCopyLink (`/app?lat=&lon=`).
+ * Returns coordinates only when BOTH params are present, numeric, and in range —
+ * a malformed or partial link falls back to the default site, never a broken map.
+ */
+function parseSiteDeepLink(
+  search: string
+): { latitude: number; longitude: number } | null {
+  const params = new URLSearchParams(search);
+  const latRaw = params.get('lat');
+  const lonRaw = params.get('lon');
+  if (latRaw === null || lonRaw === null) return null;
+  if (latRaw.trim() === '' || lonRaw.trim() === '') return null;
+  const lat = Number(latRaw);
+  const lon = Number(lonRaw);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  return { latitude: lat, longitude: lon };
+}
+
 const AppShell: React.FC = () => {
   // Theme State: 'light' | 'dark'
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
 
+  // Shared-site deep link (/app?lat=&lon=) parsed once and applied to the
+  // INITIAL state before first render, so MapCanvas mounts already centered on the
+  // linked site (its instance effect creates the map exactly once).
+  const deepLinkSite = useMemo(
+    () => parseSiteDeepLink(window.location.search),
+    []
+  );
   // Application Parameters State
-  const [request, setRequest] = useState<AnalysisRequest>({
+  const [request, setRequest] = useState<AnalysisRequest>(() => ({
     latitude: 12.9716, // Default to Bengaluru Urban, India
     longitude: 77.5946,
     built_up_area_sqft: 2000,
@@ -54,7 +83,9 @@ const AppShell: React.FC = () => {
     floors: 1,
     ai_provider: 'groq',
     ground_coverage_ratio: 0.6,
-  });
+    // Deep-link coordinates override the default site when a valid link is opened.
+    ...(deepLinkSite ?? {}),
+  }));
 
   const [hasLocation, setHasLocation] = useState<boolean>(true);
   // ======== Single-source site boundary + capture wizard state ========
@@ -81,16 +112,42 @@ const AppShell: React.FC = () => {
     dismissPreview();
   }, [dismissPreview]);
 
+  // Responsive foundation: live capability tier + viewport class.
+  const tier = useTier();
+  const viewportClass = useViewportClass();
+  // ASSISTED mode: narrow viewport (<768px) OR coarse primary pointer.
+  // All capabilities stay available; precision authoring is assisted, not exact.
+  const compactAuthoring = useCompactAuthoring();
+  const [assistedNoticeDismissed, setAssistedNoticeDismissed] = useState<boolean>(
+    () => isAssistedNoticeSessionDismissed()
+  );
+  // Design context: toast API for clipboard confirmations.
+  const { pushToast } = useDesign();
+
+  // Mobile Panels State (<1024px)
+  const [isMobileControlOpen, setIsMobileControlOpen] = useState<boolean>(false);
+  const [isMobileResultsOpen, setIsMobileResultsOpen] = useState<boolean>(false);
+
   // Capture wizard opens on the trace step when a boundary already exists (Edit).
   const openCapture = useCallback((step: CaptureStep = 'trace') => {
     setCaptureStep(boundary ? step : 'locate');
     setCaptureOpen(true);
-  }, [boundary]);
+    if (tier !== 'FULL') {
+      setIsMobileControlOpen(false);
+      setIsMobileResultsOpen(false);
+    }
+  }, [boundary, tier]);
+
   const handleBoundaryCommit = useCallback((b: SharedBoundaryState) => {
     setBoundary(b);
     setPreviewDismissed(false); // new boundary re-arms the preview
     setCaptureOpen(false);
-  }, []);
+    pushToast({ message: 'Site boundary saved · ready to analyze', tone: 'success' });
+    if (tier !== 'FULL') {
+      setIsMobileControlOpen(true);
+    }
+  }, [tier, pushToast]);
+
   // Deep-link from the generator card ("Edit on map").
   useEffect(() => {
     const onEditRequest = (): void => openCapture('trace');
@@ -99,6 +156,19 @@ const AppShell: React.FC = () => {
   }, [openCapture]);
 
   const [isShortcutsOpen, setIsShortcutsOpen] = useState<boolean>(false);
+  // Confirm an honored shared-site deep link once per mount (StrictMode-safe).
+  const deepLinkToastShown = useRef<boolean>(false);
+  useEffect(() => {
+    if (deepLinkSite && !deepLinkToastShown.current) {
+      deepLinkToastShown.current = true;
+      pushToast({ message: 'Opened shared site location', tone: 'success' });
+    }
+  }, [deepLinkSite, pushToast]);
+  /** Soft dismissal only: continues this session, never blocks the map. */
+  const handleAssistedContinue = useCallback((): void => {
+    setAssistedNoticeDismissed(true);
+    dismissAssistedNoticeForSession();
+  }, []);
   const handleResetRef = useRef<(() => void) | null>(null);
 
   // Global keyboard shortcuts (T/M/R/?); Escape closes the shortcuts sheet.
@@ -146,10 +216,6 @@ const AppShell: React.FC = () => {
   const [serverStatus, setServerStatus] = useState<{ groq: boolean; gemini: boolean } | null>(null);
   const [isMethodologyOpen, setIsMethodologyOpen] = useState<boolean>(false);
 
-  // Mobile Panels State (<1024px)
-  const [isMobileControlOpen, setIsMobileControlOpen] = useState<boolean>(false);
-  const [isMobileResultsOpen, setIsMobileResultsOpen] = useState<boolean>(false);
-
   // Responsive Drawer State: persistent on desktop (>=1024px)
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(true);
   const [mapResizeTrigger, setMapResizeTrigger] = useState<number>(0);
@@ -163,6 +229,9 @@ const AppShell: React.FC = () => {
   const drawerCloseBtnRef = useRef<HTMLButtonElement>(null);
   const prevDrawerOpenRef = useRef<boolean>(false);
   const resultsDrawerRef = useRef<HTMLElement>(null);
+  /** Compact-tier panel triggers (focus return for the Drawer primitive). */
+  const mobileControlToggleRef = useRef<HTMLButtonElement>(null);
+  const mobileResultsToggleRef = useRef<HTMLButtonElement>(null);
 
   // Segmented Tabs State: 'overview' | 'hazards' | 'ecology' | 'cost_plan'
   const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('overview');
@@ -281,6 +350,18 @@ const AppShell: React.FC = () => {
     setTimeout(() => setCopiedRef(false), 1500);
   };
 
+  /** Copy a shareable /app deep link (site coordinates). */
+  const handleCopyLink = useCallback((): void => {
+    const params = new URLSearchParams();
+    params.set('lat', request.latitude.toFixed(6));
+    params.set('lon', request.longitude.toFixed(6));
+    const url = `${window.location.origin}/app?${params.toString()}`;
+    navigator.clipboard.writeText(url).then(
+      () => pushToast({ message: 'Site link copied', tone: 'success' }),
+      () => pushToast({ message: 'Copy failed — clipboard unavailable', tone: 'critical' })
+    );
+  }, [request.latitude, request.longitude, pushToast]);
+
   // Synchronize document theme attribute
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -395,14 +476,24 @@ const AppShell: React.FC = () => {
   // what should happen to it (see SiteMoveDialog) - otherwise the pin, the
   // boundary and the overlays could describe different sites at once.
   const handleLocationSelect = useCallback(
-    (lat: number, lon: number) => {
+    (lat: number, lon: number, fromInput = false) => {
       if (boundary) {
         setPendingSiteMove({ lat, lon });
+        if (tier !== 'FULL') {
+          setIsMobileControlOpen(false);
+        }
         return;
       }
       applySiteMove(lat, lon, false);
+      if (fromInput) {
+        if (tier !== 'FULL') {
+          setIsMobileControlOpen(false);
+        }
+        openCapture('locate');
+        pushToast({ message: 'Site located · ready to trace boundary', tone: 'neutral' });
+      }
     },
-    [boundary, applySiteMove]
+    [boundary, applySiteMove, tier, openCapture, pushToast]
   );
 
   const handleSiteMoveApply = useCallback((): void => {
@@ -441,10 +532,12 @@ const AppShell: React.FC = () => {
     setSiteVisionData(null);
     setFloorPlanData(null);
     setBoundary(null);
+    setCaptureOpen(false);
     setErrorMessage(null);
     setIsDrawerOpen(false);
     setIsMobileResultsOpen(false);
     setIsReportOpen(false);
+    pushToast({ message: 'Location cleared', tone: 'neutral' });
     if (typeof window !== 'undefined' && window.location.hash === '#report') {
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
     }
@@ -637,6 +730,41 @@ const AppShell: React.FC = () => {
       ? analysisData.cost_estimate.total_estimated_cost_inr + currentLandCost
       : null;
 
+  // ---- Compact-tier panel content (shared: desktop aside + compact Drawer) ----
+  const controlsPanelBody = (
+    <>
+      {/* System Error Banner */}
+      <ErrorBanner errorMessage={errorMessage} onDismiss={() => setErrorMessage(null)} />
+
+      {/* Coordinates Input Card */}
+      <CoordinatesInput
+        key={`coords-${coordinatesSyncKey}`}
+        latitude={hasLocation ? request.latitude : null}
+        longitude={hasLocation ? request.longitude : null}
+        formattedAddress={analysisData?.formatted_address}
+        onCoordinatesChange={handleLocationSelect}
+        onClear={handleClearLocation}
+      />
+
+      {/* Parameters Form with Submit Action */}
+      <AnalysisForm
+        request={request}
+        isLoading={isLoading}
+        hasCoordinates={hasLocation && boundary !== null}
+        onChange={handleRequestChange}
+        onSubmit={handleRunAnalysis}
+        onRequestCapture={() => openCapture('locate')}
+      />
+    </>
+  );
+
+  // Map canvas resize after compact drawer open/close transitions.
+  useEffect(() => {
+    if (tier === 'FULL') return;
+    const t = window.setTimeout(() => triggerMapResize(), 260);
+    return () => window.clearTimeout(t);
+  }, [isMobileControlOpen, isMobileResultsOpen, tier, triggerMapResize]);
+
   const reportPayload: ReportRequestPayload | null = analysisData
     ? {
         analysis_data: {
@@ -776,18 +904,27 @@ const AppShell: React.FC = () => {
           onCancel={() => setCaptureOpen(false)}
           getMap={() => mapInstanceRef.current}
         />
-        <div className="absolute bottom-16 left-3 lg:left-[364px] z-[999] pointer-events-auto flex items-center gap-2">
-          <BoundaryChip boundary={boundary} onEdit={() => openCapture('trace')} />
-        </div>
+        {/* Chip hidden while the capture sheet is open: the sheet carries the
+            same live metrics (area / perimeter / vertices / frontage) and an
+            overlapping chip would collide with the sheet on compact screens
+            and leave a dead Edit control behind it. */}
+        {!captureOpen && (
+          <div className="absolute bottom-14 sm:bottom-16 left-2 sm:left-3 lg:left-[364px] z-[999] pointer-events-auto flex items-center gap-2 max-w-[calc(100vw-64px)]">
+            <BoundaryChip boundary={boundary} onEdit={() => openCapture('trace')} />
+          </div>
+        )}
 
-        {/* Deterministic site preview overlay + measurement HUD */}
-        <SitePreviewHUD
-          preview={sitePreview}
-          loading={previewLoading}
-          error={previewError}
-          onDismiss={handleDismissPreview}
-          onEditBoundary={boundary ? () => openCapture('trace') : undefined}
-        />
+        {/* Deterministic site preview overlay + measurement HUD (also yields
+            to the capture sheet so one owner holds the bottom band at a time) */}
+        {!captureOpen && (
+          <SitePreviewHUD
+            preview={sitePreview}
+            loading={previewLoading}
+            error={previewError}
+            onDismiss={handleDismissPreview}
+            onEditBoundary={boundary ? () => openCapture('trace') : undefined}
+          />
+        )}
       </section>
 
       {/* ========================================================================= */}
@@ -815,11 +952,13 @@ const AppShell: React.FC = () => {
           if (!isMobileResultsOpen) setIsMobileControlOpen(false);
         }}
         hasResults={Boolean(analysisData)}
+        headerControlToggleRef={mobileControlToggleRef}
+        headerResultsToggleRef={mobileResultsToggleRef}
       />
 
       {/* Floating Single-Line Dismissible Telemetry Notice */}
       {warnings.length > 0 && !isWarningDismissed && (
-        <div className="fixed top-[72px] left-3 right-3 lg:left-[364px] lg:right-[384px] z-[1001] pointer-events-auto">
+        <div className="fixed top-[58px] sm:top-[72px] left-2 sm:left-3 right-2 sm:right-3 lg:left-[364px] lg:right-[384px] z-[1001] pointer-events-auto">
           <TelemetryStrip
             warnings={warnings}
             isDismissed={isWarningDismissed}
@@ -830,7 +969,7 @@ const AppShell: React.FC = () => {
 
       {/* Floating AI Engine Fallback Toast */}
       {fallbackToast && (
-        <div className="fixed top-[114px] left-3 right-3 lg:left-[364px] lg:right-[384px] z-[1001] pointer-events-auto animate-fade-in">
+        <div className="fixed top-[98px] sm:top-[114px] left-2 sm:left-3 right-2 sm:right-3 lg:left-[364px] lg:right-[384px] z-[1001] pointer-events-auto animate-fade-in">
           <div
             role="alert"
             className="vibrancy-panel rounded-[12px] border border-[var(--semantic-amber)]/50 bg-[var(--surface)] text-[var(--semantic-amber)] px-3.5 py-2.5 text-[12px] flex items-center justify-between gap-3 shadow-lg"
@@ -859,10 +998,11 @@ const AppShell: React.FC = () => {
 
       {/* ========================================================================= */}
       {/* LAYER 2: LEFT FLOATING CONTROL PANEL (340px, top 76px, bottom 12px, r-20) */}
+      {/* Desktop (>=lg): persistent floating aside. Compact (<lg): Drawer.        */}
       {/* ========================================================================= */}
       <aside
-        className={`fixed left-3 top-[76px] w-[340px] max-w-[calc(100vw-24px)] h-fit max-h-[calc(100vh-88px)] rounded-[20px] vibrancy-panel z-[1000] overflow-y-auto overflow-x-clip scrollbar-apple p-4 space-y-4 pointer-events-auto border border-[var(--panel-border-color)] shadow-xl @container transition-transform duration-300 ease-in-out ${
-          isMobileControlOpen ? 'max-lg:translate-x-0' : 'max-lg:hidden'
+        className={`fixed left-3 top-[76px] w-[340px] max-w-[calc(100vw-24px)] h-fit max-h-[calc(100vh-88px)] rounded-[20px] vibrancy-panel z-[1000] overflow-y-auto bw-scroll-pane overflow-x-clip scrollbar-apple p-4 space-y-4 pointer-events-auto border border-[var(--panel-border-color)] shadow-xl @container ${
+          tier === 'FULL' ? '' : 'hidden'
         }`}
       >
         {/* Mobile Header with Close action */}
@@ -881,35 +1021,58 @@ const AppShell: React.FC = () => {
           </button>
         </div>
 
-        {/* System Error Banner */}
-        <ErrorBanner errorMessage={errorMessage} onDismiss={() => setErrorMessage(null)} />
-
-        {/* Coordinates Input Card */}
-        <CoordinatesInput
-          key={`coords-${coordinatesSyncKey}`}
-          latitude={hasLocation ? request.latitude : null}
-          longitude={hasLocation ? request.longitude : null}
-          formattedAddress={analysisData?.formatted_address}
-          onCoordinatesChange={handleLocationSelect}
-          onClear={handleClearLocation}
-        />
-
-        {/* Parameters Form with Submit Action */}
-        <AnalysisForm
-          request={request}
-          isLoading={isLoading}
-          hasCoordinates={hasLocation && boundary !== null}
-          onChange={handleRequestChange}
-          onSubmit={handleRunAnalysis}
-          onRequestCapture={() => openCapture('locate')}
-        />
+        {controlsPanelBody}
       </aside>
 
+      {/* COMPACT/ADAPTIVE tier: parameters as an edge drawer with scrim,
+          swipe/ESC dismiss and focus management. FULL tier keeps the
+          persistent floating aside above. */}
+      {tier !== 'FULL' && (
+        <Drawer
+          open={isMobileControlOpen}
+          onClose={() => setIsMobileControlOpen(false)}
+          side={viewportClass === 'md' ? 'right' : 'bottom'}
+          label="Site Parameters"
+          id="controls-drawer"
+          returnFocusRef={mobileControlToggleRef}
+          className="vibrancy-panel p-4 space-y-4 overflow-y-auto scrollbar-apple"
+        >
+          <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 mb-1">
+            <div className="flex items-center gap-1.5 text-[13px] font-semibold text-[var(--text-1)]">
+              <Icon name="sliders" size={14} className="text-[var(--accent)]" />
+              <span>Site Parameters</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsMobileControlOpen(false)}
+              className="w-8 h-8 rounded-[8px] bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)] flex items-center justify-center transition-colors cursor-pointer"
+              aria-label="Close parameters panel"
+            >
+              <Icon name="x" size={14} />
+            </button>
+          </div>
+          {controlsPanelBody}
+        </Drawer>
+      )}
+
       {/* ========================================================================= */}
-      {/* LAYER 3: DESKTOP DRAWER TOGGLE BUTTON                                      */}
+      {/* LAYER 3.5: ASSISTED BAR (ASSISTED capability tier)                         */}
+      {/* SOFT notice + copy-link — never blocks interaction; session-dismissed via  */}
+      {/* "Continue"; yields to the capture wizard (chip/HUD precedent).             */}
+      {/* ========================================================================= */}
+      {!compactAuthoring || captureOpen ? null : (
+        <AssistedBar
+          noticeVisible={!assistedNoticeDismissed}
+          onContinue={handleAssistedContinue}
+          onCopyLink={handleCopyLink}
+        />
+      )}
+
+      {/* ========================================================================= */}
+      {/* LAYER 3: DESKTOP DRAWER TOGGLE BUTTON (FULL tier only)                     */}
       {/* ========================================================================= */}
       <div
-        className="hidden lg:block fixed top-[76px] map-controls-anchor z-[1000] pointer-events-auto"
+        className={`${tier === 'FULL' ? '' : 'hidden'} fixed top-[76px] map-controls-anchor z-[1000] pointer-events-auto`}
       >
         <button
           ref={drawerToggleBtnRef}
@@ -917,7 +1080,6 @@ const AppShell: React.FC = () => {
           onClick={() => {
             const next = !isDrawerOpen;
             setIsDrawerOpen(next);
-            setIsMobileResultsOpen(next);
             triggerMapResize();
           }}
           aria-expanded={isDrawerOpen}
@@ -937,46 +1099,62 @@ const AppShell: React.FC = () => {
 
       {/* ========================================================================= */}
       {/* LAYER 4: RIGHT FLOATING RESULTS PANEL (360px, top 76px, h-fit, r-20)     */}
+      {/* Desktop (>=lg): slide-in floating aside. Compact (<lg): Drawer.          */}
       {/* ========================================================================= */}
-      <aside
-        id="results-drawer"
-        ref={resultsDrawerRef}
-        role="region"
-        aria-label="Analysis Results"
-        onTransitionEnd={triggerMapResize}
-        className={`fixed right-3 top-[76px] w-[360px] max-w-[calc(100vw-24px)] h-fit max-h-[calc(100vh-88px)] rounded-[20px] vibrancy-panel z-[1000] overflow-y-auto overflow-x-clip scrollbar-apple p-4 space-y-4 border border-[var(--panel-border-color)] shadow-xl @container transition-all duration-300 ease-in-out ${
-          isDrawerOpen
-            ? 'translate-x-0 opacity-100 pointer-events-auto'
-            : 'translate-x-full opacity-0 pointer-events-none'
-        } ${
-          isMobileResultsOpen
-            ? 'max-lg:translate-x-0 max-lg:opacity-100 max-lg:pointer-events-auto'
-            : 'max-lg:translate-x-full max-lg:opacity-0 max-lg:pointer-events-none max-lg:hidden'
-        }`}
-      >
-        {/* Mobile Header with Close action */}
-        <div className="flex lg:hidden items-center justify-between border-b border-[var(--hairline)] pb-2 mb-1">
-          <div className="flex items-center gap-1.5 text-[13px] font-semibold text-[var(--text-1)]">
-            <Icon name="layers" size={14} className="text-[var(--accent)]" />
-            <span>Feasibility Results</span>
-          </div>
-          <button
-            ref={drawerCloseBtnRef}
-            type="button"
-            onClick={() => {
-              setIsMobileResultsOpen(false);
-              setIsDrawerOpen(false);
-            }}
-            className="w-7 h-7 rounded-[8px] bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)] flex items-center justify-center transition-colors cursor-pointer"
-            aria-label="Close results panel"
-          >
-            <Icon name="x" size={14} />
-          </button>
-        </div>
+      {tier === 'FULL' && (
+        <aside
+          id="results-drawer"
+          ref={resultsDrawerRef}
+          role="region"
+          aria-label="Analysis Results"
+          onTransitionEnd={triggerMapResize}
+          className={`fixed right-3 top-[76px] w-[360px] max-w-[calc(100vw-24px)] h-fit max-h-[calc(100vh-88px)] rounded-[20px] vibrancy-panel z-[1000] overflow-y-auto bw-scroll-pane overflow-x-clip scrollbar-apple p-4 space-y-4 border border-[var(--panel-border-color)] shadow-xl @container transition-all duration-300 ease-in-out ${
+            isDrawerOpen
+              ? 'translate-x-0 opacity-100 pointer-events-auto'
+              : 'translate-x-full opacity-0 pointer-events-none'
+          }`}
+        >
+          {/* Results Body */}
+          {renderResultsContent()}
+        </aside>
+      )}
 
-        {/* Results Body */}
-        {renderResultsContent()}
-      </aside>
+      {/* COMPACT/ADAPTIVE tier: results as a drawer (bottom sheet on phones,
+          edge drawer on tablets) with scrim + swipe/ESC dismiss. */}
+      {tier !== 'FULL' && (
+        <Drawer
+          open={isMobileResultsOpen}
+          onClose={() => {
+            setIsMobileResultsOpen(false);
+            setIsDrawerOpen(false);
+          }}
+          side={viewportClass === 'md' ? 'right' : 'bottom'}
+          label="Analysis Results"
+          id="results-drawer"
+          returnFocusRef={mobileResultsToggleRef}
+          className="vibrancy-panel p-4 space-y-4 overflow-y-auto scrollbar-apple"
+        >
+          <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 mb-1">
+            <div className="flex items-center gap-1.5 text-[13px] font-semibold text-[var(--text-1)]">
+              <Icon name="layers" size={14} className="text-[var(--accent)]" />
+              <span>Feasibility Results</span>
+            </div>
+            <button
+              ref={drawerCloseBtnRef}
+              type="button"
+              onClick={() => {
+                setIsMobileResultsOpen(false);
+                setIsDrawerOpen(false);
+              }}
+              className="w-8 h-8 rounded-[8px] bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)] flex items-center justify-center transition-colors cursor-pointer"
+              aria-label="Close results panel"
+            >
+              <Icon name="x" size={14} />
+            </button>
+          </div>
+          {renderResultsContent()}
+        </Drawer>
+      )}
 
       {/* Floating Centered iOS Analysis HUD (Over Map Area) */}
       {isLoading && (
@@ -1063,6 +1241,8 @@ const AppShell: React.FC = () => {
       {/* Design system: keyboard shortcuts sheet + toast viewport */}
       <ShortcutsSheet open={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
       <ToastViewport />
+
+
     </div>
   );
 };
