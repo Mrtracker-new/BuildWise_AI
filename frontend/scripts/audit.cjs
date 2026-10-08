@@ -1,9 +1,12 @@
 const puppeteer = require('puppeteer-core');
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 
 // The full-screen analysis tool lives at /app ("/" is the marketing landing page).
 const APP_URL = process.env.APP_URL || 'http://localhost:5173/app';
+// The feasibility analysis is a backend call; STEP 2 cannot complete without it.
+const API_URL = process.env.API_URL || 'http://localhost:8000';
 
 // Candidate Chrome executable paths
 function getChromePath() {
@@ -35,6 +38,78 @@ const VIEWPORTS = [
   { width: 768, height: 1024, name: '768x1024' },
   { width: 390, height: 844, name: '390x844' },
 ];
+
+// Tier boundaries mirror src/design/breakpoints.ts: FULL >= 1024 keeps the
+// persistent floating asides; below that, panels live in Drawers.
+const isFullTierWidth = (w) => w >= 1024;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Cheap node-side health probe so a down backend fails with a clear message. */
+function checkApiHealth() {
+  return new Promise((resolve) => {
+    const req = http.get(`${API_URL}/api/status`, { timeout: 5000 }, (res) => {
+      res.resume();
+      resolve(res.statusCode >= 200 && res.statusCode < 500);
+    });
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(false));
+  });
+}
+
+/** Click the first button whose text matches `re` (real DOM click). */
+async function clickButtonByText(page, re) {
+  return page.evaluate((pattern) => {
+    const rx = new RegExp(pattern);
+    const btn = Array.from(document.querySelectorAll('button')).find((b) => rx.test(b.textContent || ''));
+    if (!btn || btn.disabled) return false;
+    btn.click();
+    return true;
+  }, re.source);
+}
+
+/** Wait until a button matching `re` exists AND is enabled. */
+async function waitForButtonEnabled(page, re, timeout) {
+  await page.waitForFunction((pattern) => {
+    const rx = new RegExp(pattern);
+    const btn = Array.from(document.querySelectorAll('button')).find((b) => rx.test(b.textContent || ''));
+    return Boolean(btn) && !btn.disabled;
+  }, { timeout }, re.source);
+}
+
+const dialogPresent = (page) =>
+  page.evaluate(() => Boolean(document.querySelector('div[role="dialog"]')));
+
+/**
+ * Open/close the results panel through the REAL tier-appropriate toggle:
+ * the header results toggle (compact tiers, opens the Drawer) or the desktop
+ * "View/Hide Results" toggle (FULL tier, slides the floating aside).
+ */
+async function setResultsPanel(page, wantOpen) {
+  return page.evaluate(async (want) => {
+    const s = (ms) => new Promise((r) => setTimeout(r, ms));
+    const headerToggle = document.getElementById('results-toggle');
+    const desktopToggle = Array.from(document.querySelectorAll('button[aria-controls="results-drawer"]'))
+      .find((b) => b.id !== 'results-toggle');
+    const btn = headerToggle && headerToggle.offsetParent !== null ? headerToggle : desktopToggle;
+    if (!btn) return { ok: false, reason: 'no visible results toggle' };
+    const isOpen = btn.getAttribute('aria-expanded') === 'true';
+    if (isOpen === want) return { ok: true, isOpen, changed: false };
+    btn.click();
+    await s(450);
+    return { ok: true, isOpen: btn.getAttribute('aria-expanded') === 'true', changed: true };
+  }, wantOpen);
+}
+
+/** Intended open-state of the results panel for the audit's skip logic. */
+function resultsOpenIntended(page, fullTier) {
+  if (!fullTier) return Promise.resolve(false);
+  return page.evaluate(() => {
+    const t = Array.from(document.querySelectorAll('button[aria-controls="results-drawer"]'))
+      .find((b) => b.id !== 'results-toggle');
+    return t ? t.getAttribute('aria-expanded') === 'true' : false;
+  });
+}
 
 // In-browser DOM integrity evaluation
 function checkDOMViolations(isDrawerOpenIntended) {
@@ -170,14 +245,27 @@ function checkDOMViolations(isDrawerOpenIntended) {
   });
 
   const page = await browser.newPage();
-  page.on('console', msg => console.log('PAGE LOG:', msg.text()));
-  page.on('pageerror', err => console.log('PAGE ERROR:', err.toString()));
+  page.on('console', msg => {
+    const t = msg.text();
+    if (msg.type() === 'error') console.log('PAGE ERROR LOG:', t.slice(0, 300));
+  });
+  page.on('pageerror', err => console.log('PAGE EXCEPTION:', err.toString().slice(0, 300)));
   const allResults = [];
   const checks = [];
 
   console.log('=====================================================');
   console.log('  BUILDWISE UI INTEGRITY & RESPONSIVE AUDIT SUITE    ');
   console.log('=====================================================');
+
+  // STEP 0: backend health (loaded-state seeding performs a real analysis call)
+  const apiUp = await checkApiHealth();
+  console.log(`\n[PRE-FLIGHT] Backend ${API_URL} ${apiUp ? 'reachable' : 'UNREACHABLE'}`);
+  if (!apiUp) {
+    await browser.close();
+    console.error('Audit cannot seed the loaded state: backend /api/status unreachable.');
+    console.error('Start the backend (python backend/run_backend.py) and re-run this audit.');
+    process.exit(2);
+  }
 
   // STEP 1: Audit Empty State across all viewports
   console.log('\n--- 1. AUDITING EMPTY STATE ---');
@@ -193,105 +281,126 @@ function checkDOMViolations(isDrawerOpenIntended) {
     });
     await new Promise(r => setTimeout(r, 200));
 
-    const violations = await page.evaluate(checkDOMViolations, false);
+    const fullTier = isFullTierWidth(vp.width);
+    const intended = await resultsOpenIntended(page, fullTier);
+    const violations = await page.evaluate(checkDOMViolations, intended);
     allResults.push({
       viewport: vp.name,
       state: 'empty',
-      drawer: 'closed',
+      drawer: intended ? 'open' : 'closed',
       violations
     });
-    console.log(`[EMPTY]  ${vp.name.padEnd(10)} (drawer: closed) -> ${violations.length} violations`);
+    console.log(`[EMPTY]  ${vp.name.padEnd(10)} (results: ${intended ? 'open  ' : 'closed'}) -> ${violations.length} violations`);
   }
 
   // STEP 2: Audit Loaded State with Full Feasibility Analysis
+  // Seeded through the REAL user flow: the pre-boundary CTA opens the capture
+  // wizard (STEP ZERO), a rectangular boundary is traced and committed, and
+  // only then does the "Run Site Feasibility Analysis" CTA exist. The old
+  // expectation of finding the Run CTA on fresh load was stale.
   console.log('\n--- 2. AUDITING LOADED STATE (FULL FEASIBILITY DATA) ---');
   await page.setViewport({ width: 1920, height: 1080 });
   await page.goto(APP_URL, { waitUntil: 'networkidle0' });
   await new Promise(r => setTimeout(r, 400));
 
-  console.log('Triggering "Run Site Feasibility Analysis" for live data...');
-  const submitSuccess = await page.evaluate(async () => {
-    const buttons = Array.from(document.querySelectorAll('button'));
-    const runBtn = buttons.find(b => b.textContent && (b.textContent.includes('Run Site Feasibility Analysis') || b.textContent.includes('Run Feasibility')));
-    if (runBtn) {
-      runBtn.click();
-      return true;
-    }
-    return false;
-  });
-
-  if (!submitSuccess) {
-    throw new Error('Could not find Run Feasibility Analysis button!');
+  console.log('Seeding: opening capture wizard from the pre-boundary CTA (STEP ZERO)...');
+  const preCtaClicked = await clickButtonByText(page, /Select Location on Map to Begin|Run Site Feasibility Analysis/);
+  if (!preCtaClicked) {
+    await browser.close();
+    throw new Error('Pre-boundary CTA not found (expected "Select Location on Map to Begin").');
   }
+  await page.waitForFunction(() => /Locate the site/.test(document.body.innerText || ''), { timeout: 20000 });
 
+  console.log('Seeding: tracing a rectangular boundary...');
+  if (!(await clickButtonByText(page, /Trace boundary/))) {
+    await browser.close();
+    throw new Error('"Trace boundary" not found in the capture wizard.');
+  }
+  await sleep(800);
+  if (!(await clickButtonByText(page, /\bRect\b/))) {
+    await browser.close();
+    throw new Error('"Rect" trace tool not found in the capture wizard.');
+  }
+  // Rect trace auto-advances to FRONTAGE, where the user picks the frontage
+  // edge by clicking it on the map or its row in the sheet (there is no
+  // separate Accept button in the current UI); picking enables Review.
+  await page.waitForFunction(() => /Confirm the frontage/.test(document.body.innerText || ''), { timeout: 40000 });
+  await page.waitForFunction(() => Boolean(document.querySelector('[data-testid="edge-row-2"]')), { timeout: 20000 });
+  await page.evaluate(() => {
+    const row = document.querySelector('[data-testid="edge-row-2"]');
+    if (row) row.click();
+  });
+  console.log('Frontage edge picked via its sheet row.');
+  try {
+    await waitForButtonEnabled(page, /\bReview\b/, 20000);
+  } catch (e) {
+    const snap = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('button'))
+        .map((b) => `${(b.textContent || '').trim()}${b.disabled ? ' [disabled]' : ''}`)
+        .filter(Boolean)
+    );
+    console.log('CaptureSheet buttons at FRONTAGE after pick:', JSON.stringify(snap));
+    throw e;
+  }
+  await clickButtonByText(page, /\bReview\b/);
+  await page.waitForFunction(() => /Review boundary/.test(document.body.innerText || ''), { timeout: 20000 });
+  await waitForButtonEnabled(page, /Use this boundary/, 20000);
+  await clickButtonByText(page, /Use this boundary/);
+  await waitForButtonEnabled(page, /Run Site Feasibility Analysis/, 20000);
+  console.log('Boundary committed; running feasibility analysis...');
+
+  await clickButtonByText(page, /Run Site Feasibility Analysis/);
   await page.waitForFunction(() => {
     return document.body.innerText.includes('Land Suitability Assessment');
-  }, { timeout: 60000 });
+  }, { timeout: 90000 });
   console.log('Feasibility results successfully rendered.');
 
-  // Audit loaded state at every viewport
+  // Audit loaded state at every viewport, including BOTH drawer states via the
+  // real tier-appropriate toggle (header toggle on compact tiers, desktop
+  // toggle on FULL tier).
   for (const vp of VIEWPORTS) {
     await page.setViewport({ width: vp.width, height: vp.height });
     await new Promise(r => setTimeout(r, 400));
+    const fullTier = isFullTierWidth(vp.width);
 
-    const isDesktopDrawer = vp.width >= 1024 && vp.width < 1536;
-
-    // Check normal state
-    let isDrawerOpen = false;
-    if (isDesktopDrawer) {
-      isDrawerOpen = await page.evaluate(() => {
-        const toggleBtn = document.querySelector('button[aria-controls="results-drawer"]');
-        return toggleBtn ? toggleBtn.getAttribute('aria-expanded') === 'true' : false;
-      });
-    }
-
-    const v1 = await page.evaluate(checkDOMViolations, isDrawerOpen);
+    let intended = await resultsOpenIntended(page, fullTier);
+    const v1 = await page.evaluate(checkDOMViolations, intended);
     allResults.push({
       viewport: vp.name,
       state: 'loaded',
-      drawer: isDesktopDrawer ? (isDrawerOpen ? 'open' : 'closed') : 'n/a',
+      drawer: intended ? 'open' : 'closed',
       violations: v1
     });
-    console.log(`[LOADED] ${vp.name.padEnd(10)} (drawer: ${isDesktopDrawer ? (isDrawerOpen ? 'open  ' : 'closed') : 'n/a   '}) -> ${v1.length} violations`);
+    console.log(`[LOADED] ${vp.name.padEnd(10)} (drawer: ${intended ? 'open  ' : 'closed'}) -> ${v1.length} violations`);
 
-    // For 1535x900, 1366x768, and 1024x768, test BOTH drawer open AND closed
-    if (['1535x900', '1366x768', '1024x768'].includes(vp.name)) {
-      // Toggle drawer state
-      const toggled = await page.evaluate(() => {
-        const toggleBtn = document.querySelector('button[aria-controls="results-drawer"]');
-        if (toggleBtn) {
-          toggleBtn.click();
-          return true;
-        }
-        return false;
-      });
-
-      if (toggled) {
-        await new Promise(r => setTimeout(r, 400));
-        const newDrawerOpen = !isDrawerOpen;
-        const v2 = await page.evaluate(checkDOMViolations, newDrawerOpen);
+    const audited = new Set([intended]);
+    for (const want of [true, false]) {
+      const r = await setResultsPanel(page, want);
+      if (!r.ok) {
+        console.log(`[LOADED] ${vp.name.padEnd(10)} results toggle unavailable: ${r.reason}`);
+        continue;
+      }
+      if (!audited.has(want)) {
+        await new Promise(res => setTimeout(res, 400));
+        const v2 = await page.evaluate(checkDOMViolations, want);
         allResults.push({
           viewport: vp.name,
           state: 'loaded',
-          drawer: newDrawerOpen ? 'open' : 'closed',
+          drawer: want ? 'open' : 'closed',
           violations: v2
         });
-        console.log(`[LOADED] ${vp.name.padEnd(10)} (drawer: ${newDrawerOpen ? 'open  ' : 'closed'}) -> ${v2.length} violations`);
-
-        // Return drawer to open state for consistency
-        if (!newDrawerOpen) {
-          await page.evaluate(() => {
-            const toggleBtn = document.querySelector('button[aria-controls="results-drawer"]');
-            if (toggleBtn) toggleBtn.click();
-          });
-          await new Promise(r => setTimeout(r, 300));
-        }
+        console.log(`[LOADED] ${vp.name.padEnd(10)} (drawer: ${want ? 'open  ' : 'closed'}) -> ${v2.length} violations`);
+        audited.add(want);
       }
     }
   }
 
   // STEP 3: Targeted Post-Fix Integrity Checks
   console.log('\n--- 3. TARGETED POST-FIX INTEGRITY CHECKS ---');
+
+  // Make the results panel visible for the gauge check (real toggle).
+  const gaugeOpen = await setResultsPanel(page, true);
+  if (gaugeOpen.ok) await sleep(400);
 
   // Check 3.1: Score Gauge SVG width >= 84px
   await page.setViewport({ width: 1920, height: 1080 });
@@ -322,10 +431,13 @@ function checkDOMViolations(isDrawerOpenIntended) {
   });
   await new Promise(r => setTimeout(r, 300));
 
-  // Check 3.2: StatusBanner Telemetry strip truncate rule (desktop >= 1024px)
+  // Check 3.2: StatusBanner Telemetry strip truncate rule (desktop >= 1024px).
+  // Multiple role="status" elements can exist (SitePreviewHUD, AnalysisHUD), so
+  // scope to the real telemetry banner: the one led by the "Notice:" label.
   const bannerDesktop = await page.evaluate(() => {
-    const banner = document.querySelector('div[role="status"]');
-    if (!banner) return { pass: false, message: 'Status banner not found' };
+    const banner = Array.from(document.querySelectorAll('div[role="status"]'))
+      .find((b) => (b.textContent || '').includes('Notice:'));
+    if (!banner) return { pass: false, message: 'Telemetry status banner ("Notice:") not found' };
     const textEl = banner.querySelector('span[title]');
     if (!textEl) return { pass: false, message: 'Banner text with title attribute not found' };
     const hasTruncate = textEl.className.includes('lg:truncate');
@@ -342,8 +454,9 @@ function checkDOMViolations(isDrawerOpenIntended) {
   await page.setViewport({ width: 390, height: 844 });
   await new Promise(r => setTimeout(r, 300));
   const bannerMobile = await page.evaluate(() => {
-    const banner = document.querySelector('div[role="status"]');
-    if (!banner) return { pass: false, message: 'Status banner not found' };
+    const banner = Array.from(document.querySelectorAll('div[role="status"]'))
+      .find((b) => (b.textContent || '').includes('Notice:'));
+    if (!banner) return { pass: false, message: 'Telemetry status banner ("Notice:") not found' };
     const textEl = banner.querySelector('span[title]');
     if (!textEl) return { pass: false, message: 'Banner text element not found' };
     const style = window.getComputedStyle(textEl);
@@ -357,69 +470,54 @@ function checkDOMViolations(isDrawerOpenIntended) {
   checks.push({ name: 'StatusBanner Mobile Wrapping', ...bannerMobile });
   console.log(`[CHECK] StatusBanner Mobile Wrapping: ${bannerMobile.pass ? 'PASS' : 'FAIL'} (${bannerMobile.message})`);
 
-  // Check 3.4: Telemetry popover reachable by Mouse and Keyboard
+  // Check 3.4: Telemetry popover reachable by Mouse and Keyboard.
+  // Uses REAL input (page-level click + keyboard) — dispatched synthetic
+  // KeyboardEvents never reach window keydown handlers.
   await page.setViewport({ width: 1920, height: 1080 });
   await new Promise(r => setTimeout(r, 300));
-  const popoverCheck = await page.evaluate(async () => {
-    const noticeBtn = document.querySelector('button[aria-haspopup="dialog"]');
-    if (!noticeBtn) return { pass: false, message: 'Notice button with aria-haspopup="dialog" not found' };
-
-    // Mouse click test
-    noticeBtn.click();
-    await new Promise(r => setTimeout(r, 200));
-    let dialog = document.querySelector('div[role="dialog"]');
-    const mouseOpened = dialog !== null;
-
-    // Close via Escape key
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-    await new Promise(r => setTimeout(r, 200));
-    dialog = document.querySelector('div[role="dialog"]');
-    const escClosed = dialog === null;
-
-    // Keyboard open test via Enter key on noticeBtn
-    noticeBtn.focus();
-    noticeBtn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    noticeBtn.click(); // simulate default button enter action
-    await new Promise(r => setTimeout(r, 200));
-    dialog = document.querySelector('div[role="dialog"]');
-    const keyboardOpened = dialog !== null;
-
-    // Close again
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-    await new Promise(r => setTimeout(r, 200));
-
-    // Reset warnings
-    if (window.__setTestWarnings) window.__setTestWarnings(null);
-
-    return {
-      pass: mouseOpened && escClosed && keyboardOpened,
-      mouseOpened,
-      escClosed,
-      keyboardOpened,
-      message: `Mouse open: ${mouseOpened}, Esc close: ${escClosed}, Keyboard open: ${keyboardOpened}`
-    };
-  });
+  let popoverCheck;
+  {
+    const noticeBtn = await page.$('button[aria-haspopup="dialog"]');
+    if (!noticeBtn) {
+      popoverCheck = { pass: false, message: 'Notice button with aria-haspopup="dialog" not found' };
+    } else {
+      try {
+        await noticeBtn.click();
+        await sleep(250);
+        const mouseOpened = await dialogPresent(page);
+        await page.keyboard.press('Escape');
+        await sleep(250);
+        const escClosed = !(await dialogPresent(page));
+        await noticeBtn.focus();
+        await page.keyboard.press('Enter');
+        await sleep(250);
+        const keyboardOpened = await dialogPresent(page);
+        await page.keyboard.press('Escape');
+        await sleep(250);
+        const escClosed2 = !(await dialogPresent(page));
+        popoverCheck = {
+          pass: mouseOpened && escClosed && keyboardOpened && escClosed2,
+          mouseOpened, escClosed, keyboardOpened,
+          message: `Mouse open: ${mouseOpened}, Esc close: ${escClosed}, Keyboard open: ${keyboardOpened}, Esc close: ${escClosed2}`
+        };
+      } catch (e) {
+        popoverCheck = { pass: false, message: `Popover interaction failed: ${e.message}` };
+      }
+    }
+  }
+  await page.evaluate(() => { if (window.__setTestWarnings) window.__setTestWarnings(null); });
   checks.push({ name: 'Telemetry Popover Mouse & Keyboard Accessibility', ...popoverCheck });
   console.log(`[CHECK] Telemetry Popover Accessible: ${popoverCheck.pass ? 'PASS' : 'FAIL'} (${popoverCheck.message})`);
 
-  // Check 3.5: MethodologyModal Formula Wrapping & Scrollbar
-  const modalCheck = await page.evaluate(async () => {
-    const methodologyBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('Methodology'));
-    if (!methodologyBtn) return { pass: false, message: 'Methodology button not found' };
-    methodologyBtn.click();
-    await new Promise(r => setTimeout(r, 300));
-
+  // Check 3.5: MethodologyModal Formula Wrapping, Scrollbar & real close
+  const methodologyClicked = await clickButtonByText(page, /Methodology/);
+  await sleep(400);
+  const modalCheck = await page.evaluate(() => {
     const formulaEl = document.querySelector('#mcda-formula');
     if (!formulaEl) return { pass: false, message: 'Formula element (#mcda-formula) not found in modal' };
-
     const style = window.getComputedStyle(formulaEl);
     const hasScrollX = style.overflowX === 'auto' || style.overflowX === 'scroll';
     const hasWbr = formulaEl.querySelectorAll('wbr').length > 0;
-
-    // Close modal
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-    await new Promise(r => setTimeout(r, 200));
-
     return {
       pass: hasScrollX && hasWbr,
       hasScrollX,
@@ -427,6 +525,19 @@ function checkDOMViolations(isDrawerOpenIntended) {
       message: `Formula has overflow-x: ${style.overflowX} and contains ${formulaEl.querySelectorAll('wbr').length} <wbr> break opportunities`
     };
   });
+  // Close via the modal's real Close button (the old window-dispatched Escape
+  // never reached the handler).
+  await page.evaluate(() => {
+    const b = document.querySelector('button[aria-label="Close modal"]');
+    if (b) b.click();
+  });
+  await sleep(250);
+  const modalClosed = await page.evaluate(() => !document.querySelector('#mcda-formula'));
+  if (!methodologyClicked) modalCheck.pass = false;
+  modalCheck.message += methodologyClicked
+    ? (modalClosed ? '; modal closed via Close button' : '; MODAL DID NOT CLOSE')
+    : '; Methodology button not found';
+  if (!modalClosed && methodologyClicked) modalCheck.pass = false;
   checks.push({ name: 'MethodologyModal Formula Wrapping', ...modalCheck });
   console.log(`[CHECK] MethodologyModal Formula Wrapping: ${modalCheck.pass ? 'PASS' : 'FAIL'} (${modalCheck.message})`);
 
@@ -452,101 +563,49 @@ function checkDOMViolations(isDrawerOpenIntended) {
   checks.push({ name: 'Rail & Map Overflow Semantics', ...overflowSemantics });
   console.log(`[CHECK] Rail & Map Overflow Semantics: ${overflowSemantics.pass ? 'PASS' : 'FAIL'} (${overflowSemantics.message})`);
 
-  // Check 3.7: Zoom Sweep Test (Zooms 12 through 19)
+  // Check 3.7: Site-estimate geometry stands down when a plot is captured.
+  // The old zoom-sweep / east-west orientation checks asserted the PIN-ANCHORED
+  // footprint overlay, which is unreachable by design today: the analysis (and
+  // therefore the orientation) only exists AFTER a boundary is committed, and
+  // every boundary-clearing site move invalidates the analysis (STALE-STATE
+  // RULE). The current invariant is the reverse: while a plot is captured, the
+  // pin-anchored estimate (footprint + entrance) MUST NOT render, so the map
+  // never describes two different sites at once. (Same guard the e2e asserts.)
   await page.setViewport({ width: 1920, height: 1080 });
-  const zoomSweepCheck = await page.evaluate(async () => {
-    const map = window.__leafletMap;
-    const marker = window.__leafletMarker;
-    const footprint = window.__leafletFootprint;
-    if (!map || !marker || !footprint) {
-      return { pass: false, message: 'Leaflet map, marker, or footprint instance not found' };
-    }
-
-    const zoomLevels = [12, 13, 14, 15, 16, 17, 18, 19];
-    const errors = [];
-    const sweepResults = [];
-
-    for (const z of zoomLevels) {
-      map.setZoom(z, { animate: false });
-      await new Promise(r => setTimeout(r, 60));
-
-      const markerLatLng = marker.getLatLng();
-      const markerPt = map.latLngToContainerPoint(markerLatLng);
-
-      const latlngs = footprint.getLatLngs()[0];
-      const centroidLat = latlngs.reduce((sum, p) => sum + p.lat, 0) / latlngs.length;
-      const centroidLng = latlngs.reduce((sum, p) => sum + p.lng, 0) / latlngs.length;
-      const centroidPt = map.latLngToContainerPoint([centroidLat, centroidLng]);
-
-      const dist = Math.hypot(centroidPt.x - markerPt.x, centroidPt.y - markerPt.y);
-      sweepResults.push({ zoom: z, dist: dist.toFixed(4) });
-
-      if (dist > 1.0) {
-        errors.push(`Zoom ${z}: distance ${dist.toFixed(2)}px > 1.0px`);
+  await sleep(300);
+  const estimateStandDown = await page.evaluate(() => {
+    const featuresOf = (id) => {
+      const m = window.__maplibreMap;
+      if (!m) return -1;
+      const s = m.getSource(id);
+      if (!s) return -1;
+      const d = s.serialize().data;
+      if (d && d.features) return d.features.length;
+      if (d && d.geometry) {
+        return d.geometry.type === 'Polygon' ? (d.geometry.coordinates[0] || []).length : (d.geometry.coordinates || []).length;
       }
-    }
-
-    const maxDist = Math.max(...sweepResults.map(r => parseFloat(r.dist)));
+      return 0;
+    };
     return {
-      pass: errors.length === 0,
-      maxDist: maxDist.toFixed(4),
-      errors,
-      sweepResults,
-      message: errors.length === 0
-        ? `Footprint centroid & marker coincide within 1px at all zooms 12-19 (max dist: ${maxDist.toFixed(4)}px)`
-        : errors.join('; ')
+      mapReady: Boolean(window.__maplibreMap),
+      plotCaptured: Boolean(document.querySelector('div[role="status"]')),
+      footprintFeatures: featuresOf('footprint-source'),
+      entranceFeatures: featuresOf('entrance-shaft-source'),
     };
   });
-  checks.push({ name: 'Marker & Footprint Zoom Sweep Alignment (Zooms 12-19)', ...zoomSweepCheck });
-  console.log(`[CHECK] Zoom Sweep Alignment (12-19): ${zoomSweepCheck.pass ? 'PASS' : 'FAIL'} (${zoomSweepCheck.message})`);
-
-  // Check 3.8: Footprint Orientation & Long Side Angle on Screen
-  const orientationAngleCheck = await page.evaluate(async () => {
-    const map = window.__leafletMap;
-    const footprint = window.__leafletFootprint;
-    if (!map || !footprint) return { pass: false, message: 'Map or footprint not found' };
-
-    const zoomLevels = [12, 13, 14, 15, 16, 17, 18, 19];
-    const angleResults = [];
-    const errors = [];
-
-    for (const z of zoomLevels) {
-      map.setZoom(z, { animate: false });
-      await new Promise(r => setTimeout(r, 60));
-
-      const latlngs = footprint.getLatLngs()[0];
-      // Use map.project for subpixel projected coordinates, avoiding integer discretization error at low zooms
-      const p0 = map.project(latlngs[0], z);
-      const p1 = map.project(latlngs[1], z);
-
-      const dx = p1.x - p0.x;
-      const dy = p1.y - p0.y; // screen Y is downwards
-
-      // Screen bearing clockwise from North (where North is -Y, East is +X)
-      const bearingRad = Math.atan2(dx, -dy);
-      let bearingDeg = (bearingRad * 180 / Math.PI + 360) % 360;
-
-      // Distance from due East-West (bearing 90° or 270°)
-      const devFromEastWest = Math.min(Math.abs(bearingDeg - 90), Math.abs(bearingDeg - 270));
-      angleResults.push({ zoom: z, bearing: bearingDeg.toFixed(2), devFromEastWest: devFromEastWest.toFixed(2) });
-
-      // Acceptance criterion 2: within 5 degrees of east-west on screen at every zoom level tested
-      if (devFromEastWest > 5.0) {
-        errors.push(`Zoom ${z}: long side deviates ${devFromEastWest.toFixed(2)}° from East-West (> 5° threshold)`);
-      }
-    }
-
-    return {
-      pass: errors.length === 0,
-      errors,
-      angleResults,
-      message: errors.length === 0
-        ? `Long side runs within 5° of East-West on screen at all zooms (bearing: ${angleResults[0].bearing}°, deviation: ${angleResults[0].devFromEastWest}°)`
-        : errors.join('; ')
-    };
+  const estimateOk =
+    estimateStandDown.mapReady &&
+    estimateStandDown.footprintFeatures === 0 &&
+    estimateStandDown.entranceFeatures === 0;
+  checks.push({
+    name: 'Pin-Anchored Site Estimate Stands Down While a Plot Is Captured',
+    pass: estimateOk,
+    ...estimateStandDown,
+    message: estimateOk
+      ? 'No pin-anchored footprint or entrance overlay renders while the captured plot owns the site'
+      : `mapReady: ${estimateStandDown.mapReady}, footprint features: ${estimateStandDown.footprintFeatures}, entrance features: ${estimateStandDown.entranceFeatures}`
   });
-  checks.push({ name: 'Footprint Long Side East-West Orientation Angle', ...orientationAngleCheck });
-  console.log(`[CHECK] Footprint East-West Orientation: ${orientationAngleCheck.pass ? 'PASS' : 'FAIL'} (${orientationAngleCheck.message})`);
+  console.log(`[CHECK] Site Estimate Stand-Down (plot captured): ${estimateOk ? 'PASS' : 'FAIL'} (${checks[checks.length - 1].message})`);
 
   // SUMMARY & REPORT
   const totalViolations = allResults.reduce((acc, r) => acc + r.violations.length, 0);
