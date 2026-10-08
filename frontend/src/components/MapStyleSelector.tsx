@@ -165,7 +165,7 @@ export const MapStyleSelector: React.FC<MapStyleSelectorProps> = ({
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className={`w-8 h-8 rounded-[10px] vibrancy-panel flex items-center justify-center transition-colors border border-[var(--panel-border-color)] shadow-md active:scale-95 ${
+        className={`bw-touch-target w-8 h-8 rounded-[10px] vibrancy-panel flex items-center justify-center transition-colors border border-[var(--panel-border-color)] shadow-md active:scale-95 ${
           isOpen || currentStyle !== 'standard'
             ? 'text-[var(--accent)] bg-[var(--accent-tint)]'
             : 'text-[var(--text-1)] hover:bg-[var(--fill)]'

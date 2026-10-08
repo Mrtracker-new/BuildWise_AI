@@ -17,6 +17,9 @@ interface AppHeaderProps {
   isMobileResultsOpen?: boolean;
   onToggleMobileResults?: () => void;
   hasResults?: boolean;
+  /** Focus-return targets for the compact-tier drawers. */
+  headerControlToggleRef?: React.Ref<HTMLButtonElement>;
+  headerResultsToggleRef?: React.Ref<HTMLButtonElement>;
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
@@ -35,6 +38,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   isMobileResultsOpen = false,
   onToggleMobileResults,
   hasResults = false,
+  headerControlToggleRef,
+  headerResultsToggleRef,
 }) => {
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -69,10 +74,10 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
   return (
     <header
-      className="fixed top-3 left-3 right-3 h-[52px] rounded-[16px] vibrancy-panel z-[1001] px-3 sm:px-4 flex items-center justify-between pointer-events-auto border border-[var(--panel-border-color)] shadow-md select-none"
+      className="fixed top-2 sm:top-3 left-2 sm:left-3 right-2 sm:right-3 h-[48px] sm:h-[52px] rounded-[14px] sm:rounded-[16px] vibrancy-panel z-[1001] px-2.5 sm:px-4 flex items-center justify-between pointer-events-auto border border-[var(--panel-border-color)] shadow-md select-none"
     >
       {/* Brand identity: BuildWise AI Logo */}
-      <div className="flex items-center gap-2.5 min-w-0">
+      <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
         <div className="w-7 h-7 rounded-[8px] bg-white dark:bg-white/10 flex items-center justify-center shrink-0 border border-slate-200/90 dark:border-white/10 overflow-hidden shadow-xs">
           <img
             src={theme === 'dark' ? '/brand/BuildWise_logo_square_white.png' : '/brand/BuildWise_logo_square.png'}
@@ -80,11 +85,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             className="w-[21px] h-[21px] object-contain select-none"
           />
         </div>
-        <div className="min-w-0 flex items-center gap-2">
-          <h1 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight whitespace-nowrap">
+        <div className="min-w-0 flex items-center gap-1.5 sm:gap-2">
+          <h1 className="text-[14px] sm:text-[15px] font-semibold text-[var(--text-1)] tracking-tight whitespace-nowrap truncate">
             BuildWise AI
           </h1>
-          <span className="text-[11px] font-medium bg-[var(--fill)] text-[var(--text-2)] px-2 py-0.5 rounded-full shrink-0">
+          <span className="hidden sm:inline-block text-[11px] font-medium bg-[var(--fill)] text-[var(--text-2)] px-2 py-0.5 rounded-full shrink-0">
             v1.0
           </span>
           <span className="text-[12px] text-[var(--text-2)] hidden xl:inline-block truncate max-w-xs">
@@ -94,14 +99,18 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       </div>
 
       {/* Right controls: Theme toggle, Telemetry notice, Methodology, Reset, Engine Status */}
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="flex items-center gap-1 sm:gap-2 shrink-0">
         {/* Mobile Panel Toggles (hidden on desktop >=1024px) */}
-        <div className="flex lg:hidden items-center gap-1.5 mr-1">
+        <div className="flex lg:hidden items-center gap-1 sm:gap-1.5">
           {onToggleMobileControl && (
             <button
               type="button"
+              id="controls-toggle"
+              ref={headerControlToggleRef}
               onClick={onToggleMobileControl}
-              className={`px-2.5 py-1 text-[12px] font-medium rounded-[10px] transition-colors flex items-center gap-1 ${
+              aria-expanded={isMobileControlOpen}
+              aria-controls="controls-drawer"
+              className={`relative px-2 sm:px-2.5 py-1.5 sm:py-2 text-[12px] font-medium rounded-[10px] transition-colors flex items-center justify-center gap-1 min-h-[32px] sm:min-h-[36px] min-w-[32px] bw-touch-target ${
                 isMobileControlOpen
                   ? 'bg-[var(--accent)] text-white'
                   : 'bg-[var(--fill)] text-[var(--text-1)] hover:bg-[var(--fill-hover)]'
@@ -110,15 +119,19 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               aria-label="Toggle Parameters Panel"
             >
               <Icon name="sliders" size={13} />
-              <span className="hidden xs:inline">Controls</span>
+              <span className="hidden sm:inline">Controls</span>
             </button>
           )}
 
           {onToggleMobileResults && (
             <button
               type="button"
+              id="results-toggle"
+              ref={headerResultsToggleRef}
               onClick={onToggleMobileResults}
-              className={`px-2.5 py-1 text-[12px] font-medium rounded-[10px] transition-colors flex items-center gap-1 ${
+              aria-expanded={isMobileResultsOpen}
+              aria-controls="results-drawer"
+              className={`relative px-2 sm:px-2.5 py-1.5 sm:py-2 text-[12px] font-medium rounded-[10px] transition-colors flex items-center justify-center gap-1 min-h-[32px] sm:min-h-[36px] min-w-[32px] bw-touch-target ${
                 isMobileResultsOpen
                   ? 'bg-[var(--accent)] text-white'
                   : 'bg-[var(--fill)] text-[var(--text-1)] hover:bg-[var(--fill-hover)]'
@@ -127,7 +140,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               aria-label="Toggle Results Panel"
             >
               <Icon name="layers" size={13} />
-              <span className="hidden xs:inline">{hasResults ? 'Results' : 'Overview'}</span>
+              <span className="hidden sm:inline">{hasResults ? 'Results' : 'Overview'}</span>
             </button>
           )}
         </div>
@@ -141,7 +154,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               onClick={() => setIsPopoverOpen(!isPopoverOpen)}
               aria-haspopup="dialog"
               aria-expanded={isPopoverOpen}
-              className="flex items-center gap-1.5 px-2.5 py-1 text-[12px] font-medium text-[var(--semantic-amber)] bg-[var(--fill)] hover:bg-[var(--fill-hover)] rounded-[10px] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--semantic-amber)]/30"
+              className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 text-[11px] sm:text-[12px] font-medium text-[var(--semantic-amber)] bg-[var(--fill)] hover:bg-[var(--fill-hover)] rounded-[10px] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--semantic-amber)]/30 min-h-[32px]"
               title={`Telemetry Notices (${warnings.length}): Click or press Enter to view details`}
               aria-label={`View ${warnings.length} telemetry notices`}
             >
@@ -235,8 +248,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         <button
           type="button"
           onClick={onReset}
-          className="relative flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-[var(--text-1)] bg-[var(--fill)] hover:bg-[var(--fill-hover)] rounded-[10px] transition-colors shrink-0 active:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+          className="relative flex items-center justify-center gap-1.5 w-8 h-8 sm:w-auto sm:px-3 sm:py-1.5 text-[12px] font-medium text-[var(--text-1)] bg-[var(--fill)] hover:bg-[var(--fill-hover)] rounded-[10px] transition-colors shrink-0 active:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
           title="Reset the site analysis"
+          aria-label="Reset the site analysis"
           aria-keyshortcuts="R"
         >
           <Icon name="refresh" size={14} className="text-[var(--text-2)] shrink-0" />

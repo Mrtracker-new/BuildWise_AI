@@ -213,19 +213,19 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
         }}
       >
         {/* Sticky Sheet Header (56px) */}
-        <header className="h-[56px] min-h-[56px] border-b border-[var(--hairline)] px-4 sm:px-6 flex items-center justify-between gap-3 shrink-0 select-none bg-[var(--sheet-bg)]">
+        <header className="h-[56px] min-h-[56px] border-b border-[var(--hairline)] px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-3 shrink-0 select-none bg-[var(--sheet-bg)]">
           {/* Left: Shield Icon + "Site Feasibility Report" 15px/600 + Ref Copy Pill */}
-          <div className="flex items-center gap-2.5 min-w-0">
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
             <div className="w-7 h-7 rounded-[8px] bg-[var(--accent-tint)] text-[var(--accent)] flex items-center justify-center shrink-0">
               <Icon name="shield" size={16} />
             </div>
-            <h1 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight truncate">
-              Site Feasibility Report
+            <h1 className="text-[14px] sm:text-[15px] font-semibold text-[var(--text-1)] tracking-tight truncate">
+              <span className="hidden xs:inline">Site Feasibility </span>Report
             </h1>
             <button
               type="button"
               onClick={handleCopyRef}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[12px] font-mono text-[var(--text-2)] hover:text-[var(--text-1)] transition-colors cursor-pointer select-none shrink-0"
+              className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[12px] font-mono text-[var(--text-2)] hover:text-[var(--text-1)] transition-colors cursor-pointer select-none shrink-0"
               title="Click to copy analysis reference ID"
             >
               <Icon
@@ -261,7 +261,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
           </nav>
 
           {/* Right: Download PDF (primary), Print (secondary), Close */}
-          <div className="report-sheet-header-actions flex items-center gap-2 shrink-0">
+          <div className="report-sheet-header-actions flex items-center gap-1.5 sm:gap-2 shrink-0">
             {/* Download PDF button (primary) */}
             <DownloadReportButton payload={reportPayload} variant="compact" />
 
@@ -269,11 +269,11 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
             <button
               type="button"
               onClick={() => window.print()}
-              className="h-8 px-3 rounded-[10px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-1)] text-[12px] font-medium flex items-center gap-1.5 transition-colors cursor-pointer select-none"
+              className="hidden sm:flex h-8 px-3 rounded-[10px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-1)] text-[12px] font-medium items-center gap-1.5 transition-colors cursor-pointer select-none"
               title="Print comprehensive report"
             >
               <Icon name="printer" size={14} />
-              <span className="hidden sm:inline">Print</span>
+              <span>Print</span>
             </button>
 
             {/* Close button (32px --fill circle) */}
@@ -290,7 +290,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
         </header>
 
         {/* Mobile Horizontal Sub-Header Tabs (<1024px) */}
-        <div className="report-sheet-tabs-nav lg:hidden border-b border-[var(--hairline)] px-4 py-2 bg-[var(--sheet-bg)] overflow-x-auto scrollbar-apple shrink-0">
+        <div className="report-sheet-tabs-nav lg:hidden border-b border-[var(--hairline)] px-4 py-2 bg-[var(--sheet-bg)] bw-tab-strip bw-fade-x shrink-0">
           <div className="bg-[var(--fill)] rounded-[10px] p-[2px] flex items-center gap-1 min-w-max text-[12px] font-medium">
             {TABS.map((tab) => (
               <button
@@ -312,7 +312,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
         {/* Content Area: overflow-y auto with scrollbar-apple, padding 24px, inner max-width 1160px centered */}
         <main
           ref={contentScrollRef}
-          className="report-sheet-content flex-1 overflow-y-auto scrollbar-apple p-4 sm:p-6"
+          className="report-sheet-content flex-1 overflow-y-auto bw-scroll-pane scrollbar-apple p-4 sm:p-6"
         >
           <div className="max-w-[1400px] mx-auto w-full min-w-0 space-y-4">
             {/* ================================================================= */}
@@ -326,7 +326,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                   <ReportHeroBand data={analysisData} />
 
                   {/* b) BELOW: grid 7fr / 5fr, gap 16: left = Multi-Criteria Factor Breakdown; right = Engineering Commentary & Action Items */}
-                  <div className="grid grid-cols-1 min-[1200px]:grid-cols-[7fr_5fr] gap-4 items-start">
+                  <div className="grid grid-cols-1 lg:grid-cols-[7fr_5fr] gap-4 items-start">
                     {/* Left Column (7fr): Multi-Criteria Factor Breakdown card */}
                     <div className="w-full min-w-0">
                       <FactorBreakdown factors={analysisData.factors} />
@@ -398,7 +398,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                   />
 
                   {/* Below: 2-col grid OrientationCompass + VastuAdvisoryCard side by side */}
-                  <div className="grid grid-cols-1 min-[1200px]:grid-cols-2 gap-4 items-start">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
                     <OrientationCompass orientation={analysisData.orientation} />
 
                     {analysisData.vastu_advisory && (
@@ -475,9 +475,9 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                   />
 
                   {/* Below: Balanced LandValueCard + FloorPlanGeneratorCard (trailing card spans both columns if blueprint expanded) */}
-                  <div className="grid grid-cols-1 min-[1200px]:grid-cols-2 gap-4 items-start">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
                     {analysisData.land_value && (
-                      <div className={`w-full min-w-0 ${floorPlanData ? 'min-[1200px]:col-span-2' : ''}`}>
+                      <div className={`w-full min-w-0 ${floorPlanData ? 'lg:col-span-2' : ''}`}>
                         <LandValueCard
                           landValue={analysisData.land_value}
                           civilTotalCostInr={analysisData.cost_estimate.total_estimated_cost_inr}
@@ -486,7 +486,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                       </div>
                     )}
 
-                    <div className={`w-full min-w-0 ${floorPlanData ? 'min-[1200px]:col-span-2' : ''}`}>
+                    <div className={`w-full min-w-0 ${floorPlanData ? 'lg:col-span-2' : ''}`}>
                       <FloorPlanGeneratorCard
                         defaultWidthM={
                           analysisData.land_value?.plot_area_sqft

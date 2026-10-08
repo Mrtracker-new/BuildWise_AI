@@ -7,7 +7,7 @@ interface CoordinatesInputProps {
   latitude: number | null;
   longitude: number | null;
   formattedAddress?: string;
-  onCoordinatesChange: (lat: number, lon: number) => void;
+  onCoordinatesChange: (lat: number, lon: number, fromInput?: boolean) => void;
   onClear: () => void;
 }
 
@@ -165,7 +165,7 @@ export const CoordinatesInput: React.FC<CoordinatesInputProps> = ({
       setSuggestions([]);
       setIsSuggestionsOpen(false);
       setSearchError(null);
-      onCoordinatesChange(suggestion.lat, suggestion.lon);
+      onCoordinatesChange(suggestion.lat, suggestion.lon, true);
     },
     [onCoordinatesChange]
   );
@@ -237,7 +237,7 @@ export const CoordinatesInput: React.FC<CoordinatesInputProps> = ({
     }
 
     setInputError(null);
-    onCoordinatesChange(lat, lon);
+    onCoordinatesChange(lat, lon, true);
   };
 
 // Helper to parse location display_name into primary title and secondary address details
@@ -400,7 +400,7 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
           <Icon
             name="search"
             size={14}
-            className="absolute left-3 text-[var(--text-3)] pointer-events-none shrink-0"
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-3)] pointer-events-none shrink-0"
           />
           <input
             ref={searchInputRef}
@@ -442,7 +442,7 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
             className="w-full bg-[var(--fill)] border border-transparent focus:border-[var(--accent)]/30 rounded-[10px] pl-9 pr-9 py-2 text-[13px] font-medium text-[var(--text-1)] outline-none focus:ring-[3px] focus:ring-[var(--accent)]/15 transition-all placeholder:text-[var(--text-3)] [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
           />
           {isSearching && (
-            <div className="absolute right-3 pointer-events-none">
+            <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
               <div className="ios-spinner-16" aria-hidden="true" />
             </div>
           )}
@@ -450,7 +450,7 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
             <button
               type="button"
               onClick={handleClearSearch}
-              className="absolute right-2.5 w-5 h-5 flex items-center justify-center rounded-full bg-[var(--text-3)]/15 hover:bg-[var(--text-3)]/30 text-[var(--text-2)] hover:text-[var(--text-1)] transition-all active:scale-90"
+              className="!absolute right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded-full bg-[var(--text-3)]/15 hover:bg-[var(--text-3)]/30 text-[var(--text-2)] hover:text-[var(--text-1)] transition-all active:scale-90 bw-touch-target"
               aria-label="Clear search"
               title="Clear search"
             >
@@ -520,8 +520,9 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
 
         <button
           type="submit"
-          className="w-full h-9 bg-[var(--accent)] text-white text-[13px] font-semibold rounded-[12px] transition-all duration-200 hover:brightness-[0.98] active:brightness-95 flex items-center justify-center gap-1.5 shadow-sm"
+          className="w-full h-10 bg-[var(--accent)] text-white text-[13px] font-semibold rounded-[12px] transition-all duration-200 hover:brightness-[0.98] active:scale-[0.98] flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
         >
+          <Icon name="map-pin" size={14} className="shrink-0" />
           <span>Update Pin</span>
         </button>
       </form>

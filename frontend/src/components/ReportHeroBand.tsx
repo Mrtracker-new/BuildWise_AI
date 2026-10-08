@@ -48,9 +48,9 @@ export const ReportHeroBand: React.FC<ReportHeroBandProps> = ({ data }) => {
         - 1024px - 1279px: Wraps internally to two rows (gauge+score row, tiles+coords row)
         - <1024px: Stacks vertically, left-aligned
       */}
-      <div className="flex flex-col min-[1280px]:flex-row min-[1280px]:items-center min-[1280px]:justify-between gap-4 min-[1280px]:gap-5">
+      <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4 xl:gap-5">
         {/* ROW 1 / LEFT HERO: [gauge 112px] [score 56px/700 + verdict pill + address 2-line clamp] */}
-        <div className="flex items-center gap-4.5 min-w-0 shrink-0 min-[1280px]:max-w-[420px]">
+        <div className="flex items-center gap-4 min-w-0 shrink-0 xl:max-w-[420px]">
           {/* Ring Gauge: 112px SVG */}
           <div className="relative shrink-0 flex items-center justify-center w-[112px] h-[112px] min-w-[112px]">
             <svg
@@ -91,7 +91,7 @@ export const ReportHeroBand: React.FC<ReportHeroBandProps> = ({ data }) => {
           {/* Score, verdict pill, 2-line clamped address */}
           <div className="min-w-0 flex-1 space-y-1.5">
             <div className="flex items-baseline gap-1.5 leading-none">
-              <span className="text-[56px] font-bold text-[var(--text-1)] leading-none tabular-nums tracking-tight">
+              <span className="text-[44px] xs:text-[56px] font-bold text-[var(--text-1)] leading-none tabular-nums tracking-tight">
                 {score.toFixed(1)}
               </span>
               <span className="text-[16px] font-normal text-[var(--text-3)]">
@@ -124,18 +124,19 @@ export const ReportHeroBand: React.FC<ReportHeroBandProps> = ({ data }) => {
           </div>
         </div>
 
-        {/* Vertical Hairline 1 (Visible at >=1280px) */}
-        <div className="hidden min-[1280px]:block w-[1px] bg-[var(--hairline)] self-stretch my-0.5 shrink-0" />
+        {/* Vertical Hairline 1 (Visible at >=1440px) */}
+        <div className="hidden xl:block w-[1px] bg-[var(--hairline)] self-stretch my-0.5 shrink-0" />
 
-        {/* Horizontal Divider for 1024px - 1279px fallback */}
-        <div className="hidden lg:max-[1279px]:block h-[1px] bg-[var(--hairline)] w-full" />
+        {/* Horizontal Divider for the stacked/wrapped range */}
+        <div className="block xl:hidden h-[1px] bg-[var(--hairline)] w-full" />
 
         {/* ROW 2 / TILES & COORDS: [Topographic tile] [Bioclimatic tile] [vertical hairline] [coords + WGS84] */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3.5 flex-1 min-w-0 justify-between">
-          {/* Topographic & Bioclimatic tile pair */}
-          <div className="flex flex-1 items-stretch gap-3 min-w-0">
-            {/* Topographic Aspect Tile (min-width 180px) */}
-            <div className="bg-[var(--fill)] p-3.5 rounded-[12px] min-w-[180px] flex-1 min-w-0">
+          {/* Topographic & Bioclimatic tile pair: wraps instead of overflowing
+              below ~430px (two 180px tiles + gap exceed a 390px viewport) */}
+          <div className="flex flex-wrap sm:flex-nowrap items-stretch gap-3 min-w-0 flex-1">
+            {/* Topographic Aspect Tile (min-width 180px, full-width when wrapped) */}
+            <div className="bg-[var(--fill)] p-3.5 rounded-[12px] min-w-[180px] w-full sm:w-auto flex-1 min-w-0">
               <span className="text-[12px] font-normal text-[var(--text-3)] block mb-1">
                 Topographic aspect
               </span>
@@ -147,8 +148,8 @@ export const ReportHeroBand: React.FC<ReportHeroBandProps> = ({ data }) => {
               </span>
             </div>
 
-            {/* Bioclimatic Axis Tile (min-width 180px) */}
-            <div className="bg-[var(--fill)] p-3.5 rounded-[12px] min-w-[180px] flex-1 min-w-0">
+            {/* Bioclimatic Axis Tile (min-width 180px, full-width when wrapped) */}
+            <div className="bg-[var(--fill)] p-3.5 rounded-[12px] min-w-[180px] w-full sm:w-auto flex-1 min-w-0">
               <span className="text-[12px] font-normal text-[var(--text-3)] block mb-1">
                 Bioclimatic axis
               </span>
@@ -164,8 +165,8 @@ export const ReportHeroBand: React.FC<ReportHeroBandProps> = ({ data }) => {
             </div>
           </div>
 
-          {/* Vertical Hairline 2 (Visible at >=1280px) */}
-          <div className="hidden min-[1280px]:block w-[1px] bg-[var(--hairline)] self-stretch my-0.5 shrink-0" />
+          {/* Vertical Hairline 2 (Visible at >=1440px) */}
+          <div className="hidden xl:block w-[1px] bg-[var(--hairline)] self-stretch my-0.5 shrink-0" />
 
           {/* Stacked Coordinates + WGS84 Chip */}
           <div className="flex flex-col justify-center shrink-0 min-w-[140px] pt-2 sm:pt-0 sm:pl-1 border-t sm:border-t-0 border-[var(--hairline)]">

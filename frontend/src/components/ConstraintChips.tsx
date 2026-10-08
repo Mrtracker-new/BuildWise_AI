@@ -159,8 +159,9 @@ export const ConstraintChips: React.FC<ConstraintChipsProps> = ({
               <button
                 type="button"
                 onClick={() => handleRemoveSpace(space)}
-                className="hover:opacity-70 cursor-pointer text-[10px] w-3.5 h-3.5 rounded-full flex items-center justify-center"
+                className="hover:opacity-70 cursor-pointer text-[10px] w-4 h-4 rounded-full flex items-center justify-center bw-touch-target"
                 title={`Remove ${formatted}`}
+                aria-label={`Remove ${formatted}`}
               >
                 ✕
               </button>
@@ -179,8 +180,9 @@ export const ConstraintChips: React.FC<ConstraintChipsProps> = ({
             <button
               type="button"
               onClick={() => handleRemoveOrientation(idx)}
-              className="hover:opacity-70 cursor-pointer text-[10px] text-[var(--text-3)] ml-0.5"
+              className="hover:opacity-70 cursor-pointer text-[10px] text-[var(--text-3)] ml-0.5 w-4 h-4 flex items-center justify-center rounded-full bw-touch-target"
               title="Remove orientation constraint"
+              aria-label={`Remove ${ori.preferred_facing} orientation constraint`}
             >
               ✕
             </button>

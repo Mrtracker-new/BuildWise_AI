@@ -28,19 +28,19 @@ export const MethodologyModal: React.FC<MethodologyModalProps> = ({ isOpen, onCl
     <div className="fixed inset-0 z-[2000] flex items-center justify-center p-3 sm:p-4 bg-black/40 backdrop-blur-md animate-fade-in select-none">
       <div className="vibrancy-panel rounded-[20px] border border-[var(--panel-border-color)] shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden select-text">
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-[var(--hairline)]">
-          <div className="flex items-center gap-2.5">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-[var(--hairline)] gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-7 h-7 rounded-[8px] bg-[var(--accent-tint)] text-[var(--accent)] flex items-center justify-center shrink-0">
               <Icon name="info" size={15} />
             </div>
-            <h3 className="text-[15px] font-semibold text-[var(--text-1)] tracking-tight">
+            <h3 className="text-[14px] sm:text-[15px] font-semibold text-[var(--text-1)] tracking-tight truncate">
               Engineering Calculation Methodology & Standards
             </h3>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="w-8 h-8 rounded-[10px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text-1)] flex items-center justify-center transition-colors cursor-pointer"
+            className="w-8 h-8 rounded-[10px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text-1)] flex items-center justify-center transition-colors cursor-pointer shrink-0"
             aria-label="Close modal"
           >
             <Icon name="x" size={15} />
