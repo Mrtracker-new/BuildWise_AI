@@ -381,7 +381,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                   <RiskMatrix risks={analysisData.risks} />
 
                   {/* Consolidated Data Sources & Standards */}
-                  <DataSourcesDisclosure category="hazards" />
+                  <DataSourcesDisclosure category="hazards" degraded={analysisData.degraded_mode || (analysisData.warnings?.length ?? 0) > 0} />
                 </div>
               )}
 
@@ -407,7 +407,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                   </div>
 
                   {/* Consolidated Data Sources & Standards */}
-                  <DataSourcesDisclosure category="ecology" />
+                  <DataSourcesDisclosure category="ecology" degraded={analysisData.degraded_mode || (analysisData.warnings?.length ?? 0) > 0} />
                 </div>
               )}
 
@@ -582,7 +582,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                   <HazardProfileCard hazard={analysisData.hazard_profile} layout="grid" />
                 )}
                 <RiskMatrix risks={analysisData.risks} />
-                <DataSourcesDisclosure category="hazards" />
+                <DataSourcesDisclosure category="hazards" degraded={analysisData.degraded_mode || (analysisData.warnings?.length ?? 0) > 0} />
               </div>
 
               {/* SECTION 3: ECOLOGY */}
@@ -605,7 +605,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                     <VastuAdvisoryCard advisory={analysisData.vastu_advisory} />
                   )}
                 </div>
-                <DataSourcesDisclosure category="ecology" />
+                <DataSourcesDisclosure category="ecology" degraded={analysisData.degraded_mode || (analysisData.warnings?.length ?? 0) > 0} />
               </div>
 
               {/* SECTION 4: COST & PLAN */}

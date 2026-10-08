@@ -31,10 +31,10 @@ export interface FactorScore {
   factor_id: string;
   name: string;
   weight: number;
-  raw_value: number;
+  raw_value: number | null;
   unit: string;
   score: number;
-  status: 'optimal' | 'acceptable' | 'critical';
+  status: 'optimal' | 'acceptable' | 'critical' | 'unknown';
   details: string;
 }
 
@@ -87,8 +87,10 @@ export interface SeismicEvent {
 }
 
 export interface SeismicProfile {
-  zone: string;
-  zone_factor: number;
+  // Null when the site lies outside the IS 1893:2016
+  // mapping extent - render as a distinct "Not Assessed" state, never a default zone.
+  zone: string | null;
+  zone_factor: number | null;
   standard: string;
   district?: string | null;
   state?: string | null;

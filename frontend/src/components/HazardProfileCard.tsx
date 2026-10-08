@@ -11,14 +11,23 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
   const isGrid = layout === 'grid';
   const { seismic, flood, storm_cyclone: storm, overall_hazard_level } = hazard;
 
-  const getSeismicSeverity = (): { level: 'low' | 'moderate' | 'high'; label: string } => {
-    if (seismic.zone.includes('V') || seismic.zone.includes('IV')) {
-      return { level: 'high', label: `${seismic.zone} High` };
+  // Zone is null when the site lies outside the
+  // IS 1893:2016 mapping extent - a distinct neutral "Not Assessed" state,
+  // never styled as a low-risk green signal.
+  const isSeismicNotAssessed = !seismic.zone;
+
+  const getSeismicSeverity = (): { level: 'low' | 'moderate' | 'high' | 'not-assessed'; label: string } => {
+    if (isSeismicNotAssessed) {
+      return { level: 'not-assessed', label: 'Not Assessed' };
     }
-    if (seismic.zone.includes('III')) {
-      return { level: 'moderate', label: `${seismic.zone} Moderate` };
+    const zone = seismic.zone as string;
+    if (zone.includes('V') || zone.includes('IV')) {
+      return { level: 'high', label: `${zone} High` };
     }
-    return { level: 'low', label: `${seismic.zone} Low` };
+    if (zone.includes('III')) {
+      return { level: 'moderate', label: `${zone} Moderate` };
+    }
+    return { level: 'low', label: `${zone} Low` };
   };
 
   const seismicSev = getSeismicSeverity();
@@ -29,7 +38,7 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
       return { seismic: true, flood: true, storm: true };
     }
     const scores: Record<string, number> = {
-      seismic: seismicSev.level === 'high' ? 3 : seismicSev.level === 'moderate' ? 2 : 1,
+      seismic: seismicSev.level === 'high' ? 3 : seismicSev.level === 'moderate' ? 2 : seismicSev.level === 'low' ? 1 : 0,
       flood: flood.pressure_level === 'high' ? 3 : flood.pressure_level === 'moderate' ? 2 : 1,
       storm: storm.exposure_level === 'high' ? 3 : storm.exposure_level === 'moderate' ? 2 : 1,
     };
@@ -52,7 +61,7 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
     setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const getSeverityPill = (level: 'low' | 'moderate' | 'high' | 'critical', customLabel?: string) => {
+  const getSeverityPill = (level: 'low' | 'moderate' | 'high' | 'critical' | 'not-assessed', customLabel?: string) => {
     let bg = 'rgba(52, 199, 89, 0.12)';
     let text = 'var(--semantic-green)';
     let label = customLabel || `${level} risk`;
@@ -63,12 +72,20 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
     } else if (level === 'moderate') {
       bg = 'rgba(255, 159, 10, 0.12)';
       text = 'var(--semantic-amber)';
+    } else if (level === 'not-assessed') {
+      // Neutral gray, dashed treatment: must never read as green "clear"
+      bg = 'var(--fill)';
+      text = 'var(--text-2)';
     }
 
     return (
       <span
         className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[12px] font-semibold capitalize shrink-0"
-        style={{ backgroundColor: bg, color: text }}
+        style={{
+          backgroundColor: bg,
+          color: text,
+          ...(level === 'not-assessed' ? { border: '1px dashed var(--hairline)' } : {}),
+        }}
       >
         <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: text }} />
         <span>{label}</span>
@@ -114,12 +131,16 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
                     ? 'rgba(255, 59, 48, 0.12)'
                     : seismicSev.level === 'moderate'
                     ? 'rgba(255, 159, 10, 0.12)'
+                    : seismicSev.level === 'not-assessed'
+                    ? 'var(--fill)'
                     : 'rgba(52, 199, 89, 0.12)',
                 color:
                   seismicSev.level === 'high'
                     ? 'var(--semantic-red)'
                     : seismicSev.level === 'moderate'
                     ? 'var(--semantic-amber)'
+                    : seismicSev.level === 'not-assessed'
+                    ? 'var(--text-2)'
                     : 'var(--semantic-green)',
               }}
             >
@@ -172,7 +193,9 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
               <div className="h-10 flex items-center justify-between px-0.5">
                 <span className="text-[13px] font-normal text-[var(--text-2)]">Design zone factor</span>
                 <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
-                  Z = {seismic.zone_factor.toFixed(2)}
+                  {seismic.zone_factor !== null && seismic.zone_factor !== undefined
+                    ? `Z = ${seismic.zone_factor.toFixed(2)}`
+                    : 'Not assessed'}
                 </span>
               </div>
             </div>

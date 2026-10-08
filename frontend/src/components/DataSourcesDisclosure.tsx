@@ -3,6 +3,8 @@ import { Icon } from './Icon';
 
 interface DataSourcesDisclosureProps {
   category: 'hazards' | 'ecology';
+  /** True when the analysis ran with fallback models - the listed live sources were not all actually used. */
+  degraded?: boolean;
 }
 
 const HAZARD_SOURCES = [
@@ -20,7 +22,7 @@ const ECOLOGY_SOURCES = [
   'Classical Mayamatam & Manasara Vastu Vidya spatial orientation canons',
 ];
 
-export const DataSourcesDisclosure: React.FC<DataSourcesDisclosureProps> = ({ category }) => {
+export const DataSourcesDisclosure: React.FC<DataSourcesDisclosureProps> = ({ category, degraded = false }) => {
   const [isOpen, setIsOpen] = useState(false);
   const sources = category === 'hazards' ? HAZARD_SOURCES : ECOLOGY_SOURCES;
 
@@ -58,6 +60,15 @@ export const DataSourcesDisclosure: React.FC<DataSourcesDisclosureProps> = ({ ca
         }`}
       >
         <div className="overflow-hidden space-y-2">
+          {degraded && (
+            <div className="flex items-start gap-2 text-[12px] text-[var(--semantic-amber)] leading-snug">
+              <Icon name="alert-triangle" size={12} className="shrink-0 mt-0.5" />
+              <span>
+                Some telemetry services were unavailable during this analysis; deterministic
+                fallback models were applied in place of the live sources listed below.
+              </span>
+            </div>
+          )}
           {sources.map((src, idx) => (
             <div key={idx} className="flex items-start gap-2 text-[12px] text-[var(--text-3)] leading-snug">
               <Icon name="info" size={12} className="text-[var(--accent)] shrink-0 mt-0.5" />

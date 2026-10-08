@@ -14,17 +14,29 @@ export const RiskMatrix: React.FC<RiskMatrixProps> = ({ risks }) => {
         return {
           bg: 'rgba(255, 59, 48, 0.12)',
           text: 'var(--semantic-red)',
+          dashed: false,
         };
       case 'medium':
       case 'moderate':
         return {
           bg: 'rgba(255, 159, 10, 0.12)',
           text: 'var(--semantic-amber)',
+          dashed: false,
+        };
+      case 'unknown':
+      case 'not assessed':
+      case 'not-assessed':
+        // Neutral gray, dashed: an unmeasured risk must never read as green "clear"
+        return {
+          bg: 'var(--fill)',
+          text: 'var(--text-2)',
+          dashed: true,
         };
       default:
         return {
           bg: 'rgba(52, 199, 89, 0.12)',
           text: 'var(--semantic-green)',
+          dashed: false,
         };
     }
   };
@@ -57,7 +69,11 @@ export const RiskMatrix: React.FC<RiskMatrixProps> = ({ risks }) => {
                 </span>
                 <span
                   className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold capitalize shrink-0"
-                  style={{ backgroundColor: style.bg, color: style.text }}
+                  style={{
+                    backgroundColor: style.bg,
+                    color: style.text,
+                    ...(style.dashed ? { border: '1px dashed var(--hairline)' } : {}),
+                  }}
                 >
                   <span
                     className="w-1.5 h-1.5 rounded-full"

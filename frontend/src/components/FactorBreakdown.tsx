@@ -27,7 +27,9 @@ export const FactorBreakdown: React.FC<FactorBreakdownProps> = ({ factors, limit
     }
   };
 
-  const getBarColor = (score: number) => {
+  const getBarColor = (score: number, status: FactorScore['status']) => {
+    // Unknown measurement: neutral gray bar, never reads as a healthy/failed signal
+    if (status === 'unknown') return 'var(--text-3)';
     if (score >= 75) return 'var(--semantic-green)';
     if (score >= 50) return 'var(--semantic-amber)';
     return 'var(--semantic-red)';
@@ -51,7 +53,8 @@ export const FactorBreakdown: React.FC<FactorBreakdownProps> = ({ factors, limit
       {/* Grouped list of factors with hairline rows */}
       <div className="divide-y divide-[var(--hairline)]">
         {displayFactors.map((factor) => {
-          const barColor = getBarColor(factor.score);
+          const isUnknown = factor.status === 'unknown';
+          const barColor = getBarColor(factor.score, factor.status);
           const icon = getFactorIcon(factor.factor_id);
 
           return (
@@ -65,12 +68,24 @@ export const FactorBreakdown: React.FC<FactorBreakdownProps> = ({ factors, limit
                   <span className="text-[11px] text-[var(--text-3)] font-normal">
                     {(factor.weight * 100).toFixed(0)}%
                   </span>
+                  {isUnknown && (
+                    <span
+                      className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold shrink-0 bg-[var(--fill)] text-[var(--text-3)] border border-dashed border-[var(--hairline)]"
+                      title="This factor could not be measured from live data; the neutral score is disclosed, not synthesized"
+                    >
+                      Not measured
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 text-right shrink-0">
                   <span className="text-[12px] text-[var(--text-3)] tabular-nums">
-                    {factor.raw_value} {factor.unit}
+                    {factor.raw_value ?? '—'} {factor.unit}
                   </span>
-                  <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums min-w-[2rem]">
+                  <span
+                    className={`text-[13px] font-semibold tabular-nums min-w-[2rem] ${
+                      isUnknown ? 'text-[var(--text-3)]' : 'text-[var(--text-1)]'
+                    }`}
+                  >
                     {factor.score.toFixed(0)}
                   </span>
                 </div>
@@ -79,7 +94,9 @@ export const FactorBreakdown: React.FC<FactorBreakdownProps> = ({ factors, limit
               {/* 4px flat progress bar */}
               <div className="w-full bg-[var(--fill)] rounded-full h-1 overflow-hidden">
                 <div
-                  className="h-full rounded-full transition-all duration-700 ease-out"
+                  className={`h-full rounded-full transition-all duration-700 ease-out ${
+                    isUnknown ? 'opacity-50' : ''
+                  }`}
                   style={{
                     width: `${Math.min(100, Math.max(0, factor.score))}%`,
                     backgroundColor: barColor,
