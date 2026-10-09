@@ -565,6 +565,43 @@
 }
 
 /* ========================================================================= */
+/* REPORT SHEET — anchored sections & async placeholders                     */
+/* ========================================================================= */
+
+/* Anchor targets clear the sticky sheet header (56px) + mobile tab strip */
+[data-report-section] {
+  scroll-margin-top: 72px;
+}
+
+/* Skeleton placeholder: tokenized shimmer, frozen by the global
+   prefers-reduced-motion rule so nothing animates when set. */
+.report-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--fill) 25%,
+    var(--fill-hover) 50%,
+    var(--fill) 75%
+  );
+  background-size: 200% 100%;
+  animation: reportSkeletonShimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes reportSkeletonShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .report-skeleton {
+    animation: none;
+  }
+}
+
+/* ========================================================================= */
 /* PRINT / PDF MEDIA STYLES                                                  */
 /* ========================================================================= */
 @media print {
@@ -629,6 +666,84 @@
     page-break-inside: avoid;
     break-inside: avoid;
     margin-bottom: 2.5rem;
+  }
+
+  /* One section per printed page: every report section starts on a fresh page. */
+  .report-print-section {
+    page-break-before: always;
+    break-before: page;
+  }
+  .report-print-section:first-of-type {
+    page-break-before: auto;
+    break-before: auto;
+  }
+
+  /* Warnings banner always prints at the top of page 1, before the hero. */
+  .report-print-warnings {
+    page-break-before: auto;
+    break-before: auto;
+    page-break-after: avoid;
+    break-after: avoid;
+    order: -1;
+  }
+
+  /* Grayscale-safe provenance badges for B&W printers:
+     VERIFIED  = solid black border (measured, trusted)
+     CALCULATED = solid 1.5px black border + light gray fill (derived)
+     ASSUMED   = double-dense gray border + gray tint (planning assumption)
+     UNKNOWN   = dashed gray border, no fill (unmeasured) */
+  [data-provenance-status] {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  [data-provenance-status='VERIFIED'] {
+    background: #ffffff !important;
+    color: #000000 !important;
+    border: 1.5px solid #000000 !important;
+  }
+  [data-provenance-status='CALCULATED'] {
+    background: #ececec !important;
+    color: #000000 !important;
+    border: 1px solid #000000 !important;
+  }
+  [data-provenance-status='ASSUMED'] {
+    background: #d9d9d9 !important;
+    color: #000000 !important;
+    border: 1px dashed #4d4d4d !important;
+  }
+  [data-provenance-status='UNKNOWN'] {
+    background: #ffffff !important;
+    color: #4d4d4d !important;
+    border: 1.5px dashed #8c8c8c !important;
+  }
+
+  /* Force the print document light: tokens resolve to light values even if
+     the user was in the dark theme when they hit Print. */
+  :root,
+  [data-theme='dark'] {
+    --sheet-bg: rgba(255, 255, 255, 0.92) !important;
+    --card-bg-subtle: #f5f5f7 !important;
+    --text-1: #1d1d1f !important;
+    --text-2: #494949 !important;
+    --text-3: #6e6e73 !important;
+    --hairline: #e5e5ea !important;
+    --panel-border-color: #e5e5ea !important;
+    --fill: #f2f2f4 !important;
+    --fill-hover: #e8e8ec !important;
+    color-scheme: light !important;
+  }
+
+  /* Amber banner prints as a bold bordered notice readable in grayscale. */
+  .report-warnings-banner {
+    background: #f5f5f5 !important;
+    border: 2px solid #000000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Tab strip becomes section context; hide interactive-only controls. */
+  .report-tab-strip-print-label {
+    display: block !important;
   }
 }
 
