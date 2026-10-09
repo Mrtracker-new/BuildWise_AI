@@ -596,7 +596,19 @@ def make_construction_schedules_table(
         d_size = f"{_safe_float(_get(d, 'width_m', 0.9)):.2f}m x {_safe_float(_get(d, 'height_m', 2.1)):.2f}m"
         d_type = str(_get(d, "door_type", "Flush Timber Door"))
         d_clear = f"{_safe_float(_get(d, 'width_m', 0.9)):.2f}m Clear"
-        d_lvl = f"Level {_get(d, 'level', floor_index)} (+{floor_index * 3.0:.2f}m)"
+        # CANONICAL LEVEL LADDER: the wire may carry "L0", "Level 0" or even
+        # a pre-prefixed "LLevel 0". Normalize BEFORE the display format so the
+        # table can never print a double-prefixed ladder token.
+        _raw_lvl = str(_get(d, "level", ""))
+        if _raw_lvl.startswith("LLevel "):
+            _raw_lvl = _raw_lvl[len("L"):]
+        elif _raw_lvl.startswith("L") and not _raw_lvl.startswith("Level"):
+            pass
+        elif _raw_lvl.startswith("Level "):
+            _raw_lvl = f"L{_raw_lvl[len('Level '):]}"
+        elif not _raw_lvl:
+            _raw_lvl = f"L{floor_index}"
+        d_lvl = f"{_raw_lvl} (+{floor_index * 3.0:.2f}m)"
         door_table_data.append([
             Paragraph(f"<b>{d_tag}</b>", p_td),
             Paragraph(d_size, p_td),
@@ -662,7 +674,7 @@ def make_construction_schedules_table(
         r_name = str(_get(r, "room_name", "Room"))
         r_area = f"{_safe_float(_get(r, 'clear_area_sqm', 0.0)):.2f} m²"
         r_dims = str(_get(r, "clear_dims", "-"))
-        r_finish = str(_get(r, "finish_zone", "Zone Standard Finish"))
+        r_finish = " ".join(str(_get(r, "finish_zone", "Zone Standard Finish")).split())
         room_table_data.append([
             Paragraph(r_num, p_td_num),
             Paragraph(f"<b>{r_name}</b>", p_td),
@@ -1453,10 +1465,27 @@ def generate_pdf_report(
             raw_val = f.get("raw_value")
             unit_str = str(f.get("unit", "") or "")
 
+            # Provenance status words mirror the report UI census exactly: the
+            # same categorizer contract (unmeasured -> UNKNOWN; disclosed
+            # fallback/synthetic/modelled/proxy details -> ASSUMED; otherwise
+            # VERIFIED). The word prints in the assessment cell so the dossier
+            # and the sheet can never diverge.
+            if status_raw == "unknown" or raw_val is None:
+                provenance_word = "UNKNOWN"
+            else:
+                details_lc = str(f.get("details") or "").lower()
+                if any(
+                    key in details_lc
+                    for key in ("fallback", "synthetic", "modelled", "modeled", "proxy", "latitudinal")
+                ):
+                    provenance_word = "ASSUMED"
+                else:
+                    provenance_word = "VERIFIED"
+
             # Unmeasured factors (status 'unknown' / raw_value null)
             # render as a neutral gray "Unknown" pill and "Not measured" field
             # value - never a fabricated 0 or a green/amber/red severity color.
-            if status_raw == "unknown" or raw_val is None:
+            if provenance_word == "UNKNOWN":
                 pill = make_pill(st, COLOR_BG_SUBTLE, COLOR_TEXT_SECONDARY, width=65)
             elif score_val >= 75:
                 pill = make_pill(st, COLOR_GREEN_TINT, COLOR_GREEN_TEXT, width=65)
@@ -1476,7 +1505,11 @@ def generate_pdf_report(
                 Paragraph(field_value_text, table_text),
                 Paragraph(f"{score_val:.1f}/100", table_num),
                 pill,
-                Paragraph(html.escape(str(f.get("details", ""))), table_text)
+                Paragraph(
+                    f"<font color='{COLOR_TEXT_TERTIARY.hexval()}'><b>{provenance_word}</b></font> "
+                    f"{html.escape(str(f.get('details', '')))}",
+                    table_text,
+                )
             ])
 
         factor_table = Table(factor_rows, colWidths=[95, 45, 70, 50, 75, 158.2], repeatRows=1)
@@ -1580,11 +1613,18 @@ def generate_pdf_report(
             ratio_display = f"{ratio_val:.1f}x" if ratio_val is not None else "N/A (<0.1 m³/s)"
             z_factor = seismic.get("zone_factor")
             z_val = _safe_float(z_factor, None)
-            z_str = f"{z_val:.2f}" if z_val is not None else "0.16"
+            z_str = f"{z_val:.2f}" if z_val is not None else None
             max_gust = _safe_float(storm.get("max_annual_gust_kmh"), 0.0)
             rain_days = _safe_float(storm.get("extreme_rainfall_days"), 0.0)
 
-            c_seis = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">BIS IS 1893 Seismic Zone</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(str(seismic.get("zone", "Zone III")))} (Z = {z_str})</b></font>', kv_style)
+            # A null/missing zone renders the explicit not-assessed state -
+            # never a fabricated default zone letter or zone factor.
+            zone_raw = seismic.get("zone")
+            if zone_raw:
+                zone_display = f"{zone_raw} (Z = {z_str})"
+            else:
+                zone_display = "NOT ASSESSED (outside IS 1893 extent)"
+            c_seis = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">BIS IS 1893 Seismic Zone</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(zone_display)}</b></font>', kv_style)
             c_usgs = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">USGS 50-Yr Seismicity (250km)</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{html.escape(str(seismic.get("event_count_display", "0")))} events (Max M{html.escape(str(seismic.get("max_magnitude") or "N/A"))})</b></font>', kv_style)
 
             c_flood = Paragraph(f'<font color="{COLOR_TEXT_SECONDARY.hexval()}" size="8">River Discharge Ratio (ERA5)</font><br/><font color="{COLOR_TEXT_PRIMARY.hexval()}" size="10"><b>{ratio_display} ({html.escape(str(flood.get("pressure_level", "low")).capitalize())} pressure)</b></font>', kv_style)
