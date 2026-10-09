@@ -257,6 +257,15 @@ export interface AnalysisResponse {
   };
   degraded_mode: boolean;
   warnings: string[];
+  /** Per-source fetch provenance: real server ISO8601 fetch timestamps; null
+   *  means the upstream degraded to its disclosed fallback model. */
+  data_sources?: Record<string, DataSourceProvenance>;
+}
+
+export interface DataSourceProvenance {
+  source: string;
+  fetched_at: string | null;
+  is_fallback: boolean;
 }
 
 // ----------------------------------------------------

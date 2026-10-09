@@ -6,7 +6,17 @@ import type {
   ReportRequestPayload,
   AnalysisRequest,
 } from '../services/types';
-import { ReportHeroBand } from './ReportHeroBand';
+import { ReportHeroHeader } from './report/ReportHeroHeader';
+import { CollapsibleSection } from './report/CollapsibleSection';
+import { WarningsBanner } from './report/WarningsBanner';
+import { ProvenanceFactorCard } from './report/ProvenanceFactorCard';
+import { CertificatePanel } from './report/CertificatePanel';
+import { CostRangeBar } from './report/CostRangeBar';
+import { WindRose } from './report/WindRose';
+import { ProvenanceFooter } from './report/ProvenanceFooter';
+import { SeismicZoneChip } from './report/SeismicZoneChip';
+import { UnitToggle } from './report/UnitToggle';
+import { CopyValueButton } from './report/CopyValueButton';
 import { FactorBreakdown } from './FactorBreakdown';
 import { RecommendationPanel } from './RecommendationPanel';
 import { HazardProfileCard } from './HazardProfileCard';
@@ -44,12 +54,41 @@ export interface ReportSheetProps {
   sharedBoundary?: SharedBoundaryState | null;
 }
 
-const TABS: { id: ResultsTab; label: string }[] = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'hazards', label: 'Hazards' },
-  { id: 'ecology', label: 'Ecology' },
-  { id: 'cost_plan', label: 'Cost & Plan' },
+const TABS: { id: ResultsTab; label: string; icon: 'layers' | 'activity' | 'sun' | 'currency-rupee' }[] = [
+  { id: 'overview', label: 'Overview', icon: 'layers' },
+  { id: 'hazards', label: 'Hazards', icon: 'activity' },
+  { id: 'ecology', label: 'Ecology', icon: 'sun' },
+  { id: 'cost_plan', label: 'Cost & Plan', icon: 'currency-rupee' },
 ];
+
+/** Memoized factor-card list: re-renders only when the data or unit preference changes. */
+const MemoizedFactorList: React.FC<{ factors: AnalysisResponse['factors']; dataSources?: AnalysisResponse['data_sources'] }> = React.memo(({ factors, dataSources }) => (
+  <div className="divide-y divide-[var(--hairline)]">
+    {factors.map((factor, idx) => (
+      <ProvenanceFactorCard
+        key={factor.factor_id}
+        factor={factor}
+        rank={idx + 1}
+        dataSources={dataSources}
+      />
+    ))}
+  </div>
+));
+MemoizedFactorList.displayName = 'MemoizedFactorList';
+
+/** Labels for scroll-spy section anchors inside each tab. */
+const SECTION_LABELS: Record<string, string> = {
+  summary: 'Summary',
+  factors: 'Factor Assessment',
+  commentary: 'Engineering Commentary',
+  profiles: 'Hazard Profiles',
+  risks: 'Risk Mitigation',
+  vision: 'Site Vision',
+  orientation: 'Orientation & Vastu',
+  estimate: 'Cost Estimate',
+  breakdown: 'Cost Breakdown',
+  valuation: 'Valuation & Plan',
+};
 
 export const ReportSheet: React.FC<ReportSheetProps> = ({
   isOpen,
@@ -71,6 +110,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
   onTabChange,
 }) => {
   const [copiedRef, setCopiedRef] = useState(false);
+  const [activeSection, setActiveSection] = useState<string>('');
   const sheetRef = useRef<HTMLDivElement>(null);
   const contentScrollRef = useRef<HTMLDivElement>(null);
 
@@ -91,6 +131,53 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
     },
     [onTabChange]
   );
+
+  // Number-key tab switching (1-4); ignored while typing in form fields
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleTabKeys = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      const idx = ['1', '2', '3', '4'].indexOf(e.key);
+      if (idx >= 0 && TABS[idx]) {
+        e.preventDefault();
+        handleTabChange(TABS[idx].id);
+      }
+    };
+    window.addEventListener('keydown', handleTabKeys);
+    return () => window.removeEventListener('keydown', handleTabKeys);
+  }, [isOpen, handleTabChange]);
+
+  // Scroll-spy: track which anchored section is in view inside the active tab
+  useEffect(() => {
+    if (!isOpen) return;
+    const root = contentScrollRef.current;
+    if (!root || typeof IntersectionObserver === 'undefined') return;
+    const sections = Array.from(root.querySelectorAll<HTMLElement>('[data-report-section]'));
+    if (sections.length === 0) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visible[0]) {
+          setActiveSection(visible[0].target.getAttribute('data-report-section') ?? '');
+        }
+      },
+      { root, rootMargin: '-15% 0px -70% 0px', threshold: 0 }
+    );
+    sections.forEach((s) => observer.observe(s));
+    return () => observer.disconnect();
+  }, [isOpen, activeTab]);
 
   // Body scroll lock and focus trap while open
   useEffect(() => {
@@ -242,26 +329,47 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
             aria-label="Report sections"
             className="report-sheet-tabs-nav hidden lg:flex items-center justify-center flex-1 max-w-md mx-auto"
           >
-            <div className="bg-[var(--fill)] rounded-[10px] p-[2px] grid grid-cols-4 gap-1 w-full text-[12px] font-medium">
-              {TABS.map((tab) => (
+            <div
+              role="tablist"
+              className="bg-[var(--fill)] rounded-[10px] p-[2px] grid grid-cols-4 gap-1 w-full text-[12px] font-medium"
+            >
+              {TABS.map((tab, idx) => (
                 <button
                   key={tab.id}
                   type="button"
+                  role="tab"
+                  id={`report-tab-${tab.id}`}
+                  aria-selected={activeTab === tab.id}
+                  aria-controls="report-tabpanel"
                   onClick={() => handleTabChange(tab.id)}
-                  className={`py-1.5 px-2 rounded-[8px] text-[12px] text-center transition-all truncate cursor-pointer ${
+                  title={`${tab.label} (press ${idx + 1})`}
+                  className={`py-1.5 px-2 rounded-[8px] text-[12px] text-center transition-all duration-200 ease-apple truncate cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 ${
                     activeTab === tab.id
                       ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] font-semibold shadow-[var(--segmented-active-shadow)]'
                       : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
                   }`}
                 >
-                  {tab.label}
+                  <span className="inline-flex items-center justify-center gap-1.5 w-full">
+                    <Icon name={tab.icon} size={12} className="shrink-0" />
+                    <span className="truncate">{tab.label}</span>
+                  </span>
                 </button>
               ))}
             </div>
           </nav>
 
-          {/* Right: Download PDF (primary), Print (secondary), Close */}
+          {/* Right: scroll-spy caption + Download PDF (primary), Print, Close */}
           <div className="report-sheet-header-actions flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* Metric/imperial switch, applied report-wide */}
+            <span className="hidden sm:inline-flex"><UnitToggle /></span>
+
+            {/* Current in-view section (decorative; fixed footprint, no layout shift) */}
+            <span
+              aria-hidden="true"
+              className="hidden xl:inline-flex items-center max-w-[140px] px-2 py-0.5 h-6 rounded-full bg-[var(--fill)] text-[11px] text-[var(--text-3)] shrink-0"
+            >
+              <span className="truncate">{SECTION_LABELS[activeSection] ?? ''}</span>
+            </span>
             {/* Download PDF button (primary) */}
             <DownloadReportButton payload={reportPayload} variant="compact" />
 
@@ -291,13 +399,19 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
 
         {/* Mobile Horizontal Sub-Header Tabs (<1024px) */}
         <div className="report-sheet-tabs-nav lg:hidden border-b border-[var(--hairline)] px-4 py-2 bg-[var(--sheet-bg)] bw-tab-strip bw-fade-x shrink-0">
-          <div className="bg-[var(--fill)] rounded-[10px] p-[2px] flex items-center gap-1 min-w-max text-[12px] font-medium">
+          <div
+            role="tablist"
+            className="bg-[var(--fill)] rounded-[10px] p-[2px] flex items-center gap-1 min-w-max text-[12px] font-medium"
+          >
             {TABS.map((tab) => (
               <button
                 key={tab.id}
                 type="button"
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                aria-controls="report-tabpanel"
                 onClick={() => handleTabChange(tab.id)}
-                className={`py-1.5 px-3.5 rounded-[8px] text-[12px] transition-all whitespace-nowrap cursor-pointer ${
+                className={`py-1.5 px-3.5 rounded-[8px] text-[12px] transition-all duration-200 ease-apple whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 ${
                   activeTab === tab.id
                     ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] font-semibold shadow-[var(--segmented-active-shadow)]'
                     : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
@@ -318,22 +432,47 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
             {/* ================================================================= */}
             {/* SCREEN VIEW: Render selected tab only                             */}
             {/* ================================================================= */}
-            <div className="report-screen-only animate-tab-switch">
+            <div
+              id="report-tabpanel"
+              role="tabpanel"
+              aria-labelledby={`report-tab-${activeTab}`}
+              className="report-screen-only animate-tab-switch"
+            >
               {/* TAB 1: OVERVIEW */}
               {activeTab === 'overview' && (
                 <div className="space-y-4">
-                  {/* a) HERO BAND: full-width single-row card (radius 14, padding 18, height ~150px) */}
-                  <ReportHeroBand data={analysisData} />
+                  <h1 className="text-[17px] font-bold text-[var(--text-1)] tracking-tight">
+                    Site Overview
+                  </h1>
+
+                  {/* Degradation warnings: persistent amber banner, report top */}
+                  <WarningsBanner data={analysisData} />
+
+                  {/* Hero summary: score, identity chips, headline tiles, data health */}
+                  <section data-report-section="summary" id="sec-summary" aria-label="Summary">
+                    <ReportHeroHeader data={analysisData} />
+                  </section>
 
                   {/* b) BELOW: grid 7fr / 5fr, gap 16: left = Multi-Criteria Factor Breakdown; right = Engineering Commentary & Action Items */}
                   <div className="grid grid-cols-1 lg:grid-cols-[7fr_5fr] gap-4 items-start">
                     {/* Left Column (7fr): Multi-Criteria Factor Breakdown card */}
-                    <div className="w-full min-w-0">
-                      <FactorBreakdown factors={analysisData.factors} />
+                    <div className="w-full min-w-0" data-report-section="factors">
+                      <CollapsibleSection
+                        sectionId="overview-factors"
+                        title="Factor Assessment"
+                        icon="layers"
+                        meta={
+                          <span className="text-[11px] text-[var(--text-3)] tabular-nums">
+                            {analysisData.factors.length} weighted
+                          </span>
+                        }
+                      >
+                        <MemoizedFactorList factors={analysisData.factors} dataSources={analysisData.data_sources} />
+                      </CollapsibleSection>
                     </div>
 
                     {/* Right Column (5fr): Engineering Commentary & Action Items card (sticky filter control) */}
-                    <div className="w-full min-w-0">
+                    <div className="w-full min-w-0" data-report-section="commentary">
                       <RecommendationPanel
                         summary={analysisData.engineering_summary}
                         recommendations={analysisData.detailed_recommendations}
@@ -372,13 +511,41 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
               {/* TAB 2: HAZARDS */}
               {activeTab === 'hazards' && (
                 <div className="space-y-4">
+                  <h1 className="text-[17px] font-bold text-[var(--text-1)] tracking-tight">
+                    Hazards &amp; Resilience
+                  </h1>
+
                   {/* 3-col grid with Seismic / Hydrological / Storm side by side */}
-                  {analysisData.hazard_profile && (
-                    <HazardProfileCard hazard={analysisData.hazard_profile} layout="grid" />
-                  )}
+                  <section data-report-section="profiles" aria-label="Hazard profiles">
+                    <div className="flex items-center justify-between mb-2">
+                      <h2 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight flex items-center gap-2">
+                        <Icon name="activity" size={14} className="text-[var(--text-2)]" />
+                        Seismic classification
+                      </h2>
+                      {analysisData.hazard_profile && (
+                        <SeismicZoneChip seismic={analysisData.hazard_profile.seismic} />
+                      )}
+                    </div>
+                    {analysisData.hazard_profile && (
+                      <HazardProfileCard hazard={analysisData.hazard_profile} layout="grid" />
+                    )}
+                  </section>
 
                   {/* Below: Full-width Risk Mitigation Matrix */}
-                  <RiskMatrix risks={analysisData.risks} />
+                  <section data-report-section="risks" aria-label="Risk mitigation">
+                    <CollapsibleSection
+                      sectionId="hazards-risks"
+                      title="Risk Register"
+                      icon="shield-alert"
+                      meta={
+                        <span className="text-[11px] text-[var(--text-3)] tabular-nums">
+                          {analysisData.risks.length} identified
+                        </span>
+                      }
+                    >
+                      <RiskMatrix risks={analysisData.risks} />
+                    </CollapsibleSection>
+                  </section>
 
                   {/* Consolidated Data Sources & Standards */}
                   <DataSourcesDisclosure category="hazards" degraded={analysisData.degraded_mode || (analysisData.warnings?.length ?? 0) > 0} />
@@ -388,38 +555,63 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
               {/* TAB 3: ECOLOGY */}
               {activeTab === 'ecology' && (
                 <div className="space-y-4">
+                  <h1 className="text-[17px] font-bold text-[var(--text-1)] tracking-tight">
+                    Ecology &amp; Orientation
+                  </h1>
+
                   {/* 2-col grid SiteVisionCard + tree preservation list */}
-                  <SiteVisionCard
-                    data={siteVisionData}
-                    isLoading={isSiteVisionLoading}
-                    onScan={onRunSiteVision}
-                    hasCoordinates={hasLocation}
-                    layout="grid"
-                  />
+                  <section data-report-section="vision" aria-label="Site vision">
+                    <SiteVisionCard
+                      data={siteVisionData}
+                      isLoading={isSiteVisionLoading}
+                      onScan={onRunSiteVision}
+                      hasCoordinates={hasLocation}
+                      layout="grid"
+                    />
+                  </section>
 
                   {/* Below: 2-col grid OrientationCompass + VastuAdvisoryCard side by side */}
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-                    <OrientationCompass orientation={analysisData.orientation} />
+                  <section data-report-section="orientation" aria-label="Orientation and vastu">
+                    <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 mb-4">
+                      <h2 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight mb-3">
+                        Bioclimatic orientation
+                      </h2>
+                      <WindRose orientation={analysisData.orientation} />
+                    </div>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+                      <OrientationCompass orientation={analysisData.orientation} />
 
-                    {analysisData.vastu_advisory && (
-                      <VastuAdvisoryCard advisory={analysisData.vastu_advisory} />
-                    )}
-                  </div>
+                      {analysisData.vastu_advisory && (
+                        <VastuAdvisoryCard advisory={analysisData.vastu_advisory} />
+                      )}
+                    </div>
+                  </section>
 
                   {/* Consolidated Data Sources & Standards */}
                   <DataSourcesDisclosure category="ecology" degraded={analysisData.degraded_mode || (analysisData.warnings?.length ?? 0) > 0} />
+
+                  {/* Full report provenance + status legend */}
+                  <ProvenanceFooter data={analysisData} />
                 </div>
               )}
 
               {/* TAB 4: COST & PLAN */}
               {activeTab === 'cost_plan' && (
                 <div className="space-y-4">
+                  <h1 className="text-[17px] font-bold text-[var(--text-1)] tracking-tight">
+                    Cost &amp; Planning
+                  </h1>
+
+                  <section data-report-section="estimate" aria-label="Headline cost estimate">
                   {/* Summary Tiles Row (4 tiles with room: label 12px, value 22px/600) */}
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
                     <div className="bg-[var(--card-bg-subtle)] border border-[var(--hairline)] p-4 rounded-[14px] min-w-0">
-                      <span className="text-[12px] font-normal text-[var(--text-3)] block mb-1">
-                        Plinth area base rate
-                      </span>
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-[12px] font-normal text-[var(--text-3)]">
+                          Plinth area base rate
+                        </span>
+                        <CopyValueButton value={`₹${analysisData.cost_estimate.base_rate_per_sqft.toLocaleString('en-IN')}/sq ft`} label="Plinth area base rate" />
+                      </div>
                       <span className="text-[22px] font-semibold text-[var(--text-1)] tabular-nums block leading-tight">
                         ₹{analysisData.cost_estimate.base_rate_per_sqft.toLocaleString('en-IN')}/sq ft
                       </span>
@@ -429,9 +621,12 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                     </div>
 
                     <div className="bg-[var(--card-bg-subtle)] border border-[var(--hairline)] p-4 rounded-[14px] min-w-0">
-                      <span className="text-[12px] font-normal text-[var(--text-3)] block mb-1">
-                        Topographic modifier
-                      </span>
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-[12px] font-normal text-[var(--text-3)]">
+                          Topographic modifier
+                        </span>
+                        <CopyValueButton value={`${analysisData.cost_estimate.terrain_multiplier.toFixed(2)}x`} label="Topographic modifier" />
+                      </div>
                       <span className="text-[22px] font-semibold text-[var(--text-1)] tabular-nums block leading-tight">
                         {analysisData.cost_estimate.terrain_multiplier.toFixed(2)}x
                       </span>
@@ -443,9 +638,12 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                     </div>
 
                     <div className="bg-[var(--card-bg-subtle)] border border-[var(--hairline)] p-4 rounded-[14px] min-w-0">
-                      <span className="text-[12px] font-normal text-[var(--text-3)] block mb-1">
-                        Total civil budget
-                      </span>
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-[12px] font-normal text-[var(--text-3)]">
+                          Total civil budget
+                        </span>
+                        <CopyValueButton value={formatInr(analysisData.cost_estimate.total_estimated_cost_inr)} label="Total civil budget" />
+                      </div>
                       <span className="text-[22px] font-semibold text-[var(--text-1)] tabular-nums block leading-tight">
                         {formatInr(analysisData.cost_estimate.total_estimated_cost_inr)}
                       </span>
@@ -456,9 +654,15 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                     </div>
 
                     <div className="bg-[var(--card-bg-subtle)] border border-[var(--hairline)] p-4 rounded-[14px] min-w-0">
-                      <span className="text-[12px] font-normal text-[var(--text-3)] block mb-1">
-                        Combined project total
-                      </span>
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-[12px] font-normal text-[var(--text-3)]">
+                          Combined project total
+                        </span>
+                        <CopyValueButton
+                          value={currentCombinedTotal !== null ? formatInr(currentCombinedTotal) : '—'}
+                          label="Combined project total"
+                        />
+                      </div>
                       <span className="text-[22px] font-semibold text-[var(--text-1)] tabular-nums block leading-tight">
                         {currentCombinedTotal !== null ? formatInr(currentCombinedTotal) : '—'}
                       </span>
@@ -467,14 +671,24 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                       </span>
                     </div>
                   </div>
+                  </section>
 
                   {/* Full-width Cost Breakdown Table */}
+                  <section data-report-section="breakdown" aria-label="Cost breakdown">
+                  <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4">
+                    <h2 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight mb-3">
+                      Cost spread &amp; composition
+                    </h2>
+                    <CostRangeBar cost={analysisData.cost_estimate} />
+                  </div>
                   <CostBreakdownTable
                     costEstimate={analysisData.cost_estimate}
                     hideSummaryHeader={true}
                   />
+                  </section>
 
                   {/* Below: Balanced LandValueCard + FloorPlanGeneratorCard (trailing card spans both columns if blueprint expanded) */}
+                  <section data-report-section="valuation" aria-label="Valuation and floor plan">
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
                     {analysisData.land_value && (
                       <div className={`w-full min-w-0 ${floorPlanData ? 'lg:col-span-2' : ''}`}>
@@ -483,6 +697,12 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                           civilTotalCostInr={analysisData.cost_estimate.total_estimated_cost_inr}
                           onOverrideChange={onOverrideChange}
                         />
+                      </div>
+                    )}
+
+                    {floorPlanData?.qa && (
+                      <div className={`w-full min-w-0 ${floorPlanData ? 'lg:col-span-2' : ''}`}>
+                        <CertificatePanel qa={floorPlanData.qa} />
                       </div>
                     )}
 
@@ -532,6 +752,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                       />
                     </div>
                   </div>
+                  </section>
                 </div>
               )}
             </div>
@@ -550,6 +771,9 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                 </p>
               </div>
 
+              {/* Warnings print on page 1, before the first section. */}
+              <WarningsBanner data={analysisData} />
+
               {/* SECTION 1: OVERVIEW */}
               <div className="report-print-section space-y-4">
                 <div className="border-b border-gray-300 pb-1.5">
@@ -557,7 +781,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                     1. Site Suitability Assessment & Overview
                   </h2>
                 </div>
-                <ReportHeroBand data={analysisData} />
+                <ReportHeroHeader data={analysisData} />
                 <div className="grid grid-cols-2 gap-4 items-start">
                   <FactorBreakdown factors={analysisData.factors} />
                   <RecommendationPanel

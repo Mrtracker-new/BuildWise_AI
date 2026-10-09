@@ -20,6 +20,7 @@ import { EmptyState } from './components/EmptyState';
 import { SiteMoveDialog } from './components/SiteMoveDialog';
 import { AnalysisHUD } from './components/AnalysisHUD';
 import { DesignProvider, ToastViewport, ShortcutsSheet, useShortcuts, Drawer, useTier, useViewportClass, useCompactAuthoring, useDesign } from './design';
+import { UnitsProvider } from './components/report/units';
 import { AssistedBar } from './components/AssistedBar';
 import { isAssistedNoticeSessionDismissed, dismissAssistedNoticeForSession } from './services/sessionPrefs';
 import { CaptureSheet, type CaptureStep } from './components/map/CaptureSheet';
@@ -958,7 +959,7 @@ const AppShell: React.FC = () => {
 
       {/* Floating Single-Line Dismissible Telemetry Notice */}
       {warnings.length > 0 && !isWarningDismissed && (
-        <div className="fixed top-[58px] sm:top-[72px] left-2 sm:left-3 right-2 sm:right-3 lg:left-[364px] lg:right-[384px] z-[1001] pointer-events-auto">
+        <div className="print-hide fixed top-[58px] sm:top-[72px] left-2 sm:left-3 right-2 sm:right-3 lg:left-[364px] lg:right-[384px] z-[1001] pointer-events-auto">
           <TelemetryStrip
             warnings={warnings}
             isDismissed={isWarningDismissed}
@@ -969,7 +970,7 @@ const AppShell: React.FC = () => {
 
       {/* Floating AI Engine Fallback Toast */}
       {fallbackToast && (
-        <div className="fixed top-[98px] sm:top-[114px] left-2 sm:left-3 right-2 sm:right-3 lg:left-[364px] lg:right-[384px] z-[1001] pointer-events-auto animate-fade-in">
+        <div className="print-hide fixed top-[98px] sm:top-[114px] left-2 sm:left-3 right-2 sm:right-3 lg:left-[364px] lg:right-[384px] z-[1001] pointer-events-auto animate-fade-in">
           <div
             role="alert"
             className="vibrancy-panel rounded-[12px] border border-[var(--semantic-amber)]/50 bg-[var(--surface)] text-[var(--semantic-amber)] px-3.5 py-2.5 text-[12px] flex items-center justify-between gap-3 shadow-lg"
@@ -1249,7 +1250,9 @@ const AppShell: React.FC = () => {
 
 export const App: React.FC = () => (
   <DesignProvider>
-    <AppShell />
+    <UnitsProvider>
+      <AppShell />
+    </UnitsProvider>
   </DesignProvider>
 );
 

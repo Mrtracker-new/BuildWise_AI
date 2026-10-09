@@ -81,7 +81,7 @@ export function validateBoundary(vertices: Vertex[]): BoundaryValidation {
   }
   const area = Math.abs(shoelaceArea(vertices));
   if (area < MIN_AREA_SQM) {
-    return { valid: false, code: 'EC-03', reason: `Area ${area.toFixed(1)} m2 is below the 36 m2 statutory minimum.` };
+    return { valid: false, code: 'EC-03', reason: `Area ${area.toFixed(1)} m² is below the 36 m² statutory minimum.` };
   }
   for (let i = 0; i < n; i++) {
     for (let j = i + 2; j < n; j++) {

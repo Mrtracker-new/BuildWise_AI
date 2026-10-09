@@ -498,7 +498,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
           <span className="text-[12px] font-medium text-[var(--text-1)] truncate">
             {siteMode === 'rectangle'
               ? 'Rectangle plot (default dimensions)'
-              : `Boundary: ${String(polyMetrics.shapeType).replace('_', '-').toUpperCase()} · ${polyMetrics.area.toFixed(0)} m2 · ${polyMetrics.bbox ? '' : ''}${irregularVertices.length} vertices`}
+              : `Boundary: ${String(polyMetrics.shapeType).replace('_', '-').toUpperCase()} · ${polyMetrics.area.toFixed(0)} m² · ${polyMetrics.bbox ? '' : ''}${irregularVertices.length} vertices`}
           </span>
           {!polyMetrics.isValid && siteMode === 'irregular' && (
             <span className="text-[11px] text-[var(--semantic-red)] truncate">{polyMetrics.reason}</span>
