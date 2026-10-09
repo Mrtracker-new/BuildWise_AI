@@ -453,8 +453,12 @@ def test_l6_stair_statutory_math(floor_height_m: float):
     assert stair.flight_width_m >= STAIR_MIN_WIDTH_RESIDENTIAL_M - 1e-9
     assert stair.risers_per_flight <= STAIR_MAX_RISERS_PER_FLIGHT
     assert stair.landing_depth_m >= stair.flight_width_m - 1e-9
+    # headroom_min_m is the AS-COMPUTED soffit clearance (H - 100mm slab); the
+    # note prints that computed value plus the R/T/N derivation tokens. The
+    # statutory minimum itself is asserted via headroom_min_m above.
     assert stair.headroom_min_m >= STAIR_MIN_HEADROOM_M          # >= 2.20m, never 2.0m
-    assert "2.20" in stair.headroom_note
+    assert stair.headroom_note.startswith(f"HEADROOM >= {stair.headroom_min_m:.2f}m CLEAR")
+    assert "R=" in stair.headroom_note and "T=" in stair.headroom_note and "N=" in stair.headroom_note
     assert abs(stair.riser_count * stair.riser_height_m - floor_height_m) <= 0.001
 
 

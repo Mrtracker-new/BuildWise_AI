@@ -178,9 +178,15 @@ def test_stair_geometry_computations(floor_height_m: float):
     assert stair.stair_box_depth_m >= stair.stair_run_m + stair.landing_depth_m - 0.001
     assert stair.stair_box_width_m >= (2.0 * stair.flight_width_m) + stair.stair_well_m - 0.001
 
-    # 8. Headroom requirement (NBC 2016: >= 2.20m clear, never 2.0m)
+    # 8. Headroom requirement (NBC 2016: >= 2.20m clear, never 2.0m).
+    # headroom_min_m now carries the AS-COMPUTED soffit clearance (H - 100mm
+    # slab), and headroom_note prints the computed value alongside the R/T/N
+    # derivation tokens rather than a fixed compliance sentence.
     assert stair.headroom_min_m >= 2.20
-    assert stair.headroom_note == "HEADROOM >= 2.20m CLEAR"
+    assert stair.headroom_note.startswith(f"HEADROOM >= {stair.headroom_min_m:.2f}m CLEAR")
+    assert "R=" in stair.headroom_note and "T=" in stair.headroom_note
+    # For every sane floor height here, computed soffit headroom clears code.
+    assert abs(stair.headroom_min_m - (floor_height_m - 0.10)) < 0.005
 
 
 # =============================================================================

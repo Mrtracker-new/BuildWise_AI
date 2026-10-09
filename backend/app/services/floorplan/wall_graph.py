@@ -261,6 +261,24 @@ def compute_stair_geometry(
     assert risers_per_flight <= 12, f"Risers per flight ({risers_per_flight}) exceeds NBC maximum of 12"
     treads_per_flight = max(1, risers_per_flight - 1)
 
+    # COMPUTED CLEAR HEADROOM per NBC Part 3 Cl 12.18.3. In a dogleg the two
+    # flights sit side-by-side (separated by the inner well), NOT stacked, so
+    # no walker passes under the opposing flight; the governing clearance is
+    # the vertical clear under the arriving floor slab (soffit) taken over the
+    # stair, conservatively derived from the floor height with a 100mm slab:
+    #   clear = H - slab (0.10m)
+    # For H=3.00m this yields 2.90m >= 2.20m statutory. If the as-computed
+    # value cannot clear 2.20m it is a GEOMETRY defect (floor height / riser
+    # count) - the assertion fires at source instead of the sheet printing a
+    # compliance string the geometry does not earn.
+    _SLAB_THICKNESS_M = 0.10
+    computed_headroom_m = round(H - _SLAB_THICKNESS_M, 3)
+    assert computed_headroom_m >= 2.20 - 1e-9, (
+        f"Stair clear headroom {computed_headroom_m:.2f}m below NBC minimum 2.20m "
+        f"(H={H:.2f}m, N={N}, R={R*1000:.1f}mm, T={T*1000:.0f}mm, "
+        f"risers/flight={risers_per_flight}) - fix the riser geometry, not the label."
+    )
+
     # Flight width per typology statutory minimum (NBC 2016 Part 3 Cl 12.18.1)
     typ_upper = typology.upper()
     if "T2" in typ_upper or "T3" in typ_upper or "COMMERCIAL" in typ_upper or "MULTI" in typ_upper:
@@ -309,8 +327,8 @@ def compute_stair_geometry(
         stair_box_width_m=stair_box_width,
         handrail_side="Inner Well (950mm)",
         travel_direction=travel_dir,
-        headroom_min_m=2.20,
-        headroom_note="HEADROOM >= 2.20m CLEAR",
+        headroom_min_m=computed_headroom_m,
+        headroom_note=f"HEADROOM >= {computed_headroom_m:.2f}m CLEAR (R={R*1000:.1f}mm T={T*1000:.0f}mm N={N})",
     )
 
 
@@ -329,7 +347,12 @@ def compute_stair_schedule_rows(stair_geom: StairGeometry) -> List[Dict[str, Any
             "risers_per_flight": f"{d.get('risers_per_flight', 9)} (Treads: {d.get('treads_per_flight', 8)})",
             "landing_dims": f"{d.get('landing_width_m', 2.15):.2f} x {d.get('landing_depth_m', 1.00):.2f} m",
             "floor_to_floor": f"{d.get('floor_height_m', 3.0):.2f} m",
+            # PRINT THE COMPUTED VALUE: headroom_min_m now carries the
+            # as-computed soffit headroom (asserted >= 2.20 in the geometry),
+            # with the R/T/riser-count tokens in headroom_note.
             "headroom": f">= {d.get('headroom_min_m', 2.20):.2f} m",
+            "riser_count": d.get("riser_count", 0),
+            "headroom_note": d.get("headroom_note", "HEADROOM >= 2.20m CLEAR"),
             "handrail_side": d.get("handrail_side", "Inner Well (950mm)"),
             "travel_dir": d.get("travel_direction", "UP"),
         }
@@ -1648,6 +1671,7 @@ def build_constructible_wall_graph(
     window_schedule: List[Dict[str, Any]] = []
     room_schedule: List[Dict[str, Any]] = []
 
+
     # Sort openings deterministically
     sorted_doors = sorted([op for op in openings.values() if op.opening_type == "door"], key=lambda d: int(d.tag[1:]) if d.tag[1:].isdigit() else 99)
     for d in sorted_doors:
@@ -1682,7 +1706,12 @@ def build_constructible_wall_graph(
     for idx, r in enumerate(clear_rooms.values(), start=1):
         room_num = f"{floor_index * 100 + idx}"
         orig_r = next((x for x in raw_rooms if _val(x, "room_id") == r.room_id), None)
-        canonical_area = round(float(_val(orig_r, "area_sqm", r.area_sqm)), 2) if orig_r else r.area_sqm
+        # SINGLE SOURCE: the schedule carries the CLEAR structural area
+        # (r.area_sqm). The previous canonical-area fallback could pin a
+        # solved-room AREA while dims showed clear boundaries - two numbers that
+        # could never reconcile. Every downstream surface (on-sheet label,
+        # schedule, legend) now reads the same clear-room fields.
+        canonical_area = r.area_sqm
         # Naming-honesty class threshold used (from living-quality layer metadata)
         naming_threshold = None
         if orig_r is not None:
@@ -1701,7 +1730,7 @@ def build_constructible_wall_graph(
             "clear_dims": f"{r.width_m:.2f}m x {r.depth_m:.2f}m",
             "clear_area_sqm": canonical_area,
             "area_sqm": canonical_area,
-            "finish_zone": r.finish_zone,
+            "finish_zone": " ".join(str(r.finish_zone).split()) if r.finish_zone else r.finish_zone,
             "zone": r.zone,
             "naming_threshold_used": naming_threshold,
             "fixture_count": fixture_count,

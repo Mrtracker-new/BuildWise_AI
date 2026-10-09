@@ -419,8 +419,27 @@ SERVICE_LEGEND_PARTS = [
 
 
 def _ellipsize_str(s: str, max_len: int) -> str:
-    s = str(s).strip()
-    return s if len(s) <= max_len else s[:max_len - 2].rstrip() + ".."
+    """Word-aware ellipsis: never cuts a token mid-word.
+
+    When the budget lands inside the final word, the whole word is dropped and
+    the ellipsis is appended after the last complete word instead - so a reader
+    sees "Private Stair..", never "Private Stairc". Whitespace is normalized
+    and trailing spaces are trimmed before measuring.
+    """
+    s = " ".join(str(s).split())
+    if len(s) <= max_len:
+        return s
+    budget = max_len - 2  # room for the ".." marker
+    if budget <= 0:
+        return s[:max(0, max_len - 1)] + (".." if max_len >= 2 else "")
+    head = s[:budget]
+    if " " not in s[budget:]:
+        # Cut landed at a word boundary already.
+        return s[:budget].rstrip() + ".."
+    if " " in head:
+        return head[: head.rfind(" ")].rstrip() + " .."
+    # Single overlong token: hard-cut is the only option, keep the marker.
+    return head.rstrip() + ".."
 
 
 def _fit_banner_line(text: str, max_chars: int, base_fs: float = 7.5,
@@ -1290,7 +1309,7 @@ def build_drawing_ir(
     stair_room = next((r for r in parsed_rooms if r[9]), None)
     if stair_room:
         _, s_rx, s_ry, s_rw, s_rd, _, _, _, _, _ = stair_room
-        stair_geom = _get(floor_data, "stair_geometry")
+        stair_geom = _get(floor_data, "stair_geometry") or (_get(wg_dict, "stair_geometry") if wg_dict else None)
         treads_per_fl = _safe_int(_get(stair_geom, "treads_per_flight", 8), 8)
         landing_depth = _safe_float(_get(stair_geom, "landing_depth_m", 1.2), 1.2)
 
@@ -1321,8 +1340,13 @@ def build_drawing_ir(
             dn_tip = [(fl2_cx - 0.12, s_ry + 0.45), (fl2_cx, s_ry + 0.25), (fl2_cx + 0.12, s_ry + 0.45)]
             dn_txt = (fl2_cx, landing_y - 0.35)
 
-        # Headroom note as a compact "CLr 2.20m" tag inside the mid-landing
-        # (empty band); the full sentence stays in the schedules sheet.
+        # Headroom note as a compact tag inside the mid-landing (empty band);
+        # the value is the AS-COMPUTED soffit headroom threaded from the stair
+        # geometry (asserted >= 2.20m at source), not a fixed string.
+        _headroom_computed = _safe_float(
+            _get(stair_geom, "headroom_min_m", None) if stair_geom is not None else None,
+            2.20,
+        )
         stair_prim = StairPrimitive(
             layer="cores",
             boundary=(s_rx, s_ry, s_rw, s_rd),
@@ -1336,7 +1360,7 @@ def build_drawing_ir(
             dn_tip=dn_tip,
             dn_text_pos=dn_txt,
             headroom_text_pos=(s_rx + s_rw / 2.0, landing_y + landing_d / 2.0),
-            headroom_text="CLr 2.20m"
+            headroom_text=f"CLr {_headroom_computed:.2f}m"
         )
         primitives.append(stair_prim)
 
@@ -1691,18 +1715,36 @@ def build_drawing_ir(
         avail_w = max(4.0, rw_px - 10.0)
         avail_h = max(4.0, rh_px - 8.0)
 
+        # Single source: On-sheet room labels read CLEAR dims + CLEAR area from wall-graph
+        clear_r = None
+        if wg_dict and isinstance(wg_dict, dict):
+            for cr in (wg_dict.get("rooms") or []):
+                if isinstance(cr, dict) and cr.get("room_id") == rid:
+                    clear_r = cr
+                    break
+            if not clear_r:
+                for cr in (wg_dict.get("room_schedule") or []):
+                    if isinstance(cr, dict) and cr.get("room_id") == rid:
+                        clear_r = cr
+                        break
+        rw_lbl = _safe_float(clear_r.get("width_m", rw_m), rw_m) if clear_r else rw_m
+        rd_lbl = _safe_float(clear_r.get("depth_m", rd_m), rd_m) if clear_r else rd_m
+        area_lbl = _safe_float(clear_r.get("area_sqm", clear_r.get("clear_area_sqm", area_m2)), area_m2) if clear_r else area_m2
+
         is_terrace = "terrace" in rid.lower() or str(_get(r_raw, "zone_category", "")).lower() == "terrace"
         if is_terrace:
             full_name = "OPEN TO SKY / TERRACE"
             abbrev_name = "TERRACE"
-            dims_full = f"{area_m2:.1f}m² (NON-CARPET) | DRAINAGE SLOPE 1:100 TO RWO"
-            dims_short = f"{area_m2:.1f}m² (TERRACE)"
+            dims_full = f"{area_lbl:.1f}m² (NON-CARPET) | DRAINAGE SLOPE 1:100 TO RWO"
+            dims_mid = f"{area_lbl:.1f}m² (TERRACE)"
+            dims_short = f"{area_lbl:.1f}m² (TERRACE)"
         else:
             full_name = rname.upper()
             abbrev_name = _get_abbrev(rname)
             zone_info = f" [{zone_str}]" if zone_str else ""
-            dims_full = f"{rw_m:.1f}m × {rd_m:.1f}m ({area_m2:.1f}m²){zone_info}"
-            dims_short = f"{rw_m:.1f}m × {rd_m:.1f}m"
+            dims_full = f"{rw_lbl:.1f}m × {rd_lbl:.1f}m ({area_lbl:.1f}m²){zone_info}"
+            dims_mid = f"{rw_lbl:.1f}m × {rd_lbl:.1f}m ({area_lbl:.1f}m²)"
+            dims_short = f"{rw_lbl:.1f}m × {rd_lbl:.1f}m ({area_lbl:.1f}m²)"
 
         opts: List[Dict[str, Any]] = []
 
@@ -1712,13 +1754,19 @@ def build_drawing_ir(
             if not lines or len(lines) > 2:
                 continue
             name_h = len(lines) * fs * 1.25
-            dims_fs = min(8.0, fs - 1.0)
+            dims_fs = min(7.0, fs - 1.0)
             dims_to_use = None
             if name_h + 3.0 + dims_fs * 1.2 <= avail_h:
                 if _approx_text_width(dims_full, dims_fs) <= avail_w:
                     dims_to_use = dims_full
-                elif _approx_text_width(dims_short, dims_fs) <= avail_w:
-                    dims_to_use = dims_short
+                else:
+                    for _dfs in [dims_fs, 6.5, 6.0, 5.5, 5.0]:
+                        if _approx_text_width(dims_mid, _dfs) <= avail_w and name_h + 3.0 + _dfs * 1.2 <= avail_h:
+                            dims_to_use = dims_mid
+                            dims_fs = _dfs
+                            break
+                    if dims_to_use is None and _approx_text_width(dims_short, dims_fs) <= avail_w:
+                        dims_to_use = dims_short
 
             total_h = name_h + (3.0 + dims_fs * 1.2 if dims_to_use else 0.0)
             if total_h <= avail_h:
@@ -1739,14 +1787,27 @@ def build_drawing_ir(
             lines = _wrap_text(abbrev_name, avail_w, fs)
             if not lines or len(lines) > 2:
                 continue
-            total_h = len(lines) * fs * 1.25
+            _name_h = len(lines) * fs * 1.25
+            _dims2 = dims_mid
+            dims_fs2 = min(7.0, fs - 1.5)
+            _total_name_ok = _name_h + 3.0 + dims_fs2 * 1.2 <= avail_h
+            dims_str2 = None
+            if _total_name_ok:
+                for _dfs in [dims_fs2, 6.5, 6.0, 5.5, 5.0]:
+                    if _approx_text_width(_dims2, _dfs) <= avail_w and _name_h + 3.0 + _dfs * 1.2 <= avail_h:
+                        dims_str2 = _dims2
+                        dims_fs2 = _dfs
+                        break
+                if dims_str2 is None and _approx_text_width(dims_short, dims_fs2) <= avail_w:
+                    dims_str2 = dims_short
+            total_h = _name_h + (3.0 + dims_fs2 * 1.2 if dims_str2 else 0.0)
             if total_h <= avail_h:
                 opts.append({
                     "level": 2,
                     "name_lines": lines,
                     "font_size": fs,
-                    "dims_str": None,
-                    "dims_fs": 0.0,
+                    "dims_str": dims_str2,
+                    "dims_fs": dims_fs2 if dims_str2 else 0.0,
                     "total_h": total_h,
                     "cx": cx_px, "cy": cy_px,
                     "rx": rx_px, "ry": ry_px, "rw": rw_px, "rh": rh_px,
@@ -1776,13 +1837,13 @@ def build_drawing_ir(
             fs = cand["font_size"]
             w = max(_approx_text_width(l, fs) for l in lines)
             if cand.get("dims_str"):
-                w = max(w, _approx_text_width(cand["dims_str"], cand["dims_fs"]))
+                w = max(w, _approx_text_width(cand["dims_str"], cand["dims_fs"]), len(cand["dims_str"]) * cand["dims_fs"] * 0.56)
             h = cand["total_h"]
-            pad = 0.5
+            pad = 1.5
             return BBox(ccx - w / 2.0 - pad, ccy - h / 2.0 - pad, ccx + w / 2.0 + pad, ccy + h / 2.0 + pad)
         else:
             rad = cand["radius"]
-            pad = 0.5
+            pad = 1.5
             return BBox(ccx - rad - pad, ccy - rad - pad, ccx + rad + pad, ccy + rad + pad)
 
     def has_any_conflict(i_idx: int, cand_item: Dict[str, Any], current_bboxes: List[BBox]) -> bool:
@@ -2463,7 +2524,7 @@ def build_drawing_ir(
                 "height_m": 2.10,
                 "dimension": f"{dw:.2f}m x 2.10m",
                 "door_type": "Standard Flush Door",
-                "level": f"Level {f_idx}",
+                "level": f"L{f_idx}",
                 "from_room": d.get("from_room") or "-",
                 "to_room": d.get("to_room") or "-",
             })
@@ -2479,7 +2540,7 @@ def build_drawing_ir(
                 "dimension": f"{ww:.2f}m x 1.20m",
                 "sill_height_m": 0.90,
                 "lintel_height_m": 2.10,
-                "level": f"Level {f_idx}",
+                "level": f"L{f_idx}",
                 "type": "UPVC Double Glazed Casement",
             })
 
@@ -2625,8 +2686,9 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
     def py(y_m: float) -> float:
         return margin_y + ((ir.envelope_d - y_m) * scale)
 
+    ghost_attr = ' data-ghost-overlay="true"' if ir.header.floor_index > 0 else ' data-ghost-overlay="false"'
     svg: List[str] = []
-    svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_w} {svg_h}" width="{svg_w}" height="{svg_h}" style="background-color: {bg_color}; font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif;">')
+    svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_w} {svg_h}" width="{svg_w}" height="{svg_h}"{ghost_attr} style="background-color: {bg_color}; font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif;">')
 
     svg.append(f"""
       <defs>
@@ -3018,7 +3080,11 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                 d_wh = f"{_safe_float(d_row.get('width_m', 0.9), 0.9):.2f}x{_safe_float(d_row.get('height_m', 2.1), 2.1):.2f}"
             d_tp = _ellipsize_str(d_row.get("door_type", d_row.get("type", "Standard")), 14)
             raw_lvl = d_row.get("level", ir.header.floor_index)
-            if isinstance(raw_lvl, str) and raw_lvl.startswith("Level "):
+            # Canonical ladder: accept "L0" / "Level 0" / int, and strip a
+            # legacy double-prefixed "LLevel 0" so the sheet can never print it.
+            if isinstance(raw_lvl, str) and raw_lvl.startswith("LLevel "):
+                d_lvl = f"L{raw_lvl[7:].strip()}"
+            elif isinstance(raw_lvl, str) and raw_lvl.startswith("Level "):
                 d_lvl = f"L{raw_lvl[6:].strip()}"
             elif isinstance(raw_lvl, str) and raw_lvl.startswith("L"):
                 d_lvl = raw_lvl

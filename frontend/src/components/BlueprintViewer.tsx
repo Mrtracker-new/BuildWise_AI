@@ -242,8 +242,9 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   ].join(' | ');
   const freshnessToken = `${effectiveGenId} | ${dimsLabel} | ${storeysLabel} | ${sheetTruthTail}`;
 
-  const containerKey = `blueprint-svg-${effectiveGenId}-${safeFloorIndex}-${mode}-${showGhostOverlay ? 'ghost' : 'noghost'}`;
-  const modalContainerKey = `modal-blueprint-svg-${effectiveGenId}-${safeFloorIndex}-${mode}-${showGhostOverlay ? 'ghost' : 'noghost'}`;
+  const _ghostKey = showGhostOverlay && safeFloorIndex > 0 ? 'ghost' : 'noghost';
+  const containerKey = `blueprint-svg-${effectiveGenId}-${safeFloorIndex}-${mode}-${_ghostKey}`;
+  const modalContainerKey = `modal-blueprint-svg-${effectiveGenId}-${safeFloorIndex}-${mode}-${_ghostKey}`;
 
   // Sanitize raw SVG and inject paint-order halo style + dynamic ghost overlay styling
   const sanitizedSvg = useMemo(() => {
@@ -252,7 +253,13 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
       .replace(/on\w+\s*=\s*["'][^"']*["']/gi, '');
 
-    const ghostOverlayCss = showGhostOverlay
+    // GHOST OVERLAY CONTRACT: the F0 anchor core lives on every sheet
+    // already, so the ghost overlay is meaningless on the ground floor - it is
+    // gated to activeFloorIndex >= 1 and the data-ghost-overlay attribute
+    // follows the same precedence in both directions (toggle ON at F0 renders
+    // false; toggle OFF at F1+ also renders false).
+    const ghostVisible = showGhostOverlay && safeFloorIndex > 0;
+    const ghostOverlayCss = ghostVisible
       ? '.ghost-core-overlay { display: block !important; opacity: 1 !important; }'
       : '.ghost-core-overlay { display: none !important; opacity: 0 !important; visibility: hidden !important; }';
 
@@ -270,11 +277,11 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
     if (cleaned.includes('<svg')) {
       return cleaned.replace(
         /<svg\b([^>]*)>/i,
-        `<svg $1 class="bw-sheet-fit" data-ghost-overlay="${showGhostOverlay ? 'true' : 'false'}">${styleInjection}`
+        `<svg $1 class="bw-sheet-fit" data-ghost-overlay="${ghostVisible ? 'true' : 'false'}">${styleInjection}`
       );
     }
     return cleaned;
-  }, [activeSvg, showGhostOverlay]);
+  }, [activeSvg, showGhostOverlay, safeFloorIndex]);
 
   // Derive per-floor room placements for current floor legend
   const currentPlacements = useMemo(() => {
