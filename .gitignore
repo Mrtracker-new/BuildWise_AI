@@ -52,6 +52,8 @@ Thumbs.db
 # Scratch files
 scratch/
 backend/scratch/
+backend/_artifacts/
+_artifacts/
 
 # Solver debug probe dumps
 backend/clip_probe.json
