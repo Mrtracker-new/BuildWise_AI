@@ -496,7 +496,12 @@ async def evaluate_hazard_profile(
         flood=flood_profile,
         storm_cyclone=storm_profile,
         overall_hazard_level=overall_level,
-        warnings=warnings
+        warnings=warnings,
+        source_fetches={
+            "seismic": None if s_fallback else datetime.now(timezone.utc).isoformat(),
+            "flood": None if f_fallback else datetime.now(timezone.utc).isoformat(),
+            "storm_cyclone": None if st_fallback else datetime.now(timezone.utc).isoformat(),
+        },
     )
 
     return hazard_profile, warnings

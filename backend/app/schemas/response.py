@@ -92,6 +92,10 @@ class HazardProfile(BaseModel):
     storm_cyclone: StormCycloneProfile
     overall_hazard_level: str  # "low", "moderate", "high", "critical"
     warnings: List[str] = []
+    # Per-upstream fetch timestamps (ISO8601 UTC) for the hazard telemetry
+    # sources; a None value means the upstream was NOT fetched this session
+    # (fallback model applied) and is disclosed as such downstream.
+    source_fetches: Dict[str, Optional[str]] = {}
 
 # --- Module 2: Indicative Land Value Engine ---
 class MultiplierBreakdown(BaseModel):
@@ -173,6 +177,18 @@ class RecommendationItem(BaseModel):
     source_data_ref: str
     recommendation_text: str
 
+class DataSourceProvenance(BaseModel):
+    """Fetch provenance for one external data source.
+
+    fetched_at is an ISO8601 UTC timestamp when the upstream was successfully
+    consulted during this analysis, and None when the value on the response is
+    a deterministic fallback model (never presented as a live reading).
+    """
+    source: str
+    fetched_at: Optional[str] = None
+    is_fallback: bool = False
+
+
 # --- Master Analysis Response ---
 class AnalysisResponse(BaseModel):
     request_id: str
@@ -194,6 +210,11 @@ class AnalysisResponse(BaseModel):
     ai_metadata: Dict[str, str]
     degraded_mode: bool
     warnings: List[str]
+    # Per-source fetch provenance keyed by source id
+    # (geocode, elevation, climate, road, seismic, flood, storm). Consumed by
+    # the report UI methodology disclosures so every timestamp shown is the
+    # real server fetch time, never a client-side placeholder.
+    data_sources: Dict[str, DataSourceProvenance] = {}
     parameter_reflection: Optional[str] = None
     feasibility_score: Optional[int] = None
     structural_recommendations: Optional[List[str]] = None

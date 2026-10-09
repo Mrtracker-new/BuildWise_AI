@@ -144,7 +144,7 @@ def _build_annotations(
     bbox_d = round(bbox[3] - bbox[1], 2)
 
     ann.append(SiteAnnotation(
-        id="plot_area", label="Plot area", value=plan.plot_polygon.area_sqm, unit="m2",
+        id="plot_area", label="Plot area", value=plan.plot_polygon.area_sqm, unit="m²",
         status="CALCULATED",
         basis="Shoelace area of the canonicalized boundary (server-authoritative recomputation)",
     ))
@@ -160,12 +160,12 @@ def _build_annotations(
         basis=f"NBC 2016 Part 3 setback formula on bounding box {bbox_w} x {bbox_d} m",
     ))
     ann.append(SiteAnnotation(
-        id="buildable_area", label="Buildable area", value=plan.buildable_area_sqm, unit="m2",
+        id="buildable_area", label="Buildable area", value=plan.buildable_area_sqm, unit="m²",
         status="CALCULATED",
         basis="Plot polygon inward-buffered by the setback distances (inward buffer on irregular plots)",
     ))
     ann.append(SiteAnnotation(
-        id="footprint_area", label="Footprint area", value=plan.footprint.area_sqm, unit="m2",
+        id="footprint_area", label="Footprint area", value=plan.footprint.area_sqm, unit="m²",
         status="CALCULATED",
         basis=f"Program-aware inscribed footprint ({plan.footprint.topology_type}) via wing decomposition",
     ))
@@ -273,7 +273,7 @@ def compute_site_preview(req: SitePreviewRequest) -> SitePreviewResponse:
         min_edge = min(min_edge, ((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2) ** 0.5)
     area = round(abs(shoelace) / 2.0, 2)
     if area < 36.0:
-        raise BoundaryStatutoryViolation(f"Boundary area {area} m2 is below the statutory minimum 36 m2.")
+        raise BoundaryStatutoryViolation(f"Boundary area {area} m² is below the statutory minimum 36 m².")
     if min_edge < 1.0:
         raise BoundaryStatutoryViolation(f"Boundary edge {min_edge:.2f} m is below the statutory minimum 1.00 m.")
 

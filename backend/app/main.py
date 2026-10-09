@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
-from typing import Optional
+from typing import Any, Dict, Optional
 from pydantic import BaseModel, ValidationError
 
 from app.config import settings
@@ -301,7 +301,7 @@ async def analyze_site(req: AnalysisRequest, request: Request):
             perim += ((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2) ** 0.5
         area = round(abs(shoelace) / 2.0, 2)
         if area < 36.0:
-            raise HTTPException(status_code=422, detail=f"Boundary area {area} m2 is below the statutory minimum 36 m2.")
+            raise HTTPException(status_code=422, detail=f"Boundary area {area} m² is below the statutory minimum 36 m².")
         min_edge = min(
             ((b.vertices[(i + 1) % n].x - b.vertices[i].x) ** 2 + (b.vertices[(i + 1) % n].y - b.vertices[i].y) ** 2) ** 0.5
             for i in range(n)
@@ -335,12 +335,28 @@ async def analyze_site(req: AnalysisRequest, request: Request):
         }
 
     # 1. Fetch geospatial, elevation, and climate data with fallback tracking
+    now_utc = datetime.now(timezone.utc)
+    # Per-source fetch provenance: ISO8601 UTC when the upstream was consulted,
+    # None when the response carries a deterministic fallback model instead.
+    # Emitted on the response so the report disclosures show REAL fetch times.
+    data_sources: Dict[str, Any] = {}
+
     address, address_fallback = await fetch_reverse_geocode(req.latitude, req.longitude)
+    data_sources["geocode"] = {
+        "source": "OpenStreetMap Nominatim (reverse)",
+        "fetched_at": None if address_fallback else now_utc.isoformat(),
+        "is_fallback": address_fallback,
+    }
     if address_fallback:
         warnings.append("Reverse geocoding service timed out. Coordinate identifier applied.")
         is_degraded = True
 
     elevation_m, slope_pct, elev_fallback = await fetch_elevation_and_slope(req.latitude, req.longitude)
+    data_sources["elevation"] = {
+        "source": "Open-Meteo Elevation API (5-point DEM)",
+        "fetched_at": None if elev_fallback else now_utc.isoformat(),
+        "is_fallback": elev_fallback,
+    }
     if elev_fallback:
         warnings.append("Topographic elevation service unreachable. Synthetic contour gradient applied.")
         is_degraded = True
@@ -350,6 +366,11 @@ async def analyze_site(req: AnalysisRequest, request: Request):
     elevation_samples, _samples_fallback = await fetch_elevation_samples(req.latitude, req.longitude)
 
     climate, climate_fallback = await fetch_climate_data(req.latitude, req.longitude)
+    data_sources["climate"] = {
+        "source": "Open-Meteo Forecast + ERA5 Archive",
+        "fetched_at": None if climate_fallback else now_utc.isoformat(),
+        "is_fallback": climate_fallback,
+    }
     if climate_fallback:
         warnings.append("Microclimate telemetry unavailable. Latitudinal climate averages applied.")
         is_degraded = True
@@ -363,6 +384,12 @@ async def analyze_site(req: AnalysisRequest, request: Request):
     # 1b. Real nearest-road measurement for the MCDA road factor.
     # Shared Overpass service; result also feeds the Vastu approach cache.
     road_result, _road_cache_hit, road_warning = await fetch_nearest_road(req.latitude, req.longitude)
+    road_is_fallback = bool(road_result["is_fallback"])
+    data_sources["road"] = {
+        "source": "OpenStreetMap Overpass API (nearest highway)",
+        "fetched_at": None if road_is_fallback else now_utc.isoformat(),
+        "is_fallback": road_is_fallback,
+    }
     if not road_result["is_fallback"]:
         road_service_available = True
         road_distance_m = road_result["distance_meters"]
@@ -385,6 +412,19 @@ async def analyze_site(req: AnalysisRequest, request: Request):
             warnings.append(w)
     if any("unreachable" in w.lower() or "unavailable" in w.lower() for w in hazard_warnings):
         is_degraded = True
+
+    # Hazard telemetry fetch provenance (seismic / flood / storm sources);
+    # None means the fallback model was applied for that upstream.
+    for _hz_key, _hz_ts in (hazard_profile.source_fetches or {}).items():
+        data_sources[_hz_key] = {
+            "source": {
+                "seismic": "USGS FDSN Earthquake Catalog (250 km, 50 yr)",
+                "flood": "Open-Meteo GloFAS River Discharge + NDMA Atlas",
+                "storm_cyclone": "ECMWF ERA5 Archive (10-yr gust & rainfall extremes)",
+            }.get(_hz_key, _hz_key),
+            "fetched_at": _hz_ts,
+            "is_fallback": _hz_ts is None,
+        }
 
     # 3. Deterministic calculations (MCDA, orientation, CPWD costs, risks)
     overall_score, verdict, factors = evaluate_land_suitability(
@@ -541,7 +581,8 @@ async def analyze_site(req: AnalysisRequest, request: Request):
             structural_recommendations=ai_recs,
             cost_breakdown=cost_breakdown_val,
             vastu_compliance=vastu_compliance_val,
-            boundary_summary=boundary_summary
+            boundary_summary=boundary_summary,
+            data_sources=data_sources
         )
     except ValidationError as val_err:
         logger.warning(f"Pydantic validation error constructing AnalysisResponse: {val_err}")
@@ -577,7 +618,8 @@ async def analyze_site(req: AnalysisRequest, request: Request):
             feasibility_score=int(round(overall_score)),
             structural_recommendations=mock_recs,
             cost_breakdown=cost_estimate.model_dump(),
-            vastu_compliance=vastu_advisory.model_dump()
+            vastu_compliance=vastu_advisory.model_dump(),
+            data_sources=data_sources
         )
 
 @app.post("/api/report")
