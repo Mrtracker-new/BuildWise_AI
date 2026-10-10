@@ -573,33 +573,6 @@
   scroll-margin-top: 72px;
 }
 
-/* Skeleton placeholder: tokenized shimmer, frozen by the global
-   prefers-reduced-motion rule so nothing animates when set. */
-.report-skeleton {
-  background: linear-gradient(
-    90deg,
-    var(--fill) 25%,
-    var(--fill-hover) 50%,
-    var(--fill) 75%
-  );
-  background-size: 200% 100%;
-  animation: reportSkeletonShimmer 1.4s ease-in-out infinite;
-}
-
-@keyframes reportSkeletonShimmer {
-  0% {
-    background-position: 200% 0;
-  }
-  100% {
-    background-position: -200% 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .report-skeleton {
-    animation: none;
-  }
-}
 
 /* ========================================================================= */
 /* PRINT / PDF MEDIA STYLES                                                  */
@@ -891,16 +864,6 @@ html.bw-landing-open.lenis body {
   animation: bwNoteBreathe 7s ease-in-out infinite;
 }
 
-/* Landing shimmer for the gradient headline + misc keyframes */
-@keyframes bwSheen {
-  0%,
-  100% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
-}
 
 /* Compass needle wobble (runs once when map enters view) */
 @keyframes bwNeedleWobble {
