@@ -94,7 +94,7 @@ export const MethodologyPopover: React.FC<MethodologyPopoverProps> = ({ factorNa
           role="dialog"
           aria-label={`${factorName} methodology`}
           tabIndex={-1}
-          className="absolute right-0 top-full mt-1.5 z-[var(--z-popover,1050)] w-72 rounded-[12px] border border-[var(--panel-border-color)] bg-[var(--sheet-bg)] shadow-[var(--shadow-lg,var(--panel-shadow,0_10px_30px_rgba(0,0,0,0.18)))] p-3.5 space-y-2.5 text-left"
+          className="absolute right-0 top-full mt-1.5 z-[var(--z-popover,1050)] w-72 rounded-[12px] border border-[var(--panel-border-color)] bg-[var(--sheet-bg)] shadow-xl p-3.5 space-y-2.5 text-left"
         >
           <div className="flex items-center justify-between gap-2">
             <StatusBadge status={payload.status} />
