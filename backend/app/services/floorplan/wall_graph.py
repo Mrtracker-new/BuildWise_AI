@@ -1159,9 +1159,6 @@ def build_constructible_wall_graph(
 
     # (a) Doors from adjacent rooms
     # Match doors from doors_in or derive from partition walls
-    core_rid = next((r.room_id for r in room_list if r.is_vertical_core), "")
-    lobby_rid = next((r.room_id for r in room_list if "lobby" in r.room_id or "corridor" in r.room_id), "")
-
     for wall in walls.values():
         if wall.is_exterior or not wall.adjacent_rooms or len(wall.adjacent_rooms) < 2:
             continue
@@ -1209,7 +1206,6 @@ def build_constructible_wall_graph(
             door_counter += 1
 
     # (b) Windows on Exterior Walls (W1 Only) sized per NBC 2016
-    ext_walls = [w for w in walls.values() if w.is_exterior]
     for r in room_list:
         if r.is_vertical_core or "stair" in r.room_id:
             continue
@@ -1404,7 +1400,6 @@ def build_constructible_wall_graph(
 
     # Reconstruct bay chain that sums exactly to (env_w - 0.460)
     bay_rooms = []
-    accum_w = 0.0
     for r in unique_x_rooms:
         if r.x >= cur_x - 0.05 and r.x + r.width_m <= env_w - 0.22:
             bay_rooms.append(r)

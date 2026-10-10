@@ -51,19 +51,9 @@ from app.services.floorplan.ontology import (
     ONTOLOGY,
     MathematicalValidityCertificate,
     FunctionType,
-    HygieneType,
-    PublicAccess,
-    VisitorDepth,
-    SecurityLevel,
-    FireHazard,
-    EgressRole,
     FloorLoad,
-    ServiceSide,
     RelationType,
-    RationaleTag,
     SpaceTypeSpec,
-    TypologyProfile,
-    SpatialRule,
 )
 from app.services.floorplan.wall_graph import (
     build_constructible_wall_graph,
@@ -82,7 +72,6 @@ from app.services.floorplan.living_quality import (
     find_door_host,
     host_door_on_shared_wall,
     nominal_door_toward,
-    shared_wall_segments,
 )
 from app.services.floorplan.validation_gate import (
     build_gate_layers,

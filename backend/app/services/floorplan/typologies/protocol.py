@@ -1,4 +1,4 @@
-﻿"""
+"""
 protocol.py - Shared Protocol for Per-Typology Modules
 =======================================================
 Defines the ONE structural interface that all four typology modules must satisfy.
@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import ClassVar, Dict, List, Any, Protocol, runtime_checkable
 
-from app.services.floorplan.ontology import ONTOLOGY, SpaceTypeSpec
+from app.services.floorplan.ontology import SpaceTypeSpec
 
 
 # ---------------------------------------------------------------------------

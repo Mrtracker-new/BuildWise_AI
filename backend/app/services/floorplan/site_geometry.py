@@ -17,7 +17,6 @@ from typing import List, Tuple, Dict, Any, Optional
 import numpy as np
 
 import shapely
-import shapely.affinity
 from shapely.geometry import Polygon, MultiPolygon, box
 
 from app.schemas.site_plan import (
@@ -33,7 +32,6 @@ from app.schemas.site_plan import (
     SitePlanModel,
     ParkingBay,
     ParkingEnvelope,
-    SiteSheetChecklist,
 )
 
 # Equatorial radius of Earth in meters (WGS-84)

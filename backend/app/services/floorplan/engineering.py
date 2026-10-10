@@ -15,9 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.services.floorplan.wall_graph import (
     NBC_2016_HABITABLE_VENT_RATIO,
-    NBC_2016_HABITABLE_CITATION,
     NBC_2016_SANITARY_VENT_RATIO,
-    NBC_2016_SANITARY_CITATION,
     NBC_2016_MIN_SANITARY_VENT_AREA_SQM,
     NBC_2016_MIN_CORRIDOR_WIDTH_T1_M,
     NBC_2016_MIN_CORRIDOR_WIDTH_T2_M,

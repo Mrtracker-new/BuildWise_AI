@@ -8,8 +8,6 @@ for private single-family multi-storey residences (G to G+2).
 from typing import List, Dict, Tuple, Optional, Any
 from app.schemas.multi_floor_plan import (
     MultiFloorRoomRectangle,
-    MultiFloorDoorGeometry,
-    MultiFloorWindowGeometry,
     VerticalCoreSpec,
     DuctShaftSpec,
     ExtractedClientConstraints,
@@ -524,7 +522,6 @@ class T1ResidenceModule:
     def compose_sheet(cls, level_plan, theme: str) -> str:
         """Delegates to shared SVG IR with T1 sheet gates applied."""
         from app.services.floorplan.svg_generator import generate_multi_floor_blueprint_svg
-        gates = cls.sheet_gates()
         return generate_multi_floor_blueprint_svg(
             floor_index=level_plan["floor_index"],
             floor_name=level_plan["floor_name"],

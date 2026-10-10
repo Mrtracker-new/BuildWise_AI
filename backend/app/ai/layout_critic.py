@@ -41,7 +41,6 @@ def _format_critic_payload(rect_model: Any, plot_w: float, plot_d: float) -> Dic
     """Formats layout geometry into the architect review format."""
     rooms = getattr(rect_model, "rooms", [])
     doors = getattr(rect_model, "doors", [])
-    envelope = getattr(rect_model, "envelope", None)
 
     # Build door connections per room
     room_doors: Dict[str, List[str]] = {r.room_id: [] for r in rooms}

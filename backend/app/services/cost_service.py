@@ -45,7 +45,6 @@ def calculate_construction_cost(
     finishes_pct = 0.18
     mep_pct = 0.14
     grading_prep_pct = 0.08 + (terrain_mult - 1.0) * 0.4
-    contingency_pct = max(0.06, 1.0 - (civil_structural_pct + finishes_pct + mep_pct + grading_prep_pct))
 
     civil_amt = round(subtotal * civil_structural_pct, 2)
     finishes_amt = round(subtotal * finishes_pct, 2)

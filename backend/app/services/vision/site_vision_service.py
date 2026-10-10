@@ -256,7 +256,6 @@ async def analyze_site_vision(
     valid_mask = imagery["valid_mask"]
     affine_transform = imagery["affine_transform"]
     crs = imagery["crs"]
-    grid_shape = imagery["shape"]
 
     # Step 3: Pure spectral indices math
     ndvi = calculate_ndvi(bands["B08"], bands["B04"])

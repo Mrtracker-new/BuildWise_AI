@@ -1,6 +1,5 @@
 import uuid
 import time
-import json
 import logging
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -24,10 +23,7 @@ from app.schemas.site_vision import (
     SiteVisionRequest,
     SiteVisionResponse
 )
-from app.schemas.floorplan import (
-    FloorPlanRequest,
-    FloorPlanResponse
-)
+from app.schemas.floorplan import FloorPlanRequest
 from app.schemas.multi_floor_plan import ExtractedClientConstraints
 from app.services import (
     fetch_reverse_geocode,

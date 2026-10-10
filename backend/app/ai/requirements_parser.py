@@ -8,7 +8,7 @@ keyword and regex fallback engine.
 import json
 import logging
 import re
-from typing import Dict, Any, List, Optional
+from typing import List, Optional
 import httpx
 
 from app.config import settings
@@ -78,7 +78,6 @@ def parse_client_requirements_fallback(text: str) -> ExtractedClientConstraints:
         bed_count = 5
     else:
         # Check if master and guest bedrooms are mentioned
-        has_master = "master" in clean
         has_guest = "guest" in clean
         has_kids = "kids" in clean or "children" in clean
         bed_count = 2 + (1 if has_guest else 0) + (1 if has_kids else 0)

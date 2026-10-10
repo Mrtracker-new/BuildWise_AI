@@ -340,8 +340,6 @@ def evaluate_solver_qa(
             "critic_notes": critic_notes or []
         }, ["No rooms found in layout."]
 
-    room_map = {r.room_id: r for r in rooms}
-
     # 0. Non-Positive / Corrupt Dimension Invariant Check
     for r in rooms:
         if r.width <= 0.0 or r.height <= 0.0 or r.area_sqm <= 0.0:

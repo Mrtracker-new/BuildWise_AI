@@ -58,10 +58,10 @@ from typing import List, Dict, Tuple, Optional, Any, Literal
 
 # ReportLab imports (lazy or guarded if needed)
 try:
-    from reportlab.graphics.shapes import Drawing, Rect, Line, String, ArcPath, Circle, Polygon, Group, PolyLine
+    from reportlab.graphics.shapes import Drawing, Rect, Line, String, ArcPath, Circle, Polygon, PolyLine
     from reportlab.lib import colors
 except ImportError:
-    Drawing = Rect = Line = String = ArcPath = Circle = Polygon = Group = PolyLine = colors = None
+    Drawing = Rect = Line = String = ArcPath = Circle = Polygon = PolyLine = colors = None
 
 
 # =============================================================================
@@ -742,8 +742,6 @@ def build_drawing_ir(
         offset_y = raw_min_y
 
     env_wings = _get(env_obj, "wings", []) or []
-    corridors = _get(env_obj, "corridors", []) or []
-    courtyard_void = _get(env_obj, "courtyard_void", None)
     is_multi_wing = len(env_wings) > 1 or bool(_get(floor_data, "is_multi_wing", False))
 
     # Build normalized rooms in local envelope coordinates [0.0, env_w] × [0.0, env_d]
@@ -2302,7 +2300,6 @@ def build_drawing_ir(
             mx2 = _safe_float(_get(main_door, "x2", 0.0), 0.0)
             if mx1 > 0.0 or mx2 > 0.0:
                 door_x_m = (mx1 + mx2) / 2.0
-        cap_w_m = 72.0 / 36.0
         if is_multi_wing:
             # Main entrance is on South wall (y = 0.0) facing street frontage
             entrance_dict = {
@@ -2346,7 +2343,6 @@ def build_drawing_ir(
         sh_y = _safe_float(_get(sh, "y", 0.0), 0.0)
         sh_w = _safe_float(_get(sh, "width_m", 0.6), 0.6)
         sh_d = _safe_float(_get(sh, "depth_m", 0.8), 0.8)
-        sh_id = str(_get(sh, "shaft_id", f"SHAFT-{si + 1}"))
         # Shaft enclosure with inspection-access label (W3 lightweight shaft wall)
         # Closed-path outline (NOT a FillPrimitive: room-fill parity tests count
         # fills and must see exactly one per solved room).
@@ -2464,7 +2460,7 @@ def build_drawing_ir(
         # STRUCTURAL FEASIBILITY note when the gate's L12 flagged transfer beams.
         _l12 = next((ld for ld in gate_layers_list if str(ld.get("layer_id")) == "L12"), None)
         _l12_details = (_l12 or {}).get("details") or {}
-        for bi, beam in enumerate(_l12_details.get("beams") or []):
+        for beam in (_l12_details.get("beams") or []):
             bl = beam.get("line") or [0, 0, 0, 0]
             primitives.append(PathPrimitive(
                 points=[(float(bl[0]), float(bl[1])), (float(bl[2]), float(bl[3]))],
@@ -3834,8 +3830,6 @@ def build_site_drawing_ir(
     buildable_coords = _get(site_plan, "buildable_polygon_coords", []) or []
     building_line_coords = _get(site_plan, "building_line_coords", []) or []
     setback_dimensions = _get(site_plan, "setback_dimensions", {}) or {}
-    derivation_chain = _get(site_plan, "derivation_chain", ["PLOT", "SETBACKS", "BUILDABLE", "BUILDING LINE"])
-    derivation_text = _get(site_plan, "derivation_text", "FOOTPRINT DERIVED FROM BUILDABLE POLYGON P1..Pn via PLOT -> SETBACKS -> BUILDABLE -> BUILDING LINE")
     parking = _get(site_plan, "parking", None)
     footprint = _get(site_plan, "footprint", {}) or {}
     outdoor_zones = _get(site_plan, "outdoor_zones", []) or []

@@ -99,7 +99,6 @@ def compute_slope_reading(
         isinstance(elevation_samples, dict)
         and all(k in elevation_samples for k in ("center", "north", "south", "east", "west"))
     ):
-        h0 = float(elevation_samples["center"])
         h_n = float(elevation_samples["north"])
         h_s = float(elevation_samples["south"])
         h_e = float(elevation_samples["east"])
@@ -107,7 +106,6 @@ def compute_slope_reading(
         synthetic = False
     else:
         from app.utils.geo_utils import calculate_synthetic_elevation
-        h0 = calculate_synthetic_elevation(lat, lon)
         h_n = calculate_synthetic_elevation(offsets["north"][0], offsets["north"][1])
         h_s = calculate_synthetic_elevation(offsets["south"][0], offsets["south"][1])
         h_e = calculate_synthetic_elevation(offsets["east"][0], offsets["east"][1])
