@@ -59,6 +59,11 @@ const CUSTOM_LAYER_IDS = new Set([
   'osm-fallback-layer',
 ]);
 
+const isCustomOverlayLayer = (layerId: string): boolean =>
+  CUSTOM_LAYER_IDS.has(layerId) ||
+  layerId.startsWith('bw-capture-') ||
+  layerId.startsWith('bw-preview-');
+
 // Animated map-mode switching (Apple Maps feel): a quick base cross-fade with labels
 // staggered on top — outgoing labels duck out first, incoming ones arrive last.
 const STYLE_FADE_MS = 420; // base layers (fills, lines, rasters, extrusions)
@@ -422,8 +427,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         continue;
       }
 
-      // Custom overlay layers (footprint, entrance, canopy, water) are never touched.
-      if (CUSTOM_LAYER_IDS.has(layer.id)) continue;
+      // Custom overlay layers (footprint, entrance, canopy, water, capture tracing, site preview) are never touched.
+      if (isCustomOverlayLayer(layer.id)) continue;
 
       let target: number;
       if (mode === 'standard') {

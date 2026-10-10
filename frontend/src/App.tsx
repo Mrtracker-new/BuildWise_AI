@@ -878,7 +878,11 @@ const AppShell: React.FC = () => {
           longitude={hasLocation ? request.longitude : null}
           orientationDegrees={analysisData?.orientation.optimal_axis_degrees}
           plinthAreaSqFt={request.built_up_area_sqft}
-          onLocationSelect={handleLocationSelect}
+          onLocationSelect={
+            captureOpen && (captureStep === 'trace' || captureStep === 'frontage')
+              ? () => {}
+              : handleLocationSelect
+          }
           invalidateTrigger={mapResizeTrigger}
           entranceDirection={analysisData?.vastu_advisory?.ranked_entrances?.[0]?.direction}
           treeClusters={siteVisionData?.tree_clusters}
