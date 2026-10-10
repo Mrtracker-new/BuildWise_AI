@@ -17,7 +17,7 @@ Zero solver code changes are required when adding new space types or rules.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, List, Set, Tuple, Optional, Any, Literal
+from typing import Dict, List, Tuple, Optional, Any, Literal
 from pydantic import BaseModel, Field
 
 
@@ -1616,9 +1616,6 @@ EXPLICIT_OVERRIDES: Dict[Tuple[str, str], List[SpatialRule]] = {
     ],
 }
 
-
-def _canonical_pair_key(s1: str, s2: str) -> Tuple[str, str]:
-    return (s1, s2) if s1 <= s2 else (s2, s1)
 
 
 def derive_spatial_rules(space_a: SpaceTypeSpec, space_b: SpaceTypeSpec) -> List[SpatialRule]:

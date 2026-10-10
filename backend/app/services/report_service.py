@@ -12,7 +12,7 @@ from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, HRFlowable, PageBreak, Image as RLImage
 )
 from reportlab.pdfgen import canvas
-from reportlab.graphics.shapes import Drawing, Rect, Line, String, ArcPath, Circle, Polygon
+from reportlab.graphics.shapes import Drawing, Rect, String, ArcPath, Circle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
@@ -322,68 +322,6 @@ def create_section_header(num_str: str, title_str: str) -> KeepTogether:
 # =============================================================================
 # 5. BLUEPRINT VECTOR DRAWING ENGINE
 # =============================================================================
-
-def _subtract_intervals_rl(
-    base: Tuple[float, float],
-    cutouts: List[Tuple[float, float]]
-) -> List[Tuple[float, float]]:
-    """Subtracts cutout door/window intervals from a base wall interval."""
-    a, b = base
-    if a >= b:
-        return []
-    if not cutouts:
-        return [(a, b)]
-
-    valid_cuts: List[Tuple[float, float]] = []
-    for u, v in cutouts:
-        c_start = max(a, min(u, v))
-        c_end = min(b, max(u, v))
-        if c_end - c_start > 0.1:
-            valid_cuts.append((c_start, c_end))
-
-    if not valid_cuts:
-        return [(a, b)]
-
-    valid_cuts.sort(key=lambda x: x[0])
-    merged_cuts: List[Tuple[float, float]] = [valid_cuts[0]]
-    for cur_u, cur_v in valid_cuts[1:]:
-        prev_u, prev_v = merged_cuts[-1]
-        if cur_u <= prev_v:
-            merged_cuts[-1] = (prev_u, max(prev_v, cur_v))
-        else:
-            merged_cuts.append((cur_u, cur_v))
-
-    segments: List[Tuple[float, float]] = []
-    cursor = a
-    for u, v in merged_cuts:
-        if u > cursor + 0.1:
-            segments.append((cursor, u))
-        cursor = max(cursor, v)
-    if cursor < b - 0.1:
-        segments.append((cursor, b))
-
-    return segments
-def _draw_rectangles_reportlab(
-    rectangles: Any,
-    width: float = CONTENT_WIDTH_PT,
-    height: float = 450.0,
-    ground_cores: Optional[List[Any]] = None,
-    ground_ducts: Optional[List[Any]] = None,
-    floor_name: Optional[str] = None,
-    floor_index: int = 0
-) -> Drawing:
-    """
-    Renders continuous envelope RectanglesModel into publication-grade ReportLab vector drawing
-    via the shared Drawing IR. Eliminates all coordinate offsets, scaling distortions, and duplicate geometry logic.
-    """
-    from app.services.floorplan.drawing_ir import build_drawing_ir, render_reportlab_from_ir
-    bldg = {"vertical_cores": ground_cores or [], "duct_shafts": ground_ducts or []}
-    ir = build_drawing_ir(
-        floor_data=rectangles,
-        building_model=bldg,
-        elevation_m=floor_index * 3.0
-    )
-    return render_reportlab_from_ir(ir, width=width, height=height)
 
 
 def draw_floorplan_reportlab(
