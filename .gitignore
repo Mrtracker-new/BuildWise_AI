@@ -54,7 +54,16 @@ scratch/
 backend/scratch/
 backend/_artifacts/
 _artifacts/
+backend/_pre/
+_pre/
+_baseline_*.svg
+_geometry_*.json
+fp5.json
+check_labels.py
+verify_*.py
+probe_*.cjs
 
 # Solver debug probe dumps
 backend/clip_probe.json
 backend/site_probe.json
+
