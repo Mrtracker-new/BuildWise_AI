@@ -78,7 +78,7 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
       <div className="space-y-2 pt-1">
         <div className="flex justify-between items-center text-[12px] text-[var(--text-3)]">
           <span className="font-normal">
-            3×3 spatial placement grid
+            3x3 spatial placement grid
           </span>
           <span className="text-[11px]">Click cell for details</span>
         </div>

@@ -15,7 +15,7 @@ export const UnitToggle: React.FC = () => {
       role="switch"
       aria-checked={isImperial}
       aria-label="Toggle measurement units between metres and feet"
-      title="Toggle units (m ↔ ft, m² ↔ sq ft)"
+      title="Toggle units (m / ft, sq m / sq ft)"
       className="print-hide h-7 px-2.5 rounded-[8px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[11px] font-semibold tabular-nums text-[var(--text-2)] hover:text-[var(--text-1)] inline-flex items-center gap-1 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40"
     >
       <span className={isImperial ? 'text-[var(--text-3)]' : 'text-[var(--accent)]'}>m</span>

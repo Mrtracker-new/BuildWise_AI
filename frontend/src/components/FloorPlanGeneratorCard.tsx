@@ -178,7 +178,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   const [floorPlateMasks, setFloorPlateMasks] = useState<Record<number, Record<string, 'present' | 'terrace' | 'void'>>>({});
   const [terraceBands, setTerraceBands] = useState<Record<number, { edge: 'none' | 'N' | 'S' | 'E' | 'W'; depth_m: number }>>({});
   const [designIntent, setDesignIntent] = useState<'maximize_enclosed' | 'passive_ventilation'>('maximize_enclosed');
-  // Phase-2 engineering drawing toggles (service layer + structural sheet).
+  // Engineering drawing toggles (service layer + structural sheet).
   const [includeServiceLayer, setIncludeServiceLayer] = useState(true);
   const [includeStructuralSheet, setIncludeStructuralSheet] = useState(true);
 
@@ -460,7 +460,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
               data-testid="plot-shape-chip"
               title={
                 siteMode === 'rectangle'
-                  ? `Rectangle plot: ${plotWidth}m × ${plotDepth}m (4 vertices)`
+                  ? `Rectangle plot: ${plotWidth}m x ${plotDepth}m (4 vertices)`
                   : `${polyMetrics.shapeType.toUpperCase()} plot: ${polyMetrics.area} m² (${irregularVertices.length} vertices)`
               }
               className={`px-2.5 py-1 rounded-[6px] font-mono font-semibold select-none border ${
@@ -617,8 +617,8 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                 }`}
               >
                 {polyMetrics.isValid
-                  ? `✓ Valid (${polyMetrics.shapeType.replace('_', '-').toUpperCase()})`
-                  : `⚠ Invalid: ${polyMetrics.reason}`}
+                  ? `Valid (${polyMetrics.shapeType.replace('_', '-').toUpperCase()})`
+                  : `Invalid: ${polyMetrics.reason}`}
               </span>
             </div>
             <div className="flex items-center gap-1.5 text-[11px] font-mono text-[var(--text-2)]">
@@ -1388,8 +1388,9 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                       {warnChips.length > 0 && (
                         <div className="flex flex-wrap gap-1 pt-1" data-testid="validation-gate-warn-chips">
                           {warnChips.map((ld) => (
-                            <span key={ld.layer_id} className="px-1.5 py-0.2 rounded-full bg-amber-500/15 text-amber-800 dark:text-amber-200 text-[10px] font-semibold">
-                              ⚠ {ld.layer_id} {ld.title}
+                            <span key={ld.layer_id} className="px-1.5 py-0.2 rounded-full bg-amber-500/15 text-amber-800 dark:text-amber-200 text-[10px] font-semibold inline-flex items-center gap-1">
+                              <Icon name="alert-triangle" size={10} className="shrink-0" />
+                              {ld.layer_id} {ld.title}
                             </span>
                           ))}
                         </div>

@@ -9,6 +9,7 @@ import { AnimatePresence, motion, useMotionValueEvent, useScroll } from 'framer-
 import { EASE_APPLE, SPRING_SOFT } from './motion';
 import { scrollToId } from './scroll';
 import { APP_PATH, navigate } from './router';
+import { Icon } from '../components/Icon';
 import { LANDING } from './theme';
 import logoUrl from '../assets/BuildWise_logo_square.png';
 
@@ -161,9 +162,7 @@ export const Navbar: React.FC = () => {
             style={{ border: '1px solid rgba(11,18,32,0.08)', boxShadow: LANDING.shadow.card }}
           >
             Try BuildWise
-            <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-1">
-              →
-            </span>
+            <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-1"><Icon name="arrow-up-right" size={14} className="inline-block -rotate-45" /></span>
           </button>
 
           {/* Mobile menu button — one calm circle: gentle press, no flicker,
@@ -218,7 +217,7 @@ export const Navbar: React.FC = () => {
                       className="flex items-center justify-between rounded-2xl px-4 py-3 text-[15px] font-medium text-[#0b1220] transition-colors duration-200 hover:bg-[rgba(11,18,32,0.05)]"
                     >
                       {l.label}
-                      <span aria-hidden className="text-[#8a93a3]">→</span>
+                      <span aria-hidden className="text-[#8a93a3]"><Icon name="arrow-up-right" size={13} className="inline-block -rotate-45" /></span>
                     </a>
                   </li>
                 ))}

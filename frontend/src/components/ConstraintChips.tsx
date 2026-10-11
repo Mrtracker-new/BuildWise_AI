@@ -163,7 +163,7 @@ export const ConstraintChips: React.FC<ConstraintChipsProps> = ({
                 title={`Remove ${formatted}`}
                 aria-label={`Remove ${formatted}`}
               >
-                ✕
+                <Icon name="x" size={9} />
               </button>
             </div>
           );
@@ -184,7 +184,7 @@ export const ConstraintChips: React.FC<ConstraintChipsProps> = ({
               title="Remove orientation constraint"
               aria-label={`Remove ${ori.preferred_facing} orientation constraint`}
             >
-              ✕
+              <Icon name="x" size={9} />
             </button>
           </div>
         ))}

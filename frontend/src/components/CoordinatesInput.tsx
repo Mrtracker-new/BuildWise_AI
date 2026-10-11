@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
+import { Kbd } from '../design';
 import { geocodeSearch, type GeocodeResult } from '../services/geocodeApi';
 
 interface CoordinatesInputProps {
@@ -355,7 +356,7 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
                 <span className="text-[10px] tracking-wide uppercase font-semibold">Nominatim / OSM</span>
               </div>
               <span className="text-[10px] text-[var(--text-3)] font-mono opacity-80">
-                ↑↓ select · ↵ confirm
+                <Kbd>Up/Down</Kbd> select · <Kbd>Enter</Kbd> confirm
               </span>
             </div>
           </div>,

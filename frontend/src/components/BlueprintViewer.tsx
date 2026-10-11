@@ -880,7 +880,9 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                       <span className="px-1.5 py-0.5 rounded bg-[var(--fill)] border border-[var(--hairline)] text-[var(--text-2)] whitespace-nowrap">
                         {step}
                       </span>
-                      {idx < (effectiveSitePlan.derivation_chain?.length ?? 0) - 1 && <span>→</span>}
+                      {idx < (effectiveSitePlan.derivation_chain?.length ?? 0) - 1 && (
+                        <Icon name="chevron-right" size={10} className="text-[var(--text-3)] inline-block align-middle" />
+                      )}
                     </React.Fragment>
                   ))}
                 </div>
@@ -991,7 +993,12 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                       : 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30'
                   }`}
                 >
-                  {val ? '✓' : '✗'} {key.replace(/_/g, ' ')}
+                  {val ? (
+                    <Icon name="check" size={11} className="inline-block align-[-2px] text-[var(--semantic-green)]" />
+                  ) : (
+                    <Icon name="x" size={11} className="inline-block align-[-2px] text-[var(--semantic-red)]" />
+                  )}{' '}
+                  {key.replace(/_/g, ' ')}
                 </span>
               ))}
             </div>
@@ -1132,7 +1139,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                         </span>
                       </div>
                       <p className="text-[11px] sm:text-[12px] text-[var(--text-2)] truncate">
-                        {isMultiStorey ? `Multi-Storey CAD Drafting (${multiStorey?.total_storeys} Levels)` : 'CAD 2D Drafting (Single Level Ground)'} &bull; {(plotWidthM || 10).toFixed(1)}m × {(plotDepthM || 12).toFixed(1)}m Grid
+                        {isMultiStorey ? `Multi-Storey CAD Drafting (${multiStorey?.total_storeys} Levels)` : 'CAD 2D Drafting (Single Level Ground)'} &bull; {(plotWidthM || 10).toFixed(1)}m x {(plotDepthM || 12).toFixed(1)}m Grid
                         {isMultiStorey && currentFloor && ` • Elevation +${(currentFloor.floor_index * 3.0).toFixed(1)}m`}
                       </p>
                     </div>

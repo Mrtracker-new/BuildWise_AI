@@ -259,7 +259,7 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
                   ({data.preservation_plan.length} cluster{data.preservation_plan.length !== 1 ? 's' : ''})
                 </span>
               </div>
-              <span className="text-[11px] text-[var(--text-3)] font-mono">240m × 240m window</span>
+              <span className="text-[11px] text-[var(--text-3)] font-mono">240m x 240m window</span>
             </div>
 
             {data.preservation_plan.length === 0 ? (

@@ -1,7 +1,6 @@
 /**
  * Hero.tsx — full-bleed scenic hero.
- * Load sequence: eyebrow → headline lines (masked slide-up, staggered) →
- * subcopy → CTAs (pop) → trust row (fade-slide sequence). The scenic layer
+ * Load sequence: eyebrow → headline lines (masked slide-up, staggered)  * subcopy → CTAs (pop) → trust row (fade-slide sequence). The scenic layer
  * parallaxes at ~0.3x; a porcelain scrim guarantees AA contrast; filmic
  * grain sits on top at 2.5%.
  */
@@ -11,6 +10,7 @@ import { HeroScene } from './HeroScene';
 import { timed } from './motion';
 import { APP_PATH, navigate } from './router';
 import { scrollToId } from './scroll';
+import { Icon } from '../components/Icon';
 import { LANDING, FONT_HAND } from './theme';
 
 const HeadlineLine: React.FC<{ children: React.ReactNode; delay: number }> = ({ children, delay }) => (
@@ -76,7 +76,7 @@ export const Hero: React.FC = () => {
         <HeroScene />
       </motion.div>
 
-      {/* Porcelain scrim: left→right on desktop; on small screens a
+      {/* Porcelain scrim: left-to-right on desktop; on small screens a
           vertical grade keeps the nav readable and melts the photo's
           base into the page so the headline owns the frame */}
       <div
@@ -136,7 +136,7 @@ export const Hero: React.FC = () => {
             style={{ boxShadow: LANDING.shadow.dark }}
           >
             Analyze a site
-            <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-1">→</span>
+            <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-1"><Icon name="arrow-up-right" size={14} className="inline-block -rotate-45" /></span>
           </motion.button>
 
           <motion.button

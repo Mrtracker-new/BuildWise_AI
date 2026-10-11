@@ -21,7 +21,7 @@ export const ProvenanceFooter: React.FC<ProvenanceFooterProps> = ({ data }) => {
   if (hazard?.flood?.confidence === 'low') stamps.push('River discharge: fallback baseline');
   if (hazard?.storm_cyclone?.confidence === 'high') stamps.push('Wind telemetry: verified this analysis');
   const verifiedFactors = data.factors.filter((f) => f.raw_value != null).length;
-  if (verifiedFactors > 0) stamps.push(`Elevation/climate: verified ×${verifiedFactors}`);
+  if (verifiedFactors > 0) stamps.push(`Elevation/climate: verified (${verifiedFactors} factors)`);
 
   return (
     <footer

@@ -9,6 +9,7 @@ import { motion, useReducedMotion } from 'framer-motion';
 import { fadeRise, staggerParent } from './motion';
 import { APP_PATH, navigate } from './router';
 import { scrollToId } from './scroll';
+import { Icon } from '../components/Icon';
 import { LANDING, FONT_HAND } from './theme';
 import logoUrl from '../assets/BuildWise_logo_square.png';
 
@@ -91,7 +92,7 @@ export const CtaBand: React.FC = () => {
               style={{ boxShadow: LANDING.shadow.dark }}
             >
               Try BuildWise
-              <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-1">→</span>
+              <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-1"><Icon name="arrow-up-right" size={14} className="inline-block -rotate-45" /></span>
             </button>
             <button
               type="button"

@@ -42,7 +42,12 @@ export type IconName =
   | 'shield'
   | 'sparkles'
   | 'search'
-  | 'edit';
+  | 'edit'
+  | 'upload'
+  | 'undo2'
+  | 'redo2'
+  | 'file-code'
+  | 'chevron-right';
 
 interface IconProps {
   name: IconName;
@@ -399,6 +404,46 @@ export const Icon: React.FC<IconProps> = ({
         <svg {...commonProps}>
           <circle cx="11" cy="11" r="8" />
           <line x1="21" y1="21" x2="16.65" y2="16.65" />
+        </svg>
+      );
+    // lucide-react equivalents (MIT), inlined into the design system so the
+    // tracing UI ships zero runtime deps: Upload, Undo2, Redo2, FileCode.
+    case 'upload':
+      return (
+        <svg {...commonProps}>
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="17 8 12 3 7 8" />
+          <line x1="12" y1="3" x2="12" y2="15" />
+        </svg>
+      );
+    case 'undo2':
+      return (
+        <svg {...commonProps}>
+          <path d="M9 14 4 9l5-5" />
+          <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11" />
+        </svg>
+      );
+    case 'redo2':
+      return (
+        <svg {...commonProps}>
+          <path d="m15 14 5-5-5-5" />
+          <path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5v0A5.5 5.5 0 0 0 9.5 20H13" />
+        </svg>
+      );
+    case 'chevron-right':
+      return (
+        <svg {...commonProps}>
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+      );
+    case 'file-code':
+      return (
+        <svg {...commonProps}>
+          <path d="M10 12.5 8 15l2 2.5" />
+          <path d="m14 12.5 2 2.5-2 2.5" />
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <path d="M15 2v5h5" />
+          <path d="M14 22v-4a2 2 0 0 1 2-2h4" />
         </svg>
       );
     default:
