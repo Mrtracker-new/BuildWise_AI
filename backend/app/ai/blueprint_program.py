@@ -81,16 +81,21 @@ def _compute_cache_key(
     required_rooms: Optional[List[str]] = None,
     plot_width: Optional[float] = None,
     plot_depth: Optional[float] = None,
-    vastu_strictness: Optional[str] = None
+    vastu_strictness: Optional[str] = None,
+    built_up_area: Optional[float] = None,
 ) -> str:
     clean_notes = (notes or "").strip().lower()
     rooms_key = ",".join(sorted(str(r).strip().lower() for r in (required_rooms or [])))
     pw = round(float(plot_width), 1) if plot_width is not None else ""
     pd = round(float(plot_depth), 1) if plot_depth is not None else ""
     vs = (vastu_strictness or "").strip().lower()
+    # The plinth area is part of the programme identity: it selects the size tier,
+    # so omitting it made the first generation at ANY area poison every later
+    # request that shared typology/grade/storeys/coverage/plot.
+    area_key = round(float(built_up_area), -1) if built_up_area is not None else ""
     raw = (
         f"{typology.strip().lower()}:{grade.strip().lower()}:{str(storeys).strip().lower()}:"
-        f"{str(coverage).strip()}:{clean_notes}:{rooms_key}:{pw}:{pd}:{vs}"
+        f"{str(coverage).strip()}:{clean_notes}:{rooms_key}:{pw}:{pd}:{vs}:{area_key}"
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -144,6 +149,35 @@ def _generate_mock_program(
     """
     clean_typology = typology.strip().lower()
     clean_notes = notes.lower()
+
+    # --- Plinth-area program sizing -----------------------------------------
+    # The target built-up area must change the GENERATED PROGRAM, not only the
+    # percentages downstream: a 500 sq ft brief cannot carry a guest suite, and
+    # a 50,000 sq ft brief must not return a two-bedroom flat. Area per storey
+    # selects the tier; an explicit required_rooms list still wins outright.
+    try:
+        _area = float(built_up_area or 0.0)
+    except (TypeError, ValueError):
+        _area = 0.0
+    try:
+        _storeys = max(1, int(float(storeys or 1)))
+    except (TypeError, ValueError):
+        _storeys = 1
+    _per_storey_sqft = (_area / _storeys) if _area > 0.0 else 0.0
+    if _per_storey_sqft <= 0.0:
+        area_tier = "standard"
+    elif _per_storey_sqft < 900.0:
+        area_tier = "compact"
+    elif _per_storey_sqft < 4200.0:
+        area_tier = "standard"
+    else:
+        area_tier = "generous"
+    area_note = (
+        f" Targeting {_area:,.0f} sq ft across {_storeys} storey(s) "
+        f"({_per_storey_sqft:,.0f} sq ft per floor)."
+        if _area > 0.0
+        else ""
+    )
 
     if clean_typology == "commercial":
         rooms = [
@@ -203,18 +237,34 @@ def _generate_mock_program(
         rooms = room_list
         features_added = [r.name for r in rooms]
     else:
-        # Default residential room mix
-        rooms = [
-            RoomSpec(name="Living Room", min_area_pct=16.0, max_area_pct=24.0, vastu_zone=VastuZone.CENTER, adjacency=["Dining Area", "Kitchen"], requires_plumbing=False, priority=1),
-            RoomSpec(name="Master Bedroom", min_area_pct=14.0, max_area_pct=22.0, vastu_zone=VastuZone.SW, adjacency=["Primary Bath"], requires_plumbing=False, priority=1),
-            RoomSpec(name="Kitchen", min_area_pct=8.0, max_area_pct=14.0, vastu_zone=VastuZone.SE, adjacency=["Dining Area"], requires_plumbing=True, priority=2),
-            RoomSpec(name="Primary Bath", min_area_pct=5.0, max_area_pct=10.0, vastu_zone=VastuZone.NW, adjacency=["Master Bedroom"], requires_plumbing=True, priority=3),
-            RoomSpec(name="Bedroom 2", min_area_pct=10.0, max_area_pct=16.0, vastu_zone=VastuZone.W, adjacency=["Common Bath"], requires_plumbing=False, priority=2),
-            RoomSpec(name="Common Bath", min_area_pct=4.0, max_area_pct=8.0, vastu_zone=VastuZone.NW, adjacency=["Bedroom 2"], requires_plumbing=True, priority=3),
-            RoomSpec(name="Dining Area", min_area_pct=8.0, max_area_pct=12.0, vastu_zone=VastuZone.W, adjacency=["Kitchen", "Living Room"], requires_plumbing=False, priority=2),
-        ]
+        # Default residential room mix, sized by the plinth-area tier.
+        if area_tier == "compact":
+            # Minimal habitable core: no guest wing, no separate dining bay.
+            rooms = [
+                RoomSpec(name="Living Room", min_area_pct=26.0, max_area_pct=34.0, vastu_zone=VastuZone.CENTER, adjacency=["Kitchen"], requires_plumbing=False, priority=1),
+                RoomSpec(name="Master Bedroom", min_area_pct=22.0, max_area_pct=30.0, vastu_zone=VastuZone.SW, adjacency=["Primary Bath"], requires_plumbing=False, priority=1),
+                RoomSpec(name="Kitchen", min_area_pct=12.0, max_area_pct=18.0, vastu_zone=VastuZone.SE, adjacency=[], requires_plumbing=True, priority=2),
+                RoomSpec(name="Primary Bath", min_area_pct=7.0, max_area_pct=12.0, vastu_zone=VastuZone.NW, adjacency=["Master Bedroom"], requires_plumbing=True, priority=3),
+            ]
+        else:
+            rooms = [
+                RoomSpec(name="Living Room", min_area_pct=16.0, max_area_pct=24.0, vastu_zone=VastuZone.CENTER, adjacency=["Dining Area", "Kitchen"], requires_plumbing=False, priority=1),
+                RoomSpec(name="Master Bedroom", min_area_pct=14.0, max_area_pct=22.0, vastu_zone=VastuZone.SW, adjacency=["Primary Bath"], requires_plumbing=False, priority=1),
+                RoomSpec(name="Kitchen", min_area_pct=8.0, max_area_pct=14.0, vastu_zone=VastuZone.SE, adjacency=["Dining Area"], requires_plumbing=True, priority=2),
+                RoomSpec(name="Primary Bath", min_area_pct=5.0, max_area_pct=10.0, vastu_zone=VastuZone.NW, adjacency=["Master Bedroom"], requires_plumbing=True, priority=3),
+                RoomSpec(name="Bedroom 2", min_area_pct=10.0, max_area_pct=16.0, vastu_zone=VastuZone.W, adjacency=["Common Bath"], requires_plumbing=False, priority=2),
+                RoomSpec(name="Common Bath", min_area_pct=4.0, max_area_pct=8.0, vastu_zone=VastuZone.NW, adjacency=["Bedroom 2"], requires_plumbing=True, priority=3),
+                RoomSpec(name="Dining Area", min_area_pct=8.0, max_area_pct=12.0, vastu_zone=VastuZone.W, adjacency=["Kitchen", "Living Room"], requires_plumbing=False, priority=2),
+            ]
 
-        has_puja = "puja" in clean_notes or clean_typology != "residential_multi"
+        if area_tier == "generous":
+            # Large briefs earn the extended program instead of a duplicate flat.
+            rooms.extend([
+                RoomSpec(name="Bedroom 3", min_area_pct=9.0, max_area_pct=14.0, vastu_zone=VastuZone.W, adjacency=["Common Bath"], requires_plumbing=False, priority=2),
+                RoomSpec(name="Store Room", min_area_pct=4.0, max_area_pct=7.0, vastu_zone=VastuZone.SE, adjacency=["Kitchen"], requires_plumbing=False, priority=3),
+            ])
+
+        has_puja = "puja" in clean_notes or (clean_typology != "residential_multi" and area_tier != "compact")
         if has_puja:
             rooms.append(RoomSpec(name="Puja Room", min_area_pct=4.0, max_area_pct=8.0, vastu_zone=VastuZone.NE, adjacency=["Living Room"], requires_plumbing=False, priority=3))
 
@@ -275,7 +325,7 @@ def _generate_mock_program(
     intent = (
         f"Custom {grade.capitalize()} residential design program{feat_desc}, "
         f"optimizing passive solar orientation, southeast Agni kitchen, and consolidated northwest wet zones "
-        f"per NBC 2016 and Vastu canon."
+        f"per NBC 2016 and Vastu canon.{area_note}"
     )
 
     return RoomProgram(rooms=rooms, design_intent=intent, solver_hints=SolverHints(target_utilization=0.95, allow_corridors=True))
@@ -313,7 +363,8 @@ async def generate_room_program(
         required_rooms=required_rooms,
         plot_width=plot_width,
         plot_depth=plot_depth,
-        vastu_strictness=vastu_strictness
+        vastu_strictness=vastu_strictness,
+        built_up_area=built_up_area,
     )
     now = time.time()
     if not bypass_cache and cache_key in _PROGRAM_CACHE:
@@ -554,7 +605,8 @@ def generate_room_program_sync(
         required_rooms=required_rooms,
         plot_width=plot_width,
         plot_depth=plot_depth,
-        vastu_strictness=vastu_strictness
+        vastu_strictness=vastu_strictness,
+        built_up_area=built_up_area,
     )
     now = time.time()
     if not bypass_cache and cache_key in _PROGRAM_CACHE:

@@ -150,9 +150,19 @@ class MockExplanationAdapter(BaseExplanationAdapter):
         storeys_str = f"G+{floors_num - 1}" if floors_num > 1 else "G"
         foundations_type = "deep raft or pile foundations" if floors_num >= 4 else ("isolated RCC footings" if floors_num <= 2 else "reinforced continuous strip footings")
 
+        # Client requirements are a first-class sidebar input: the deterministic
+        # engine reflects them in the narrative instead of discarding the field.
+        client_reqs = str(analysis_data.get("client_requirements") or "").strip()
+        client_reqs_clause = (
+            f" The recorded client brief ({client_reqs[:160]}) is carried into the functional brief and the generated room programme."
+            if client_reqs
+            else ""
+        )
+
         parameter_reflection = (
             f"This analysis is directly governed by the {built_up_area:,.0f} sq ft built-up footprint specified with {grade_str} grade finishes. "
             f"The {storeys_str} storey load profile necessitates {foundations_type} under IS 456, while base construction benchmarks total approximately INR {total_cost:,.0f}."
+            f"{client_reqs_clause}"
         )
 
         duration_ms = round((time.time() - start_time) * 1000.0, 2)

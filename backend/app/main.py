@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ValidationError
 
 from app.config import settings
@@ -812,7 +812,25 @@ async def create_generative_floorplan(
                 "bypass_cache": req.bypass_cache or False,
             }
             prog, prog_source = await generate_room_program(params, req.ai_provider)
-            req = req.model_copy(update={"room_program": prog, "program_source": prog_source})
+            # Programme contract at the API boundary: a generated room programme
+            # must actually shape the plate. The single-storey T1 partitioner keys
+            # on required_rooms, so a caller that supplied only the plinth area
+            # used to get the ontology's default plate while the generated
+            # programme was silently discarded (the plinth-area control then had no
+            # visible effect on the drawing). Derive the required-room list from
+            # the programme so the two agree; explicit caller lists still win.
+            _req_update: Dict[str, Any] = {"room_program": prog, "program_source": prog_source}
+            if not req.required_rooms and storeys <= 1 and prog.rooms:
+                from app.services.floorplan.engine import SoleGeometryEngine as _SGE
+
+                _mapped: List[str] = []
+                for _room in prog.rooms:
+                    _mid = _SGE._map_client_room_token(_room.name)  # noqa: SLF001 - shared mapping
+                    if _mid not in _mapped:
+                        _mapped.append(_mid)
+                if len(_mapped) >= 3:
+                    _req_update["required_rooms"] = _mapped
+            req = req.model_copy(update=_req_update)
 
         response = generate_floor_plan(req)
 

@@ -58,7 +58,8 @@ class GroqExplanationAdapter(BaseExplanationAdapter):
             grade=grade,
             typology=typology,
             storeys=storeys,
-            coverage=coverage
+            coverage=coverage,
+            client_requirements=analysis_data.get("client_requirements"),
         )
 
         # 2. System prompt with explicit required fields and Pydantic JSON schema representation

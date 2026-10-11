@@ -147,7 +147,8 @@ class GeminiExplanationAdapter(BaseExplanationAdapter):
             grade=grade,
             typology=typology,
             storeys=storeys,
-            coverage=coverage
+            coverage=coverage,
+            client_requirements=analysis_data.get("client_requirements"),
         )
 
         gemini_schema = to_gemini_schema(AnalysisResponse.model_json_schema())

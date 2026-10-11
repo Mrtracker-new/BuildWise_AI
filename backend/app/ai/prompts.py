@@ -2,6 +2,7 @@
 Prompts for BuildWise Civil and Structural Engineering AI adapters.
 Adheres strictly to CPWD benchmarks, IS 456, IS 1893, and NBC 2016.
 """
+from typing import Optional
 
 CIVIL_ENGINEER_SYSTEM_PROMPT = """You are an elite Indian Civil and Structural Engineer AI, specializing in CPWD (Central Public Works Department) benchmarks, IS 456 (Concrete), IS 1893 (Seismic), and NBC 2016 (National Building Code).
 
@@ -21,13 +22,21 @@ def build_user_prompt(
     grade: str,
     typology: str,
     storeys: str,
-    coverage: int
+    coverage: int,
+    client_requirements: Optional[str] = None,
 ) -> str:
     """
     Builds the standardized user prompt strictly adhering to the specified format:
     'Analyze this site: Lat={lat}, Lon={lon}, Area={area} sqft, Grade={grade}, Typology={typology}, Storeys={storeys}, Ground Coverage={coverage}%.'
+
+    Client requirements, when supplied, are appended verbatim so the narrative
+    reflects the brief instead of silently dropping a populated sidebar field.
     """
-    return (
+    prompt = (
         f"Analyze this site: Lat={lat}, Lon={lon}, Area={area} sqft, "
         f"Grade={grade}, Typology={typology}, Storeys={storeys}, Ground Coverage={coverage}%."
     )
+    reqs = (client_requirements or "").strip()
+    if reqs:
+        prompt += f"\nClient requirements that must be reflected in the narrative: {reqs}"
+    return prompt
