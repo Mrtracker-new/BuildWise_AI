@@ -261,6 +261,8 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
           client_notes: activeNotes,
           quality_grade: activeGrade,
           ai_provider: activeProvider,
+          solar_axis_degrees: solarAxisDegrees,
+          prevailing_wind_direction_degrees: prevailingWindDirectionDegrees,
           shape_type: siteMode === 'irregular' ? polyMetrics.shapeType : 'rectangle',
           plot_polygon: siteMode === 'irregular' ? {
             vertices: irregularVertices,

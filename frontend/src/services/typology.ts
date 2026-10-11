@@ -255,6 +255,8 @@ export function isFloorPlanStale(
     client_notes?: string;
     quality_grade?: string;
     ai_provider?: string;
+    solar_axis_degrees?: number;
+    prevailing_wind_direction_degrees?: number;
     shape_type?: string;
     plot_polygon?: any;
     terrace_bands?: Record<number | string, any>;
@@ -354,6 +356,36 @@ export function isFloorPlanStale(
 
   // Quality grade comparison
   if (current.quality_grade && snapshot.quality_grade && snapshot.quality_grade !== current.quality_grade) {
+    return true;
+  }
+
+  // Narrative / programme provider comparison. The sidebar's Technical
+  // Explanation Generator feeds the same provider that synthesizes the room
+  // programme, so switching it after a generation must flag the plan stale
+  // instead of silently showing a plan built by the previous engine.
+  if (
+    current.ai_provider !== undefined &&
+    snapshot.ai_provider !== undefined &&
+    snapshot.ai_provider !== current.ai_provider
+  ) {
+    return true;
+  }
+
+  // Orientation inputs (solar axis, prevailing wind) are solver policy inputs.
+  if (
+    current.solar_axis_degrees !== undefined &&
+    snapshot.solar_axis_degrees !== undefined &&
+    Math.abs(snapshot.solar_axis_degrees - current.solar_axis_degrees) > 0.5
+  ) {
+    return true;
+  }
+  if (
+    current.prevailing_wind_direction_degrees !== undefined &&
+    snapshot.prevailing_wind_direction_degrees !== undefined &&
+    Math.abs(
+      snapshot.prevailing_wind_direction_degrees - current.prevailing_wind_direction_degrees
+    ) > 0.5
+  ) {
     return true;
   }
 
