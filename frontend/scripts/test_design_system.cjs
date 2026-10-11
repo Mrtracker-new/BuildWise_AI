@@ -13,7 +13,7 @@
  *   4. Adoption: App uses DesignProvider/useShortcuts/ShortcutsSheet/
  *      ToastViewport; AppHeader + MapStyleSelector expose the T/M/R
  *      shortcuts through aria-keyshortcuts (no visible Kbd badges on
- *      buttons); AnalysisForm consumes the design Select directly.
+ *      buttons); AnalysisForm consumes the design Select + Tooltip directly.
  *   5. Behavioral: lint_tokens FAILS a file with a new hex literal and PASSES
  *      again once removed (temp file, cleaned up).
  */
@@ -57,6 +57,21 @@ check(/100.*150.*200|'fast': 100/.test(tokensSrc.replace(/\s+/g, ' ')), 'MOTION 
 check(/250/.test(tokensSrc), 'sheet/overlay duration 250ms present');
 const shortcutKeys = [...tokensSrc.matchAll(/key:\s*'([^']+)'/g)].map((m) => m[1]);
 check(JSON.stringify(shortcutKeys) === JSON.stringify(['t', 'm', 'r', '?']), `SHORTCUTS = t,m,r,? (got ${shortcutKeys})`);
+// Shortcut guard: text-entry surfaces swallow single-key shortcuts, but a
+// focused slider / switch / button must not — the sidebar tile is operated by
+// keyboard, and T has to keep working while focus sits on a control there.
+const nonTextInputTypes = primSrc.match(/NON_TEXT_INPUT_TYPES = new Set\(\[([\s\S]*?)\]\)/);
+const nonTextTypes = nonTextInputTypes
+  ? [...nonTextInputTypes[1].matchAll(/'([^']+)'/g)].map((m) => m[1])
+  : [];
+check(
+  ['range', 'checkbox', 'radio', 'button'].every((t) => nonTextTypes.includes(t)),
+  `useShortcuts treats non-text inputs as non-typing (got ${nonTextTypes.join(',')})`
+);
+check(
+  /return !NON_TEXT_INPUT_TYPES\.has\(type\)/.test(primSrc) && /tag === 'textarea' \|\| tag === 'select'/.test(primSrc),
+  'useShortcuts still ignores textarea + select while typing'
+);
 
 const css = fs.readFileSync(path.join(ROOT, 'src', 'index.css'), 'utf8');
 check(css.includes('--motion-duration-base') && css.includes('--motion-ease-out'), 'index.css carries motion tokens (light+dark)');
@@ -87,7 +102,13 @@ check(!/<Kbd>/.test(styleSrc), 'MapStyleSelector carries no visible Kbd badge');
 check(/bw:open-map-styles/.test(styleSrc), 'MapStyleSelector listens for M-key event');
 
 const formSrc = fs.readFileSync(path.join(ROOT, 'src', 'components', 'AnalysisForm.tsx'), 'utf8');
-check(/import \{ Select \} from '\.\.\/design'/.test(formSrc), 'AnalysisForm imports the design Select');
+// The contract is design-system adoption, not the literal single-name import
+// shape: the tile also consumes Tooltip + useDesign from the same module, so
+// assert the module import carries Select AND Tooltip.
+const designImport = formSrc.match(/import \{([^}]*)\} from '\.\.\/design'/);
+const designNames = designImport ? designImport[1].split(',').map((s) => s.trim()) : [];
+check(designNames.includes('Select'), 'AnalysisForm imports the design Select');
+check(designNames.includes('Tooltip'), 'AnalysisForm imports the design Tooltip');
 check(!fs.existsSync(path.join(ROOT, 'src', 'components', 'IosSelect.tsx')), 'legacy IosSelect shim is gone');
 
 /* ---------------- 5. Behavioral: lint gate blocks new violations ---------------- */

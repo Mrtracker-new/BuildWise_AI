@@ -731,6 +731,17 @@ const AppShell: React.FC = () => {
       ? analysisData.cost_estimate.total_estimated_cost_inr + currentLandCost
       : null;
 
+  // Captured plot area (m²) for the coverage control's live footprint cap.
+  // A malformed boundary yields null rather than a wrong number.
+  const boundaryAreaSqm = useMemo(() => {
+    if (!boundary) return null;
+    try {
+      return boundaryToSummaryPayload(boundary).area_sqm;
+    } catch {
+      return null;
+    }
+  }, [boundary]);
+
   // ---- Compact-tier panel content (shared: desktop aside + compact Drawer) ----
   const controlsPanelBody = (
     <>
@@ -755,6 +766,8 @@ const AppShell: React.FC = () => {
         onChange={handleRequestChange}
         onSubmit={handleRunAnalysis}
         onRequestCapture={() => openCapture('locate')}
+        providerAvailability={serverStatus}
+        boundaryAreaSqm={boundaryAreaSqm}
       />
     </>
   );
