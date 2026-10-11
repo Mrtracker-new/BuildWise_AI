@@ -1,16 +1,15 @@
 /**
  * TraceToolbar.tsx — floating glass mode toolbar for the capture session.
  * ======================================================================
- * PHASE 1: replaces the flat "click-to-place" form controls with a
- * professional-tool surface: [Draw D] [Edit E] [Import] [Presets ▾] [Undo ⌘Z]
- * [Redo ⇧⌘Z] [Finish ⏎]. Icons + text labels; the active mode is highlighted
+ * Replaces the flat "click-to-place" form controls with a
+ * professional-tool surface: [Draw] [Edit] [Import] [Presets] then
+ * [Undo] [Redo] [Finish]. Icons + text labels; the active mode is highlighted
  * with the accent token; the toolbar fades in/out with a 150ms ease-out
  * (MOTION tokens), honors prefers-reduced-motion and keeps a constant height
  * (no layout jumps). Focus rings are visible on every control (a11y gate).
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { Icon, type IconName } from '../Icon';
-import { Kbd } from '../../design';
 import { MOTION } from '../../design/tokens';
 
 export type TraceMode = 'draw' | 'edit';
@@ -32,6 +31,10 @@ export interface TraceToolbarProps {
   /** Import/presets stay in the step sheet; these open their disclosure. */
   onImport: () => void;
   onPresets: () => void;
+  /** Controlled presets dropdown: open state so the button reflects it. */
+  presetsOpen?: boolean;
+  /** The PresetMenu popover, rendered INSIDE the toolbar surface (anchors to it). */
+  presetsMenu?: React.ReactNode;
 }
 
 interface ToolButton {
@@ -60,6 +63,8 @@ export const TraceToolbar: React.FC<TraceToolbarProps> = ({
   vertexCount,
   onImport,
   onPresets,
+  presetsOpen = false,
+  presetsMenu,
 }) => {
   // Fade in/out via opacity+scale on mount/unmount; 150ms ease-out per contract.
   const [mounted, setMounted] = useState(visible);
@@ -103,21 +108,21 @@ export const TraceToolbar: React.FC<TraceToolbarProps> = ({
       disabled: vertexCount < 3,
       disabledReason: 'Place at least 3 vertices to edit',
     },
-    { id: 'import', icon: 'file-text', label: 'Import', onClick: onImport },
-    { id: 'presets', icon: 'layout-grid', label: 'Presets', onClick: onPresets },
+    { id: 'import', icon: 'upload', label: 'Import', onClick: onImport },
+    { id: 'presets', icon: 'layout-grid', label: 'Presets', onClick: onPresets, active: presetsOpen },
     {
       id: 'undo',
-      icon: 'refresh',
+      icon: 'undo2',
       label: 'Undo',
-      keyHint: '⌘Z',
+      keyHint: 'Ctrl+Z',
       onClick: onUndo,
       disabled: !canUndo,
     },
     {
       id: 'redo',
-      icon: 'refresh',
+      icon: 'redo2',
       label: 'Redo',
-      keyHint: '⇧⌘Z',
+      keyHint: 'Ctrl+Shift+Z',
       onClick: onRedo,
       disabled: !canRedo,
     },
@@ -125,7 +130,7 @@ export const TraceToolbar: React.FC<TraceToolbarProps> = ({
       id: 'finish',
       icon: 'check',
       label: 'Finish',
-      keyHint: '⏎',
+      keyHint: 'Enter',
       onClick: onFinish,
       disabled: finishDisabled,
       disabledReason: finishDisabledReason,
@@ -138,7 +143,7 @@ export const TraceToolbar: React.FC<TraceToolbarProps> = ({
       role="toolbar"
       aria-label="Boundary tracing tools"
       data-testid="trace-toolbar"
-      className="flex items-center justify-center"
+      className="relative flex items-center justify-center"
     >
       <div
         className="vibrancy-panel rounded-[14px] px-1 py-1 flex flex-col items-stretch gap-0.5 shadow-lg sm:flex-row sm:w-auto"
@@ -177,16 +182,13 @@ export const TraceToolbar: React.FC<TraceToolbarProps> = ({
                 size={13}
                 className={t.active && t.variant !== 'accent' ? 'text-[var(--accent)]' : t.variant === 'accent' ? 'text-white' : 'text-[var(--text-2)] group-hover:text-[var(--text-1)]'}
               />
-              <span className="hidden sm:inline">{t.label}</span>
-              {t.keyHint && (
-                // Hover-reveal keeps the resting width constant (no layout
-                // jump); the full binding is always in the tooltip + 😀 sheet.
-                <span className="relative pointer-events-none">
-                  <span className="absolute left-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity duration-150">
-                    <Kbd>{t.keyHint}</Kbd>
-                  </span>
-                </span>
+              {t.id === 'presets' && (
+                <Icon name="chevron-down" size={10} className={`text-[var(--text-3)] ${presetsOpen ? 'rotate-180' : ''} transition-transform`} />
               )}
+              <span className="hidden sm:inline">{t.label}</span>
+              {/* No key badge inside the button: a single letter pinned to a
+                  control reads as clutter. The binding stays in the tooltip
+                  (see title above) and in the Methodology reference. */}
             </button>
             {t.id === 'presets' && (
               <div className="h-[1px] w-6 sm:h-6 sm:w-[1px] bg-[var(--hairline)] sm:mx-1 mx-auto" aria-hidden="true" />
@@ -194,6 +196,7 @@ export const TraceToolbar: React.FC<TraceToolbarProps> = ({
           </React.Fragment>
         ))}
       </div>
+      {presetsMenu}
     </div>
   );
 };

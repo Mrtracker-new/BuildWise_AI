@@ -32,6 +32,19 @@ const INSERT_SRC = 'bw-capture-insert-handle';
 /** Ghost vertex preview in draw mode (8px faint preview following the mouse). */
 const GHOST_SRC = 'bw-capture-ghost';
 
+/**
+ * Single owner of draft overlay state.
+ * ====================================================
+ * Every transient tracing affordance — the rubber-band live edge, the amber
+ * snap guides, the ghost vertex, the magnetic-close halo, the edit-mode drag
+ * ring and the mid-edge insert handle — lives in exactly these six sources.
+ * CaptureSheet calls clearDraftOverlays() at every draft-ending boundary
+ * (Esc, close-shape, mode switch, reset, unmount); nothing else may zero
+ * them individually. This ensures consistent overlay cleanup across all actions:
+ * one function, six sources, no half-cleared state.
+ */
+const DRAFT_SOURCE_IDS = [LIVE_EDGE_SRC, GUIDES_SRC, GHOST_SRC, CLOSE_TARGET_SRC, DRAG_LINE_SRC, INSERT_SRC];
+
 export const CAPTURE_CURSOR = 'crosshair';
 /** Cursor while hovering a vertex handle or mid-edge insert in EDIT mode. */
 export const EDIT_CURSOR = 'move';
@@ -114,10 +127,81 @@ const CAPTURE_LAYER_IDS = [
   'bw-capture-ghost',
 ];
 
-function isMapReady(map: MlMap | null | undefined): map is MlMap {
+/**
+ * EDIT affordances driving the vertex-handle paint via feature-state.
+ * hover = pointer over a handle (scales 8->12px, cursor 'move'); drag = the
+ * handle under an active drag. State persists across ring data updates because
+ * the source uses promoteId('idx'). Pure pointer affordance (not animation),
+ * so reduced-motion users get the same cue.
+ */
+export function setVertexFeatureState(
+  map: MlMap,
+  which: 'hover' | 'drag' | 'insert',
+  idx: number | null
+): void {
+  if (!captureInstalled(map)) return;
+  try {
+    if (map.setFeatureState === undefined) return;
+    const ids = lastVertexIds.current;
+    const prevKey = `${which}Idx`;
+    const prev = (lastVertexIds as any)[prevKey] as number | null;
+    if (prev !== null && prev !== undefined && ids.has(prev)) {
+      map.setFeatureState({ source: VERTICES_SRC, id: prev }, { [which]: false });
+    }
+    (lastVertexIds as any)[prevKey] = idx;
+    if (idx === null || idx === undefined || !ids.has(idx)) return;
+    map.setFeatureState({ source: VERTICES_SRC, id: idx }, { [which]: true });
+  } catch {}
+}
+/** The vertex ids seen in the last updateCaptureSources ring write. */
+const lastVertexIds: { current: Set<number> } & { [key: string]: number | null | Set<number> } = {
+  current: new Set<number>(),
+  hoverIdx: null,
+  dragIdx: null,
+  insertIdx: null,
+};
+
+/**
+ * Style readiness — a MOUNTED style is enough to add sources/layers.
+ *
+ * This deliberately does NOT use `isStyleLoaded()`: that is false while ANY
+ * basemap tile is in flight, i.e. for most of a live session. Gating
+ * installCaptureLayers() on it meant the very first trace clicks painted
+ * nothing (sources not created yet, so every write was a silent no-op) and the
+ * ring only appeared once the basemap settled. MapLibre allows addSource /
+ * addLayer on a mounted-but-loading style, and a style swap is handled by the
+ * style.load re-install in CaptureSheet.
+ */
+function isStyleReady(map: MlMap | null | undefined): map is MlMap {
   if (!map) return false;
   try {
-    return Boolean(typeof map.isStyleLoaded === 'function' && map.isStyleLoaded());
+    return Boolean((map as unknown as { style?: unknown }).style);
+  } catch {
+    return false;
+  }
+}
+
+/** Map exists and has not been torn down. */
+function isMapAlive(map: MlMap | null | undefined): map is MlMap {
+  if (!map) return false;
+  try {
+    return !(map as any)._removed && Boolean(map.getContainer?.());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Capture layers are installed on this style (checked via a sentinel source).
+ * This is the correct gate for every render/clear operation: writing to an
+ * existing GeoJSON source works fine while tiles stream, and is exactly the
+ * operation we must not drop. When the sentinel is absent a style swap is in
+ * progress and the caller retries on the next style.load/idle.
+ */
+function captureInstalled(map: MlMap | null | undefined): map is MlMap {
+  if (!isMapAlive(map)) return false;
+  try {
+    return Boolean(map.getSource(VERTICES_SRC) && map.getSource(LIVE_EDGE_SRC));
   } catch {
     return false;
   }
@@ -125,7 +209,7 @@ function isMapReady(map: MlMap | null | undefined): map is MlMap {
 
 /** Ensures capture layers are placed on top of base and data layers so lines are never occluded. */
 export function bringCaptureLayersToFront(map: MlMap): void {
-  if (!isMapReady(map)) return;
+  if (!isStyleReady(map)) return;
   for (const id of CAPTURE_LAYER_IDS) {
     try {
       if (map.getLayer(id)) {
@@ -140,7 +224,7 @@ export function bringCaptureLayersToFront(map: MlMap): void {
 
 /** Install sources+layers once per map style load; idempotent. */
 export function installCaptureLayers(map: MlMap): void {
-  if (!isMapReady(map)) return;
+  if (!isStyleReady(map)) return;
 
   try {
     if (map.getSource(BOUNDARY_SRC) && map.getSource(BOUNDARY_LINE_SRC)) {
@@ -164,7 +248,9 @@ export function installCaptureLayers(map: MlMap): void {
       map.addSource(CLOSE_TARGET_SRC, { type: 'geojson', data: emptyFc() });
     }
     if (!map.getSource(VERTICES_SRC)) {
-      map.addSource(VERTICES_SRC, { type: 'geojson', data: emptyFc() });
+      // promoteId: 'idx' gives vertex features stable ids so EDIT-mode
+      // hover/drag feature-states survive ring data updates.
+      map.addSource(VERTICES_SRC, { type: 'geojson', data: emptyFc(), promoteId: 'idx' } as any);
     }
     if (!map.getSource(SUGGESTION_SRC)) {
       map.addSource(SUGGESTION_SRC, { type: 'geojson', data: emptyLine() });
@@ -287,19 +373,22 @@ export function installCaptureLayers(map: MlMap): void {
         type: 'circle',
         source: VERTICES_SRC,
         paint: {
+          // EDIT-actionable 8px handles; hover scales to 12px via
+          // feature-state, so no React re-render is involved per hover frame.
           'circle-radius': [
             'case',
-            ['get', 'isFirst'],
-            7.0,
-            5.5,
+            ['feature-state', 'hover'], 12.0,
+            ['feature-state', 'drag'], 12.0,
+            ['feature-state', 'insert'], 10.0,
+            ['case', ['get', 'isFirst'], 9.0, 8.0],
           ],
           'circle-color': MAP_CAPTURE.accent,
           'circle-stroke-color': MAP_CAPTURE.vertexStroke,
           'circle-stroke-width': [
             'case',
-            ['get', 'isFirst'],
-            2.5,
-            2.0,
+            ['feature-state', 'hover'], 3.0,
+            ['feature-state', 'drag'], 3.0,
+            ['case', ['get', 'isFirst'], 2.5, 2.0],
           ],
           'circle-opacity': 1.0,
         },
@@ -368,7 +457,7 @@ export interface CaptureRenderState {
 
 /** Push capture state into the map sources (call inside rAF or state changes). */
 export function updateCaptureSources(map: MlMap, state: CaptureRenderState): void {
-  if (!isMapReady(map)) return;
+  if (!isMapAlive(map)) return;
   installCaptureLayers(map);
 
   const apply = (id: string, data: GeoJSON.Feature | GeoJSON.FeatureCollection): void => {
@@ -421,12 +510,16 @@ export function updateCaptureSources(map: MlMap, state: CaptureRenderState): voi
           type: 'FeatureCollection',
           features: state.ring.map((v, i) => ({
             type: 'Feature',
+            // id + promoteId: the feature-state keys for hover/drag affordance.
+            id: i,
             properties: { idx: i, isFirst: i === 0, count: state.ring.length },
             geometry: { type: 'Point', coordinates: toLngLat(v) },
           })),
         }
       : emptyFc()
   );
+  // Track ids for setVertexFeatureState; a shrunk ring simply drops stale ids.
+  lastVertexIds.current = new Set(state.ring.map((_, i) => i));
 
   // Close target indicator on starting point (P1) when >= 3 vertices placed while tracing
   apply(
@@ -486,7 +579,7 @@ export function updateCaptureSources(map: MlMap, state: CaptureRenderState): voi
  * paint keyframes for the "lock" pulse (2→4→2 px over 300ms).
  */
 export function pulseBoundaryLock(map: MlMap): void {
-  if (!isMapReady(map)) return;
+  if (!captureInstalled(map)) return;
   const layerId = 'bw-capture-boundary-line';
   if (!map.getLayer(layerId)) return;
   const reduced =
@@ -510,11 +603,47 @@ export function pulseBoundaryLock(map: MlMap): void {
   });
 }
 
-export function clearCaptureSources(map: MlMap): void {
-  if (!isMapReady(map)) return;
+/**
+ * Destroy EVERY draft overlay in one call. Called on Esc/cancel,
+ * close-shape, mode switch to non-trace steps, boundary clear and unmount —
+ * ensures that the map holds zero dashed draft elements after any of these events.
+ *
+ * Also zeroes the edit-mode drag ring, the insert handle and the ghost —
+ * three sources that would otherwise leak residual draft lines.
+ */
+export function clearDraftOverlays(map: MlMap): boolean {
+  if (!captureInstalled(map)) return false;
+  try {
+    let cleared = false;
+    for (const id of DRAFT_SOURCE_IDS) {
+      const src = map.getSource(id) as GeoJSONSource | undefined;
+      if (src) {
+        // EMPTY payloads: live-edge/guide/drag sources get emptyLine(),
+        // point sources (ghost/close-target/insert) get emptyFc().
+        src.setData(
+          id === LIVE_EDGE_SRC || id === GUIDES_SRC || id === DRAG_LINE_SRC
+            ? (emptyLine() as any)
+            : (emptyFc() as any)
+        );
+        cleared = true;
+      }
+    }
+    // hover/drag feature-states ride the vertices source — drop them too.
+    setVertexFeatureState(map, 'hover', null);
+    setVertexFeatureState(map, 'drag', null);
+    setVertexFeatureState(map, 'insert', null);
+    return cleared;
+  } catch {
+    return false;
+  }
+}
+
+export function clearCaptureSources(map: MlMap): boolean {
+  if (!captureInstalled(map)) return false;
   updateCaptureSources(map, { ring: [], cursor: null, guides: [], isClosed: false });
   updateFrontageSuggestion(map, [], null);
   updateHoveredEdge(map, [], null);
+  clearDraftOverlays(map);
   // Reset invalid styling whenever the sheet closes or resets.
   try {
     if (map.getLayer('bw-capture-boundary-line')) {
@@ -522,6 +651,29 @@ export function clearCaptureSources(map: MlMap): void {
       map.setPaintProperty('bw-capture-boundary-line', 'line-width', 2.4);
     }
   } catch {}
+  return true;
+}
+
+/**
+ * Clears capture sources when ready: ensures the sentinel sources are actually
+ * present and zeroed, otherwise retrying (bounded) until the replacement style
+ * has installed them.
+ */
+export function clearCaptureWhenReady(map: MlMap | null, deadlineMs = 3000): void {
+  if (!map) return;
+  const start = Date.now();
+  const tick = (): void => {
+    // Map torn down: nothing left to clear, stop retrying.
+    if (!isMapAlive(map)) return;
+    try {
+      if (clearCaptureSources(map)) return;
+    } catch {
+      // fall through to the retry
+    }
+    if (Date.now() - start > deadlineMs) return;
+    window.setTimeout(tick, 150);
+  };
+  tick();
 }
 
 /**
@@ -529,7 +681,7 @@ export function clearCaptureSources(map: MlMap): void {
  * to clear. No-op when the sources are not installed.
  */
 export function updateHoveredEdge(map: MlMap, ring: Vertex[], edgeIndex: number | null): void {
-  if (!isMapReady(map)) return;
+  if (!captureInstalled(map)) return;
   try {
     const edgeSrc = map.getSource(HOVER_EDGE_SRC) as GeoJSONSource | undefined;
     const vertSrc = map.getSource(HOVER_VERTICES_SRC) as GeoJSONSource | undefined;
@@ -561,7 +713,7 @@ export function updateHoveredEdge(map: MlMap, ring: Vertex[], edgeIndex: number 
  * Pass edgeIndex=null to clear. No-op when the source is not installed.
  */
 export function updateFrontageSuggestion(map: MlMap, ring: Vertex[], edgeIndex: number | null): void {
-  if (!isMapReady(map)) return;
+  if (!captureInstalled(map)) return;
   try {
     const src = map.getSource(SUGGESTION_SRC) as GeoJSONSource | undefined;
     if (!src) return;

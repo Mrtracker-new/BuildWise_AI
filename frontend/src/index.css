@@ -7,6 +7,9 @@
   --panel: rgba(255, 255, 255, 0.72);
   --panel-border-color: rgba(255, 255, 255, 0.6);
   --panel-border: 1px solid var(--panel-border-color);
+  /* Near-opaque float surface for chips/pills read over a busy basemap.
+     0.96 keeps 11px muted ink at >= 4.5:1 even over the darkest map tiles. */
+  --surface-overlay: rgba(255, 255, 255, 0.96);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 12px 32px rgba(0, 0, 0, 0.12);
   --fill: rgba(120, 120, 128, 0.12);
   --fill-hover: rgba(120, 120, 128, 0.18);
@@ -47,6 +50,8 @@
   --panel: rgba(28, 28, 30, 0.68);
   --panel-border-color: rgba(255, 255, 255, 0.08);
   --panel-border: 1px solid var(--panel-border-color);
+  /* Near-opaque float surface for chips/pills read over a busy basemap */
+  --surface-overlay: rgba(28, 28, 30, 0.94);
   --shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
   --fill: rgba(120, 120, 128, 0.24);
   --fill-hover: rgba(120, 120, 128, 0.32);
@@ -266,6 +271,24 @@
 }
 
 /* iOS Select Popover Animation */
+@keyframes bwMenuIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse,
+  [style*='bwMenuIn'] {
+    animation: none !important;
+  }
+}
+
 @keyframes popoverOpen {
   from {
     opacity: 0;
@@ -282,33 +305,40 @@
   transform-origin: top;
 }
 
-/* Floating Vibrancy Surfaces */
-.vibrancy-panel {
-  background-color: var(--panel);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border: var(--panel-border);
-  box-shadow: var(--shadow);
-  transition: background-color 250ms cubic-bezier(0.25, 0.1, 0.25, 1),
-              border-color 250ms cubic-bezier(0.25, 0.1, 0.25, 1),
-              box-shadow 250ms cubic-bezier(0.25, 0.1, 0.25, 1);
-}
+/* Floating Vibrancy Surfaces.
+   These live in @layer components so Tailwind UTILITIES always win the
+   cascade. Unlayered rules here used to beat every bg-* utility applied to
+   the same element (equal specificity, later in the sheet), so a surface
+   asked for bg-[var(--accent)] silently painted --panel instead — e.g. the
+   white-on-white "close the ring" pill, which was unreadable. */
+@layer components {
+  .vibrancy-panel {
+    background-color: var(--panel);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border: var(--panel-border);
+    box-shadow: var(--shadow);
+    transition: background-color 250ms cubic-bezier(0.25, 0.1, 0.25, 1),
+                border-color 250ms cubic-bezier(0.25, 0.1, 0.25, 1),
+                box-shadow 250ms cubic-bezier(0.25, 0.1, 0.25, 1);
+  }
 
-.vibrancy-pill {
-  background-color: var(--panel);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border: var(--panel-border);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 16px rgba(0, 0, 0, 0.08);
-}
+  .vibrancy-pill {
+    background-color: var(--panel);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border: var(--panel-border);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 16px rgba(0, 0, 0, 0.08);
+  }
 
-/* iOS HUD Vibrancy Surface */
-.vibrancy-hud {
-  background-color: var(--panel);
-  backdrop-filter: blur(40px) saturate(180%);
-  -webkit-backdrop-filter: blur(40px) saturate(180%);
-  border: var(--panel-border);
-  box-shadow: var(--shadow);
+  /* iOS HUD Vibrancy Surface */
+  .vibrancy-hud {
+    background-color: var(--panel);
+    backdrop-filter: blur(40px) saturate(180%);
+    -webkit-backdrop-filter: blur(40px) saturate(180%);
+    border: var(--panel-border);
+    box-shadow: var(--shadow);
+  }
 }
 
 /* iOS Analysis HUD enter & exit animations */

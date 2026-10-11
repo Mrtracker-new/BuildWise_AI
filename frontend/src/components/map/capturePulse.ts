@@ -18,10 +18,16 @@ const PULSE_SRC = 'bw-capture-pulse';
 /** Radius keyframes, one entry per step; STEP_MS per entry. */
 const STEP_MS = 75;
 
+/**
+ * A pulse only needs the pulse source/layer to exist — NOT a fully loaded
+ * style (isStyleLoaded() is false whenever a basemap tile is in flight, which
+ * used to swallow every pop/shrink cue issued while tiles stream). MapLibre
+ * throws on a torn-down map, so the install attempt below is the real gate.
+ */
 function isMapReady(map: MlMap | null | undefined): map is MlMap {
   if (!map) return false;
   try {
-    return Boolean(typeof map.isStyleLoaded === 'function' && map.isStyleLoaded());
+    return !(map as any)._removed;
   } catch {
     return false;
   }

@@ -196,6 +196,23 @@ export const MethodologyModal: React.FC<MethodologyModalProps> = ({ isOpen, onCl
               <div className="flex items-center gap-2.5 px-3 py-2"><Kbd>?</Kbd><span className="text-[var(--text-2)]">Show the shortcuts sheet</span></div>
               <div className="flex items-center gap-2.5 px-3 py-2"><Kbd>Esc</Kbd><span className="text-[var(--text-2)]">Close the active dialog or sheet</span></div>
             </div>
+
+            <h5 className="pt-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)]">
+              Boundary tracing
+            </h5>
+            <p className="text-[11px] text-[var(--text-2)]">
+              Active while the trace step is open, except while a text field has focus:
+            </p>
+            <div className="divide-y divide-[var(--hairline)] rounded-[10px] bg-[var(--fill)] overflow-hidden text-[11px]">
+              <div className="flex items-center gap-2.5 px-3 py-2"><Kbd>D</Kbd><span className="text-[var(--text-2)]">Switch to Draw mode (place vertices)</span></div>
+              <div className="flex items-center gap-2.5 px-3 py-2"><Kbd>E</Kbd><span className="text-[var(--text-2)]">Switch to Edit mode (move / insert / delete vertices)</span></div>
+              <div className="flex items-center gap-2.5 px-3 py-2"><Kbd>Tab</Kbd><span className="text-[var(--text-2)]">Cycle snapping: Free / Ortho / Parallel</span></div>
+              <div className="flex items-center gap-2.5 px-3 py-2"><Kbd>Enter</Kbd><span className="text-[var(--text-2)]">Close the shape and continue</span></div>
+              <div className="flex items-center gap-2.5 px-3 py-2"><Kbd>Backspace</Kbd><span className="text-[var(--text-2)]">Remove the last placed vertex</span></div>
+              <div className="flex items-center gap-2.5 px-3 py-2"><Kbd>Ctrl+Z</Kbd><span className="text-[var(--text-2)]">Undo a vertex edit (Ctrl+Shift+Z redoes)</span></div>
+              <div className="flex items-center gap-2.5 px-3 py-2"><Kbd>Click P1</Kbd><span className="text-[var(--text-2)]">Close the ring on the map</span></div>
+              <div className="flex items-center gap-2.5 px-3 py-2"><Kbd>Esc</Kbd><span className="text-[var(--text-2)]">Cancel the trace, keep the pin</span></div>
+            </div>
           </div>
         </div>
 

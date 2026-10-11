@@ -23,7 +23,6 @@ import {
   ensureCCW,
   validateLiveRing,
   edgeBearingLength,
-  type PresetId,
   type SharedBoundaryState,
 } from '../../services/siteBoundary';
 import type { Vertex } from '../../services/boundaryIO';
@@ -39,8 +38,11 @@ import {
   installCaptureLayers,
   updateCaptureSources,
   clearCaptureSources,
+  clearCaptureWhenReady,
+  clearDraftOverlays,
   setCaptureCursor,
   setEditCursor,
+  setVertexFeatureState,
   pulseBoundaryLock,
   setVertexToLngLat,
   updateFrontageSuggestion,
@@ -55,6 +57,7 @@ import {
   playSnapLock,
 } from './capturePulse';
 import { TraceToolbar, type TraceMode } from './TraceToolbar';
+import { PresetMenu, type PresetMenuId } from './PresetMenu';
 import { CaptureHUD } from './CaptureHUD';
 import { fetchNearestRoad } from '../../services/siteIntelligenceApi';
 import {
@@ -134,8 +137,17 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
   const [rectW, setRectW] = useState(12);
   const [rectD, setRectD] = useState(18);
   const [rectRot, setRectRot] = useState(0);
+  /** Presets dropdown (replaces the single-letter wizard chips). */
+  const [presetOpen, setPresetOpen] = useState<boolean>(false);
+  // Escape must close the menu before it reaches the wizard's cancel handler.
+  const presetOpenRef = useRef(presetOpen);
+  presetOpenRef.current = presetOpen;
   const rafRef = useRef<number | null>(null);
   const pendingCursorRef = useRef<Vertex | null>(null);
+  /** Cleanup for the context-menu suppressor installed in the map effect. */
+  const contextMenuCleanupRef = useRef<(() => void) | null>(null);
+  /** True between mousedown/mouseup while dragPan is hijacked for a vertex drag. */
+  const dragPanDisabledRef = useRef<boolean>(false);
   const finishTraceRef = useRef<() => void>(() => {});
   const undoVertexRef = useRef<() => void>(() => {});
   const stepRef = useRef(step);
@@ -154,13 +166,20 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
   guidesRef.current = guides;
   const wasOpenRef = useRef(open);
 
-  /* ---------- premium interaction layer (PHASE 1-3) ---------- */
+  /* ---------- interaction layer ---------- */
   /** Draw = click-to-place with magnetic snapping; Edit = drag/insert/delete. */
   const [traceMode, setTraceMode] = useState<TraceMode>('draw');
   /** Drag gesture EDIT state: index being dragged + its origin for Δ badges. */
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const dragOriginRef = useRef<Vertex | null>(null);
   const [dragDeltaNow, setDragDeltaNow] = useState<{ dx: number; dy: number } | null>(null);
+  /**
+   * The ring as it exists mid-drag (dragged vertex at the pointer). This drives
+   * the live HUD area/perimeter/validity while the handle is moving — the map
+   * canvas draws the same ring via editLiveRing, so HUD and geometry agree to
+   * the frame, without mutating the authoritative ring until mouseup.
+   */
+  const [dragPreview, setDragPreview] = useState<Vertex[] | null>(null);
   /** Revealed mid-edge '+' handle: edge index + position. */
   const [insertEdge, setInsertEdge] = useState<number | null>(null);
   const [insertPos, setInsertPos] = useState<Vertex | null>(null);
@@ -182,6 +201,8 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
   dragIdxRef.current = dragIdx;
   const insertEdgeRef = useRef<number | null>(null);
   insertEdgeRef.current = insertEdge;
+  const insertPosRef = useRef<Vertex | null>(null);
+  insertPosRef.current = insertPos;
   const coachProgressRef = useRef<Set<'step1' | 'step2' | 'step3'>>(coachProgress);
   coachProgressRef.current = coachProgress;
   // Shift-forced ORTHOGONAL snap bookkeeping (release restores prior mode).
@@ -264,8 +285,12 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
       } catch {}
     }
 
+    // Install now (the adapter gates on a MOUNTED style, not on
+    // isStyleLoaded — which is false while any basemap tile is in flight and
+    // would delay the first trace paint until the basemap settled). A style
+    // swap wipes the sources and is re-installed by the style.load handler
+    // registered below.
     const setupLayersAndSources = (): void => {
-      if (typeof map.isStyleLoaded === 'function' && !map.isStyleLoaded()) return;
       installCaptureLayers(map);
       updateCaptureSources(map, {
         ring: verticesRef.current,
@@ -274,13 +299,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
         isClosed: stepRef.current !== 'trace',
       });
     };
-
-    if (typeof map.isStyleLoaded === 'function' && map.isStyleLoaded()) {
-      setupLayersAndSources();
-    } else {
-      map.once('style.load', setupLayersAndSources);
-      map.once('load', setupLayersAndSources);
-    }
+    setupLayersAndSources();
 
     const toLocal = (lngLat: { lng: number; lat: number }): Vertex =>
       projectToLocal(lngLat.lat, lngLat.lng, originRef.current);
@@ -376,8 +395,10 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
             const ring = verticesRef.current;
             const next = ring.map((p, i) => (i === dragIdxRef.current ? v : p));
             const includeClose = stepRef.current !== 'trace';
-            // drag preview is drawn on the map canvas (editLiveRing), not in DOM
+            // Live HUD + map preview share one ring: the canvas draws editLiveRing
+            // and the HUD reads dragPreview, so both move together each frame.
             setDragDeltaNow(dragDelta(dragOriginRef.current, v));
+            setDragPreview(next);
             updateCaptureSources(map, {
               ring: next,
               cursor: null,
@@ -396,6 +417,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
           setEditCursor(map, 'move');
           setInsertEdge(null);
           setInsertPos(null);
+          setVertexFeatureState(map, 'hover', vHit);
           updateCaptureSources(map, { ring: currentVertices, cursor: null, guides: [], isClosed: true, insertHandle: null });
           return;
         }
@@ -405,12 +427,14 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
           const mid = edgeMidpoint(currentVertices, eHit);
           setInsertEdge(eHit);
           setInsertPos(mid);
+          setVertexFeatureState(map, 'hover', null);
           updateCaptureSources(map, { ring: currentVertices, cursor: null, guides: [], isClosed: true, insertHandle: mid });
           return;
         }
         setEditCursor(map, 'crosshair');
         setInsertEdge(null);
         setInsertPos(null);
+        setVertexFeatureState(map, 'hover', null);
         updateCaptureSources(map, { ring: currentVertices, cursor: null, guides: [], isClosed: true, insertHandle: null });
         return;
       }
@@ -567,19 +591,32 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
       if (vHit === null) return;
       // Right button starts a DELETE, not a drag.
       if (e.originalEvent?.button === 2) return;
+      // MapLibre's dragPan treats this mousedown as the
+      // start of a camera pan, so the vertex never follows the pointer and
+      // mouseup lands wherever the camera rolled. From here until mouseup the
+      // gesture belongs to the vertex, not the camera.
+      try { map.dragPan.disable(); } catch {}
+      dragPanDisabledRef.current = true;
       dragIdxRef.current = vHit;
       setDragIdx(vHit);
       dragOriginRef.current = currentVertices[vHit];
       setDragDeltaNow({ dx: 0, dy: 0 });
+      setVertexFeatureState(map, 'drag', vHit);
       setEditCursor(map, 'grabbing');
     };
 
     /** Drag END: commit the dragged position into the authoritative ring. */
     const onMouseUp = (e: any): void => {
       const di = dragIdxRef.current;
+      // Restore camera panning unconditionally — even on a spurious mouseup.
+      if (dragPanDisabledRef.current) {
+        dragPanDisabledRef.current = false;
+        try { map.dragPan.enable(); } catch {}
+      }
       if (di === null) return;
       dragIdxRef.current = null;
       setDragIdx(null);
+      setVertexFeatureState(map, 'drag', null);
       setEditCursor(map, 'move');
       const local = toLocal(e.lngLat);
       const ring = verticesRef.current;
@@ -587,7 +624,8 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
       pushHistory();
       verticesRef.current = next;
       setVertices(next);
-      
+
+      setDragPreview(null);
       setDragDeltaNow(null);
       const delta = dragDelta(dragOriginRef.current, local);
       if (delta) {
@@ -615,6 +653,18 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
 
       if (e.key === 'Escape') {
         e.stopPropagation();
+        // The wizard's keydown listener is on `window` (capture) and therefore
+        // runs BEFORE the preset menu's document-level handler — so without
+        // this guard, dismissing the dropdown would cancel the whole capture.
+        // The menu owns Escape while it is open.
+        if (presetOpenRef.current) {
+          setPresetOpen(false);
+          return;
+        }
+        // Wipe every draft overlay the instant Esc is pressed, not
+        // just when the effect re-subscribes (which can be style-gated).
+        const m0 = getMap();
+        if (m0) clearDraftOverlays(m0);
         onCancel();
         return;
       }
@@ -740,6 +790,35 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
     map.on('mouseout', onMouseOut);
     map.on('mousedown', onMouseDown);
     map.on('mouseup', onMouseUp);
+    // Native context menu handler: right-click DELETE on a vertex handle:
+    // MapLibre never surfaces button=2 as 'contextmenu' on its
+    // own; without this the browser menu opens and nothing is deleted.
+    const onContextMenu = (e: any): void => {
+      if (stepRef.current !== 'trace' || traceModeRef.current !== 'edit') return;
+      e?.preventDefault?.();
+      const currentVertices = verticesRef.current;
+      if (currentVertices.length < 3) return;
+      const local = toLocal(e.lngLat);
+      const vHit = hitVertex(currentVertices, local, hoverToleranceM(e.point, local));
+      if (vHit === null || currentVertices.length <= 3) return; // ring floor
+      pushHistory();
+      playVertexShrink(map, currentVertices[vHit]);
+      const next = currentVertices.filter((_, i) => i !== vHit);
+      verticesRef.current = next;
+      setVertices(next);
+      setAnnounce(`Vertex deleted, ${next.length} vertices remain`);
+      updateCaptureSources(map, { ring: next, cursor: null, guides: [], isClosed: true, invalid: !metricsFor(next).valid });
+    };
+    if (typeof map.on !== 'function') return;
+    try {
+      const canvas = map.getCanvas();
+      // Suppress the browser menu so right-click reaches the map events.
+      canvas.addEventListener('contextmenu', (ev: Event) => ev.preventDefault());
+      contextMenuCleanupRef.current = () => {
+        canvas.removeEventListener('contextmenu', (ev: Event) => ev.preventDefault());
+      };
+    } catch {}
+    map.on('contextmenu', onContextMenu);
     // Camera moves invalidate a pointer-relative hover (and its badge).
     map.on('movestart', clearHover);
     map.on('zoomstart', clearHover);
@@ -757,6 +836,14 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
       map.off('mouseout', onMouseOut);
       map.off('mousedown', onMouseDown);
       map.off('mouseup', onMouseUp);
+      map.off('contextmenu', onContextMenu);
+      if (contextMenuCleanupRef.current) {
+        contextMenuCleanupRef.current();
+        contextMenuCleanupRef.current = null;
+      }
+      // Destroy every draft overlay when the wizard
+      // closes. Unless the style is mid-reload, this runs synchronously.
+      clearCaptureWhenReady(map);
       map.off('movestart', clearHover);
       map.off('zoomstart', clearHover);
       map.off('style.load', onStyleLoad);
@@ -774,19 +861,41 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, step, getMap, onCancel]);
 
-  // Clean sources when capture sheet closes
+  // Clean sources when capture sheet closes. clearCaptureWhenReady retries
+  // until the style has the capture sources installed, so a close that lands
+  // during a tile/style refresh still wipes every draft overlay.
   useEffect(() => {
-    if (!open) {
-      const map = getMap();              if (map && typeof map.isStyleLoaded === 'function' && map.isStyleLoaded()) {
-        clearCaptureSources(map);
-      }
-    }
+    if (!open) clearCaptureWhenReady(getMap());
+  }, [open, getMap]);
+
+  // Recovery re-apply on a genuine style swap only (sources recreated empty).
+  // Deliberately NOT hooked to 'idle': an idle re-apply would clobber the
+  // imperative hover affordances (mid-edge insert handle, drag ring) that are
+  // set outside React state. A style swap always fires style.load, which is the
+  // only event that actually needs the ring re-pushed.
+  useEffect(() => {
+    const map = getMap();
+    if (!map || !open) return;
+    const reapply = (): void => {
+      const tracing = stepRef.current === 'trace';
+      updateCaptureSources(map, {
+        ring: verticesRef.current,
+        cursor: tracing ? cursorRef.current : null,
+        guides: tracing ? guidesRef.current : [],
+        isClosed: stepRef.current !== 'trace',
+        insertHandle: tracing && traceModeRef.current === 'edit' ? insertPosRef.current : null,
+      });
+    };
+    map.on('style.load', reapply);
+    return () => {
+      map.off('style.load', reapply);
+    };
   }, [open, getMap]);
 
   /* ---------- render loop side effects ---------- */
   useEffect(() => {
     const map = getMap();
-    if (!map || !open || typeof map.isStyleLoaded !== 'function' || !map.isStyleLoaded()) return;
+    if (!map || !open) return;
     // Guard the single render path: outside the TRACE step the live edge and
     // guides are always empty, whatever stale cursor/guides state remains.
     const tracing = step === 'trace';
@@ -834,9 +943,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
   useEffect(() => {
     if (!open || step !== 'frontage') {
       const map = getMap();
-      if (map && typeof map.isStyleLoaded === 'function' && map.isStyleLoaded()) {
-        updateFrontageSuggestion(map, vertices, null);
-      }
+      if (map) updateFrontageSuggestion(map, vertices, null);
       return;
     }
     if (frontageConfirmed) return;
@@ -848,7 +955,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
   useEffect(() => {
     if (!open || step !== 'frontage') return;
     const map = getMap();
-    if (!map || typeof map.isStyleLoaded !== 'function' || !map.isStyleLoaded()) return;
+    if (!map) return;
     const active = frontageConfirmed ? frontageEdge : (suggestion?.edgeIndex ?? frontageEdge);
     updateFrontageSuggestion(map, vertices, active);
   }, [open, step, vertices, suggestion, frontageEdge, frontageConfirmed, getMap]);
@@ -901,6 +1008,10 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
     setCursorPx(null);
     const _m = getMap();
     if (_m) updateHoveredEdge(_m, currentVertices, null);
+    // The rubber-band edge, guides, ghost and close halo are trace
+    // affordances — destroy them the moment the ring closes, before the
+    // (style-gated) render-effect can ever repaint them.
+    if (_m) clearDraftOverlays(_m);
     // Drop the in-flight live edge immediately (a queued rAF frame would
     // otherwise repaint the dashed line after the ring closes).
     pendingCursorRef.current = null;
@@ -952,7 +1063,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
   finishTraceRef.current = finishTrace;
   undoVertexRef.current = undoVertex;
 
-  /* ---------- premium: history-aware undo/redo (⌘Z / ⇧⌘Z) ---------- */
+  /* ---------- premium: history-aware undo/redo (Ctrl+Z / Ctrl+Shift+Z) ---------- */
   const applyUndo = useCallback((): void => {
     const current = verticesRef.current;
     const prev = historyRef.current.undo(current);
@@ -971,6 +1082,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
     setDragIdx(null);
     dragOriginRef.current = null;
     setDragDeltaNow(null);
+    setDragPreview(null);
     
     setHistoryTick((t) => t + 1);
     const map = getMap();
@@ -1033,7 +1145,12 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
     setCursorPx(null);
     setGuides([]);
     guidesRef.current = [];
+    setDragIdx(null);
+    dragIdxRef.current = null;
+    setDragPreview(null);
+    setDragDeltaNow(null);
     resetFrontageChoice();
+    setAnnounce('Trace cleared');
     const map = getMap();
     if (map) clearCaptureSources(map);
   };
@@ -1056,29 +1173,33 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
     guidesRef.current = [];
   };
 
-  const applyRect = (): void => {
+  /**
+   * Presets from the toolbar dropdown — seeds a parametric polygon
+   * CENTERED ON THE PIN using the wizard's dims (width × depth × rotation),
+   * then switches to EDIT mode (stays on the trace step so the seed is
+   * immediately draggable/undoable). rect + l_shape honor the inputs; the
+   * other presets scale from the longer dimension for a sane footprint.
+   */
+  const applyToolbarPreset = (id: PresetMenuId): void => {
     const center: Vertex = { x: 0, y: 0 };
-    const vs = rectangleVertices({ widthM: rectW, depthM: rectD, rotationDeg: rectRot }, center);
+    const footprint = Math.max(rectW, rectD, 12);
+    const vs =
+      id === 'rect'
+        ? rectangleVertices({ widthM: rectW, depthM: rectD, rotationDeg: rectRot }, center)
+        : presetVertices(id, footprint, center);
+    pushHistory();
     setVertices(vs);
     verticesRef.current = vs;
     dropTraceCursor();
     resetFrontageChoice();
+    setTraceMode('edit');
+    setAnnounce(`${id.replace('_', '-')} preset seeded, ${vs.length} vertices — edit mode active`);
     const map = getMap();
-    if (map) updateCaptureSources(map, { ring: vs, cursor: null, guides: [], isClosed: true });
+    if (map) {
+      clearDraftOverlays(map);
+      updateCaptureSources(map, { ring: vs, cursor: null, guides: [], isClosed: true });
+    }
     frameRing(vs);
-    onStepChange('frontage');
-  };
-
-  const applyPreset = (id: PresetId): void => {
-    const vs = presetVertices(id, 20, { x: 0, y: 0 });
-    setVertices(vs);
-    verticesRef.current = vs;
-    dropTraceCursor();
-    resetFrontageChoice();
-    const map = getMap();
-    if (map) updateCaptureSources(map, { ring: vs, cursor: null, guides: [], isClosed: true });
-    frameRing(vs);
-    onStepChange('frontage');
   };
 
   const handleImport = (): void => {
@@ -1091,6 +1212,10 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
       verticesRef.current = vs;
       setImportText('');
       resetFrontageChoice();
+      historyRef.current.clear();
+      setHistoryTick((t) => t + 1);
+      setTraceMode('edit');
+      setAnnounce(`Boundary imported, ${vs.length} vertices`);
       const map = getMap();
       if (map) updateCaptureSources(map, { ring: vs, cursor: null, guides: [], isClosed: true });
       onStepChange('frontage');
@@ -1182,9 +1307,11 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
   void historyTick; // recompute signal — stack flags live below
   const canUndoNow = historyRef.current.canUndo;
   const canRedoNow = historyRef.current.canRedo;
-  // HUD metrics: live ring INCLUDING the cursor while drawing.
+  // HUD metrics: the live ring INCLUDING the cursor while drawing, or the
+  // mid-drag preview ring while an EDIT handle is being moved (area,
+  // perimeter and validity track the drag frame by frame, not on release).
   const inTrace = step === 'trace';
-  const hudRing = inTrace && cursor ? [...vertices, cursor] : vertices;
+  const hudRing = dragPreview ?? (inTrace && cursor ? [...vertices, cursor] : vertices);
   const hudMetrics = metricsFor(hudRing.length >= 3 ? hudRing : vertices);
 
   return (
@@ -1194,13 +1321,17 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
         {announce}
       </div>
 
-      {/* PHASE 3: contextual stats HUD + coach marks */}
+      {/* Contextual stats HUD + coach marks.
+          vertexCount is the COMMITTED count: the live area/perimeter
+          deliberately include the floating cursor preview, but a "Vertices"
+          counter that disagrees with the wizard's own "N vertices" line
+          reads as a bug. One number, two places, same value. */}
       {inTrace && (
         <CaptureHUD
           visible={inTrace}
           areaSqm={Math.abs(hudMetrics.areaSqm) || 0}
           perimeterM={hudMetrics.perimeterM}
-          vertexCount={hudRing.length}
+          vertexCount={vertices.length}
           invalid={hudRing.length >= 3 && !hudMetrics.valid}
           invalidReason={hudMetrics.reason}
           drawPlacedCount={vertices.length}
@@ -1227,7 +1358,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
           </div>
         </div>
       )}
-      {/* PHASE 1: floating glass toolbar (spec: bottom-center or top-right).
+      {/* Floating glass toolbar.
           Top-right keeps it clear of the step sheet, the HUD and the zoom
           stack at every viewport; --map-controls-right tracks the results
           panel so it never slides under the right drawer. */}
@@ -1239,6 +1370,16 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
           <TraceToolbar
             visible={step === 'trace'}
             mode={traceMode}
+            presetsMenu={
+              <PresetMenu
+                open={presetOpen}
+                onClose={() => setPresetOpen(false)}
+                widthM={rectW}
+                depthM={rectD}
+                rotationDeg={rectRot}
+                onPick={applyToolbarPreset}
+              />
+            }
             onModeChange={(m) => {
               if (m === 'edit' && vertices.length < 3) return;
               setTraceMode(m);
@@ -1252,15 +1393,22 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                   setDragIdx(null);
                   dragIdxRef.current = null;
                   setDragDeltaNow(null);
-                  
+                  setDragPreview(null);
+                  setVertexFeatureState(map, 'hover', null);
+                  setVertexFeatureState(map, 'drag', null);
                   updateCaptureSources(map, { ring: verticesRef.current, cursor: cursorRef.current, guides: guidesRef.current, isClosed: false, editLiveRing: null, insertHandle: null });
+                } else {
+                  // Entering edit: the rubber-band edge is a draw affordance.
+                  clearDraftOverlays(map);
+                  updateCaptureSources(map, { ring: verticesRef.current, cursor: null, guides: [], isClosed: true, editLiveRing: null, insertHandle: null });
                 }
               }
             }}
             canUndo={canUndoNow}
             canRedo={canRedoNow}
             onUndo={applyUndo}
-            onRedo={applyRedo}            onFinish={() => {
+            onRedo={applyRedo}
+            onFinish={() => {
               const m = getMap();
               if (m) pulseBoundaryLock(m);
               finishTraceRef.current();
@@ -1276,7 +1424,8 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
               const el = document.querySelector<HTMLDetailsElement>('[data-testid="import-disclosure"]');
               if (el) el.open = true;
             }}
-            onPresets={() => document.querySelector<HTMLDivElement>('[data-testid="quick-paths"]')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })}
+            onPresets={() => setPresetOpen((v) => !v)}
+            presetsOpen={presetOpen}
           />
         </div>
       )}
@@ -1307,19 +1456,22 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                   <span className="text-[var(--text-3)]">·</span>
                   <span className="text-[var(--text-2)] flex items-center gap-1"><Kbd>Tab</Kbd> Snap</span>
                   <span className="text-[var(--text-3)]">·</span>
-                  <span className="text-[var(--text-2)] flex items-center gap-1"><Kbd>⌫</Kbd> Undo</span>
+                  <span className="text-[var(--text-2)] flex items-center gap-1"><Kbd>Ctrl+Z</Kbd> Undo</span>
                   <span className="text-[var(--text-3)]">·</span>
                   <span className="text-[var(--text-2)] flex items-center gap-1"><Kbd>Esc</Kbd> Cancel</span>
                 </>
               ) : (
                 <>
-                  <span className="text-[var(--accent)] font-semibold flex items-center gap-1">
-                    Click P1 or <Kbd>↵</Kbd> to close
+                  {/* Emphasis comes from weight + the accent keycap, not from
+                      accent-coloured 11px copy: token ink keeps the worst-case
+                      contrast over dark basemap tiles above AA. */}
+                  <span className="text-[var(--text-1)] font-semibold flex items-center gap-1">
+                    Click P1 or <Kbd>Enter</Kbd> to close
                   </span>
                   <span className="text-[var(--text-3)]">·</span>
                   <span className="text-[var(--text-2)] flex items-center gap-1"><Kbd>Tab</Kbd> Snap</span>
                   <span className="text-[var(--text-3)]">·</span>
-                  <span className="text-[var(--text-2)] flex items-center gap-1"><Kbd>⌫</Kbd> Undo</span>
+                  <span className="text-[var(--text-2)] flex items-center gap-1"><Kbd>Ctrl+Z</Kbd> Undo</span>
                   <span className="text-[var(--text-3)]">·</span>
                   <span className="text-[var(--text-2)] flex items-center gap-1"><Kbd>Esc</Kbd> Cancel</span>
                 </>
@@ -1337,9 +1489,10 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
           data-testid="cursor-dimension-hud"
         >
           {isNearCloseTarget ? (
-            <div className="vibrancy-pill px-2.5 py-1 rounded-full shadow-lg border border-[var(--accent)] bg-[var(--accent)] text-white text-[11px] font-semibold flex items-center gap-1.5 animate-pulse">
-              <span>🎯 Click or Enter to close</span>
-              <span className="opacity-80 text-[10px]">({vertices.length} vertices)</span>
+            <div className="vibrancy-pill px-2.5 py-1 rounded-full shadow-lg border border-[var(--accent)] bg-[var(--accent)] text-white text-[11px] font-semibold flex items-center gap-1.5 whitespace-nowrap">
+              <Icon name="crosshair" size={12} className="shrink-0" />
+              <span>Click or Enter to close</span>
+              <span className="opacity-90 text-[10px]">({vertices.length} vertices)</span>
             </div>
           ) : liveEdgeInfo ? (
             <div className="vibrancy-pill px-2.5 py-1 rounded-[8px] shadow-lg border border-[var(--panel-border-color)] bg-[var(--surface-overlay)] text-[var(--text-1)] text-[11px] font-medium flex items-center gap-2 backdrop-blur-md">
@@ -1357,7 +1510,8 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
               )}
               {!liveRingCheck.valid && (
                 <span className="text-[10px] text-[var(--semantic-red)] font-medium flex items-center gap-0.5">
-                  ⚠️ Invalid
+                  <Icon name="alert-triangle" size={11} className="shrink-0" />
+                  Invalid
                 </span>
               )}
             </div>
@@ -1450,17 +1604,19 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
             <>
               <div className="flex items-center justify-between">
                 <div className="text-[13px] font-semibold text-[var(--text-1)]">Trace the boundary</div>
-                <div className="flex items-center rounded-[8px] bg-[var(--fill)] p-[2px]" title="Press Tab to cycle snap mode (Free ⇄ Ortho ⇄ Parallel)">
+                <div className="flex items-center rounded-[8px] bg-[var(--fill)] p-[2px]" title="Press Tab to cycle snap mode (Free / Ortho / Parallel)">
                   {(['FREE', 'ORTHOGONAL', 'PARALLEL'] as SnapMode[]).map((m) => (
                     <button
                       key={m}
                       type="button"
                       onClick={() => setSnapMode(m)}
+                      title={m === 'ORTHOGONAL' ? 'Orthogonal snapping' : `${m.charAt(0)}${m.slice(1).toLowerCase()} snapping`}
+                      data-testid={`snap-${m.toLowerCase()}`}
                       className={`px-1.5 py-0.5 rounded-[6px] text-[10px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
                         snapMode === m ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-sm' : 'text-[var(--text-2)]'
                       }`}
                     >
-                      {m === 'ORTHOGONAL' ? 'ORTHO' : m}
+                      {m === 'ORTHOGONAL' ? 'Ortho' : m === 'PARALLEL' ? 'Parallel' : 'Free'}
                     </button>
                   ))}
                 </div>
@@ -1482,23 +1638,56 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                 <div className="text-[11px] text-[var(--semantic-red)]">{liveRingCheck.reason}</div>
               )}
 
-              {/* Quick paths */}
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <input type="number" min={6} max={60} step={0.5} value={rectW} onChange={(e) => setRectW(Number(e.target.value) || 12)} className="w-14 h-7 rounded-[6px] bg-[var(--fill)] px-1.5 text-[11px] ui-font-tabular text-[var(--text-1)]" aria-label="Rectangle width (m)" />
-                <span className="text-[var(--text-3)] text-[11px]">×</span>
-                <input type="number" min={6} max={60} step={0.5} value={rectD} onChange={(e) => setRectD(Number(e.target.value) || 18)} className="w-14 h-7 rounded-[6px] bg-[var(--fill)] px-1.5 text-[11px] ui-font-tabular text-[var(--text-1)]" aria-label="Rectangle depth (m)" />
-                <input type="number" min={0} max={359} step={1} value={rectRot} onChange={(e) => setRectRot(Number(e.target.value) || 0)} className="w-14 h-7 rounded-[6px] bg-[var(--fill)] px-1.5 text-[11px] ui-font-tabular text-[var(--text-1)]" aria-label="Rotation (degrees)" />
-                <button type="button" onClick={applyRect} className="text-[11px] font-medium px-2 py-1 rounded-[6px] bg-[var(--accent-tint)] text-[var(--accent)]">Rect</button>
-                {(['rect', 'l_shape', 'trapezoid', 'pentagon'] as PresetId[]).map((id) => (
-                  <button key={id} type="button" onClick={() => applyPreset(id)} className="text-[11px] font-medium px-2 py-1 rounded-[6px] bg-[var(--fill)] text-[var(--text-1)] hover:bg-[var(--fill-hover)]">
-                    {id === 'rect' ? 'R' : id === 'l_shape' ? 'L' : id === 'trapezoid' ? 'T' : 'P'}
-                  </button>
-                ))}
+              {/* EDIT-mode affordance legend: every gesture is named in plain
+                  language with its icon (no single-letter controls). */}
+              {traceMode === 'edit' && vertices.length >= 3 && (
+                <div
+                  data-testid="edit-mode-hint"
+                  className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] text-[var(--text-3)]"
+                >
+                  <span className="flex items-center gap-1">
+                    <Icon name="edit" size={11} className="text-[var(--accent)]" />
+                    Drag a handle to move
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Icon name="plus" size={11} className="text-[var(--accent)]" />
+                    Click an edge to insert
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Icon name="x" size={11} className="text-[var(--semantic-red)]" />
+                    Right-click or <Kbd>Ctrl</Kbd>+click to delete
+                  </span>
+                </div>
+              )}
+
+              {/* Parametric seed inputs (labelled, no single-letter chips).
+                  Selecting a preset from the toolbar dropdown consumes these dims. */}
+              <div data-testid="preset-dims" className="space-y-1">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)]">
+                  Preset dimensions
+                </div>
+                <div className="flex items-end gap-2 flex-wrap">
+                  <label className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-[var(--text-3)]">Frontage width (m)</span>
+                    <input type="number" min={6} max={60} step={0.5} value={rectW} onChange={(e) => setRectW(Number(e.target.value) || 12)} className="w-16 h-7 rounded-[6px] bg-[var(--fill)] px-1.5 text-[11px] ui-font-tabular text-[var(--text-1)]" />
+                  </label>
+                  <label className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-[var(--text-3)]">Plot depth (m)</span>
+                    <input type="number" min={6} max={60} step={0.5} value={rectD} onChange={(e) => setRectD(Number(e.target.value) || 18)} className="w-16 h-7 rounded-[6px] bg-[var(--fill)] px-1.5 text-[11px] ui-font-tabular text-[var(--text-1)]" />
+                  </label>
+                  <label className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-[var(--text-3)]">Rotation (°)</span>
+                    <input type="number" min={0} max={359} step={1} value={rectRot} onChange={(e) => setRectRot(Number(e.target.value) || 0)} className="w-16 h-7 rounded-[6px] bg-[var(--fill)] px-1.5 text-[11px] ui-font-tabular text-[var(--text-1)]" />
+                  </label>
+                </div>
               </div>
 
               {/* Import */}
-              <details className="text-[12px]">
-                <summary className="cursor-pointer text-[var(--text-2)] select-none">Import GeoJSON / KML</summary>
+              <details className="text-[12px]" data-testid="import-disclosure">
+                <summary className="cursor-pointer text-[var(--text-2)] select-none flex items-center gap-1.5">
+                  <Icon name="file-code" size={12} className="text-[var(--text-3)] shrink-0" />
+                  Import GeoJSON / KML
+                </summary>
                 <textarea
                   rows={3}
                   value={importText}
@@ -1507,13 +1696,14 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                   className="mt-1.5 w-full text-[11px] font-mono p-2 rounded-[6px] bg-[var(--fill)] border border-[var(--hairline)] text-[var(--text-1)] outline-none focus:ring-1 focus:ring-[var(--accent)]"
                 />
                 {importError && <div className="text-[11px] text-[var(--semantic-red)] mt-1">{importError}</div>}
-                <button type="button" onClick={handleImport} className="mt-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-[6px] bg-[var(--accent-tint)] text-[var(--accent)]">
+                <button type="button" onClick={handleImport} title="Import the pasted GeoJSON or KML boundary" className="mt-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-[6px] bg-[var(--accent-tint)] text-[var(--accent)] inline-flex items-center gap-1.5">
+                  <Icon name="upload" size={12} />
                   Import
                 </button>
               </details>
 
-              <div className="flex justify-between items-center pt-1">
-                <div className="flex gap-1.5">
+              <div className="flex justify-between items-center gap-2 pt-1">
+                <div className="flex gap-1.5 min-w-0">
                   <button
                     type="button"
                     onClick={undoVertex}
@@ -1521,13 +1711,14 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                     title="Undo last placed vertex (Backspace / Delete / Ctrl+Z)"
                     className="text-[11px] font-medium px-2.5 py-1 min-h-[32px] rounded-[6px] bg-[var(--fill)] text-[var(--text-1)] hover:bg-[var(--fill-hover)] disabled:opacity-40 active:scale-95 transition-colors cursor-pointer disabled:cursor-not-allowed flex items-center gap-1.5"
                   >
+                    <Icon name="undo2" size={12} className="shrink-0" />
                     <span>Undo</span>
-                    <Kbd>⌫</Kbd>
                   </button>
                   <button
                     type="button"
                     onClick={resetTrace}
-                    className="text-[11px] font-medium px-2.5 py-1 min-h-[32px] rounded-[6px] bg-[var(--fill)] text-[var(--text-1)] hover:bg-[var(--fill-hover)] active:scale-95 transition-colors cursor-pointer"
+                    title="Clear the boundary and start over"
+                    className="text-[11px] font-medium px-2.5 py-1 min-h-[32px] rounded-[6px] bg-[var(--fill)] text-[var(--text-1)] hover:bg-[var(--fill-hover)] active:scale-95 transition-colors cursor-pointer whitespace-nowrap"
                   >
                     Clear
                   </button>
@@ -1536,11 +1727,11 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                   type="button"
                   onClick={finishTrace}
                   disabled={!canClose}
-                  title={canClose ? "Close polygon (Enter / Space / Click P1)" : "Add at least 3 vertices to close polygon"}
-                  className="text-[12px] font-semibold px-3.5 py-1.5 min-h-[32px] rounded-[8px] bg-[var(--accent)] text-white hover:brightness-105 active:scale-95 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm cursor-pointer flex items-center gap-1.5"
+                  title={canClose ? "Close the boundary (Enter)" : "Add at least 3 vertices to close the boundary"}
+                  className="shrink-0 h-8 min-h-[32px] px-3.5 rounded-[8px] bg-[var(--accent)] text-white text-[12px] font-semibold whitespace-nowrap hover:brightness-105 active:scale-95 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm cursor-pointer flex items-center gap-1.5"
                 >
+                  <Icon name="check" size={13} className="shrink-0" />
                   <span>Close shape</span>
-                  <Kbd>↵</Kbd>
                 </button>
               </div>
             </>

@@ -1,5 +1,5 @@
 /**
- * CaptureHUD.tsx — PHASE 3: contextual floating HUD + coach marks.
+ * CaptureHUD.tsx — Contextual floating HUD + coach marks.
  * =====================================================================
  * A glass panel (top-left of the map area, clear of the header and the
  * capture sheet) with live tabular-nums stats: Area / Perimeter / Vertices
@@ -50,7 +50,7 @@ const COACH_STEPS: {
     title: 'Snap with precision',
     body: (
       'Hold Shift for orthogonal snapping, or press Tab to cycle ' +
-      'Free ⇄ Ortho ⇄ Parallel. A guide line appears when a snap engages.'
+      'Free / Ortho / Parallel snapping. A guide line appears when engaged.'
     ),
   },
   {
@@ -163,7 +163,7 @@ export const CaptureHUD: React.FC<CaptureHUDProps> = ({
           ) : (
             <>
               <Icon
-                name="badge-check"
+                name="check-circle"
                 size={13}
                 className="text-[var(--semantic-green)] shrink-0 mt-[1px]"
               />
@@ -206,7 +206,7 @@ export const CaptureHUD: React.FC<CaptureHUDProps> = ({
             </div>
             {activeStep !== 'step1' && placedCount > 0 && (
               <div className="mt-1.5 flex items-center gap-1 text-[10px] text-[var(--text-3)] ui-font-tabular">
-                <Kbd>⌫</Kbd>
+                <Kbd>Backspace</Kbd>
                 <span>undo · {placedCount} placed</span>
               </div>
             )}
@@ -259,7 +259,7 @@ export const CaptureHUD: React.FC<CaptureHUDProps> = ({
               </button>
             </div>
             <div className="mt-1.5 flex items-center gap-1 text-[10px] text-[var(--text-3)] ui-font-tabular">
-              <Kbd>⌫</Kbd>
+              <Kbd>Backspace</Kbd>
               <span>undo · {placedCount} placed</span>
             </div>
           </div>
