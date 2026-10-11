@@ -475,6 +475,39 @@ class SoleGeometryEngine:
     # 3. PER-FLOOR PROGRAM RESOLUTION
     # =========================================================================
 
+    @staticmethod
+    def _map_client_room_token(token: str) -> str:
+        """
+        Maps one requested room token (ontology id OR human display name) onto an
+        ontology space id. Single source for both the floor-programme resolver and
+        the API-level required_rooms derivation, so the two can never disagree.
+        """
+        clean = str(token).strip().lower()
+        spec = ONTOLOGY.get_space(clean)
+        if spec:
+            return spec.id
+        if clean in ("master_bedroom", "master bedroom", "master"):
+            return "master_bed"
+        if "office" in clean or "study" in clean:
+            return "study"
+        if "powder" in clean:
+            return "bath_2"
+        if "bed" in clean and "master" not in clean:
+            return "bed_2"
+        if "bath" in clean and clean != "bath_1":
+            return "bath_2"
+        if "living" in clean or "hall" in clean:
+            return "living"
+        if "puja" in clean or "pooja" in clean:
+            return "puja"
+        if "kitchen" in clean:
+            return "kitchen"
+        if "dining" in clean:
+            return "dining"
+        if "store" in clean or "utility" in clean:
+            return "store"
+        return "living"
+
     def _resolve_floor_program(
         self,
         floor_index: int,
@@ -490,30 +523,7 @@ class SoleGeometryEngine:
 
         if client_rooms and len(client_rooms) >= 3 and self.typology == "T1_SINGLE_FAMILY":
             # Map client requested room tokens to ontology space types
-            mapped_ids: List[str] = []
-            for r_tok in client_rooms:
-                clean = r_tok.strip().lower()
-                spec = ONTOLOGY.get_space(clean)
-                if spec:
-                    mapped_ids.append(spec.id)
-                elif "office" in clean or "study" in clean:
-                    mapped_ids.append("study")
-                elif "powder" in clean:
-                    mapped_ids.append("bath_2")
-                elif "bed" in clean and "master" not in clean:
-                    mapped_ids.append("bed_2")
-                elif "bath" in clean and clean != "bath_1":
-                    mapped_ids.append("bath_2")
-                elif "living" in clean or "hall" in clean:
-                    mapped_ids.append("living")
-                elif "puja" in clean or "pooja" in clean:
-                    mapped_ids.append("puja")
-                elif "kitchen" in clean:
-                    mapped_ids.append("kitchen")
-                elif "dining" in clean:
-                    mapped_ids.append("dining")
-                else:
-                    mapped_ids.append("living")
+            mapped_ids: List[str] = [self._map_client_room_token(t) for t in client_rooms]
 
             # Ground floor receives living, kitchen, puja, bath_1, dining, master_bed (if 1-floor)
             for sid in mapped_ids:
@@ -4607,6 +4617,7 @@ class SoleGeometryEngine:
                 floor_to_floor_height_m=self.profile.floor_height_m,
                 doors_in=doors,
                 windows_in=windows,
+                quality_grade=self.req.quality_grade or "standard",
             )
 
             built_up_m2 = round(sum(r.area_sqm for r in rooms if r.zone_category != "terrace"), 2)

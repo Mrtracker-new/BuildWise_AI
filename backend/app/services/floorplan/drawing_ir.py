@@ -947,6 +947,15 @@ def build_drawing_ir(
     if wg_dict is None:
         try:
             from app.services.floorplan.wall_graph import build_constructible_wall_graph
+            # Specification grade resolves the finish schedule; read it from the
+            # floor record, the building model, or a captured params snapshot.
+            _finish_grade = (
+                _get(floor_data, "quality_grade", None)
+                or _get(_get(floor_data, "params_snapshot", None), "quality_grade", None)
+                or _get(building_model, "quality_grade", None)
+                or _get(_get(building_model, "params_snapshot", None), "quality_grade", None)
+                or "standard"
+            )
             raw_wg = build_constructible_wall_graph(
                 floor_index=f_idx,
                 envelope={"width": env_w, "depth": env_d},
@@ -955,6 +964,7 @@ def build_drawing_ir(
                 floor_to_floor_height_m=3.0,
                 doors_in=norm_doors,
                 windows_in=norm_windows,
+                quality_grade=str(_finish_grade),
             )
             if raw_wg:
                 wg_dict = raw_wg.to_dict()

@@ -501,6 +501,9 @@ class ClearRoom:
     zone: str
     zone_category: str
     finish_zone: str = "Vitrified Tile 600x600"
+    # Specification grade the finish_zone was resolved at (basic|standard|premium);
+    # stamped onto the Room Schedule so the sheet discloses which tier it prices.
+    finish_grade: str = "standard"
     is_vertical_core: bool = False
     unit_id: Optional[str] = None
     wall_ids: List[str] = field(default_factory=list)
@@ -518,6 +521,7 @@ class ClearRoom:
             "zone": self.zone,
             "zone_category": self.zone_category,
             "finish_zone": self.finish_zone,
+            "finish_grade": self.finish_grade,
             "is_vertical_core": self.is_vertical_core,
             "unit_id": self.unit_id,
             "wall_ids": list(self.wall_ids),
@@ -652,6 +656,123 @@ class WallGraph:
 # 8. WALL-GRAPH GENERATION & SET-OUT ENGINE
 # =============================================================================
 
+# =============================================================================
+# 7b. SPECIFICATION-GRADE FINISH SCHEDULE
+# =============================================================================
+# The sidebar "Specification Grade" control must reach a VISIBLE sheet output,
+# not only the CPWD cost rate. The Room Schedule printed on every floor sheet
+# resolves each room key through these tables, so Basic -> standard vitrified /
+# cement substitutes and Premium -> imported stone / engineered timber upgrades
+# are visible on the drawing itself.
+FINISH_ZONES_STANDARD: Dict[str, str] = {
+    "living": "Polished Vitrified Tile 800x800",
+    "dining": "Polished Vitrified Tile 800x800",
+    "kitchen": "Anti-Skid Vitrified Tile + Granite Counter",
+    "puja": "Polished White Makrana Marble",
+    "master": "Engineered Hardwood Flooring",
+    "bed": "Laminated Wooden / Vitrified Tile",
+    "bath": "Anti-Skid Ceramic Tile R10 + Full Height Dado",
+    "toilet": "Anti-Skid Ceramic Tile R10 + Full Height Dado",
+    "stair": "Flamed Fluted Granite Treads + SS Railing",
+    "core": "Flamed Fluted Granite Treads + SS Railing",
+    "lobby": "Polished Italian Marble Finish Tile",
+    "corridor": "Heavy Duty Vitrified Tile 600x1200",
+    "balcony": "Rustic Weatherproof Anti-Skid Ceramic",
+    "utility": "Anti-Skid Ceramic + Epoxy Grout",
+    "terrace": "Reflective Thermal Roof Tile + Waterproof Screed",
+    "storage": "Vaccum Dewatered Concrete (VDF) Heavy Duty",
+    "dock": "Heavy-Duty Metallic Floor Hardener Screed",
+    "dispatch": "VDF Concrete with Steel Fibre Reinforcement",
+    "amenity": "Anti-Skid Ceramic Tile",
+    "admin": "Commercial Grade Acoustic Carpet Tile",
+    "conf": "Commercial Grade Acoustic Carpet Tile",
+    "suite": "Commercial Vitrified Tile 600x600",
+    "catwalk": "Galvanized Steel Serrated Grating",
+    "_default": "Vitrified Tile 600x600",
+}
+
+# Per-grade substitutions. Only the surfaces where the grade genuinely changes
+# the material are enumerated; a key absent from a tier keeps the standard
+# specification (so this table stays a set of real substitutions, not filler).
+FINISH_GRADE_TIERS: Dict[str, Dict[str, str]] = {
+    "basic": {
+        "_default": "Ceramic Tile 600x600 (Builder Grade)",
+        "living": "Ceramic Floor Tile 600x600 + Cement-Base Emulsion",
+        "dining": "Ceramic Floor Tile 600x600 + Cement-Base Emulsion",
+        "kitchen": "Glazed Ceramic Tile + Polished Black Granite Counter",
+        "puja": "Polished Vitrified Tile 600x600",
+        "master": "Vitrified Tile 600x600",
+        "bed": "Vitrified Tile 600x600",
+        "bath": "Ceramic Tile R9 + 2.1m Dado",
+        "toilet": "Ceramic Tile R9 + 2.1m Dado",
+        "stair": "Polished Grey Granite Treads + MS Railing",
+        "core": "Polished Grey Granite Treads + MS Railing",
+        "lobby": "Vitrified Tile 600x600",
+        "corridor": "Vitrified Tile 600x600",
+        "balcony": "Rustic Anti-Skid Ceramic",
+        "terrace": "Cement Screed with Brick-Bat Coba",
+        "utility": "Glazed Ceramic Tile",
+        "amenity": "Ceramic Tile R9",
+        "admin": "Vinyl Floor Tile",
+        "conf": "Vinyl Floor Tile",
+        "suite": "Vitrified Tile 600x600",
+    },
+    "premium": {
+        "_default": "Large-Format Porcelain 900x900 (Premium)",
+        "living": "Imported Polished Travertine 800x800 + Gypsum Coving",
+        "dining": "Imported Polished Travertine 800x800 + Gypsum Coving",
+        "kitchen": "Engineered Quartz Counter + Anti-Skid Italian Tile",
+        "puja": "Carved White Makrana Marble Inlay",
+        "master": "Imported Engineered Oak Plank Flooring",
+        "bed": "Engineered Oak Plank Flooring",
+        "bath": "Imported Porcelain R10 + Full-Height Book-Match Marble",
+        "toilet": "Imported Porcelain R10 + Full-Height Book-Match Marble",
+        "stair": "Mirror-Polished Granite Treads + SS 316 Handrail",
+        "core": "Mirror-Polished Granite Treads + SS 316 Handrail",
+        "lobby": "Mirror-Polished Italian Marble 1200x600",
+        "corridor": "Heavy Duty Porcelain 900x900",
+        "balcony": "Porcelain Anti-Skid Decking",
+        "terrace": "Reflective Thermal Porcelain Terrace Tile + Waterproof Screed",
+        "utility": "Porcelain Anti-Skid + Epoxy Grout",
+        "amenity": "Porcelain Anti-Skid",
+        "admin": "Wool-Blend Acoustic Carpet Tile",
+        "conf": "Wool-Blend Acoustic Carpet Tile",
+        "suite": "Large-Format Porcelain 1200x1200",
+    },
+}
+
+GRADE_TIER_LABELS: Dict[str, str] = {
+    "basic": "Basic (CPWD economy specification)",
+    "standard": "Standard (CPWD benchmark specification)",
+    "premium": "Premium (enhanced imported / engineered specification)",
+}
+
+
+def normalize_finish_grade(grade: Optional[str]) -> str:
+    """Clamp any caller-supplied grade onto the three supported finish tiers."""
+    g = str(grade or "standard").strip().lower()
+    return g if g in FINISH_GRADE_TIERS else "standard"
+
+
+def resolve_finish_key(name: str, r_id: str) -> Optional[str]:
+    """Longest-key match of a room name/id onto the finish schedule vocabulary."""
+    s = f"{name} {r_id}".lower()
+    best: Optional[str] = None
+    for k in FINISH_ZONES_STANDARD:
+        if k != "_default" and k in s and (best is None or len(k) > len(best)):
+            best = k
+    return best
+
+
+def resolve_finish(name: str, r_id: str, grade: str = "standard") -> str:
+    """Grade-tiered finish specification for a room (single source for the sheet)."""
+    tier = normalize_finish_grade(grade)
+    key = resolve_finish_key(name, r_id) or "_default"
+    if tier == "standard":
+        return FINISH_ZONES_STANDARD[key]
+    return FINISH_GRADE_TIERS[tier].get(key, FINISH_ZONES_STANDARD[key])
+
+
 def build_constructible_wall_graph(
     floor_index: int = 0,
     envelope: Optional[Dict[str, float]] = None,
@@ -665,6 +786,7 @@ def build_constructible_wall_graph(
     doors: Optional[List[Any]] = None,
     windows: Optional[List[Any]] = None,
     floor_height_m: Optional[float] = None,
+    quality_grade: str = "standard",
     **kwargs: Any,
 ) -> WallGraph:
     """
@@ -733,39 +855,13 @@ def build_constructible_wall_graph(
     # For each room, shrink its bounding box inward by wall half-thicknesses
     # Outer envelope faces get full W1 (0.230m). Internal room boundaries get W2 (0.115m) or W3 (0.075m).
     clear_rooms: Dict[str, ClearRoom] = {}
-    finish_zones = {
-        "living": "Polished Vitrified Tile 800x800",
-        "dining": "Polished Vitrified Tile 800x800",
-        "kitchen": "Anti-Skid Vitrified Tile + Granite Counter",
-        "puja": "Polished White Makrana Marble",
-        "master": "Engineered Hardwood Flooring",
-        "bed": "Laminated Wooden / Vitrified Tile",
-        "bath": "Anti-Skid Ceramic Tile R10 + Full Height Dado",
-        "toilet": "Anti-Skid Ceramic Tile R10 + Full Height Dado",
-        "stair": "Flamed Fluted Granite Treads + SS Railing",
-        "core": "Flamed Fluted Granite Treads + SS Railing",
-        "lobby": "Polished Italian Marble Finish Tile",
-        "corridor": "Heavy Duty Vitrified Tile 600x1200",
-        "balcony": "Rustic Weatherproof Anti-Skid Ceramic",
-        "utility": "Anti-Skid Ceramic + Epoxy Grout",
-        "terrace": "Reflective Thermal Roof Tile + Waterproof Screed",
-        "storage": "Vaccum Dewatered Concrete (VDF) Heavy Duty",
-        "dock": "Heavy-Duty Metallic Floor Hardener Screed",
-        "dispatch": "VDF Concrete with Steel Fibre Reinforcement",
-        "amenity": "Anti-Skid Ceramic Tile",
-        "admin": "Commercial Grade Acoustic Carpet Tile",
-        "conf": "Commercial Grade Acoustic Carpet Tile",
-        "suite": "Commercial Vitrified Tile 600x600",
-        "catwalk": "Galvanized Steel Serrated Grating",
-    }
+    # Specification grade drives the finish schedule (module-level tables above).
+    finish_grade = normalize_finish_grade(quality_grade)
+    finish_grade_label = GRADE_TIER_LABELS[finish_grade]
 
-    # Helper to determine finish zone
+    # Helper to determine finish zone for the requested specification grade
     def get_finish(name: str, r_id: str) -> str:
-        s = f"{name} {r_id}".lower()
-        for k, v in finish_zones.items():
-            if k in s:
-                return v
-        return "Vitrified Tile 600x600"
+        return resolve_finish(name, r_id, finish_grade)
 
     # Map raw rooms to clear dimensions
     for r in raw_rooms:
@@ -816,6 +912,7 @@ def build_constructible_wall_graph(
             zone=z,
             zone_category=zcat,
             finish_zone=get_finish(rname, rid),
+            finish_grade=finish_grade,
             is_vertical_core=is_core,
             unit_id=unit,
         )
@@ -1726,6 +1823,8 @@ def build_constructible_wall_graph(
             "clear_area_sqm": canonical_area,
             "area_sqm": canonical_area,
             "finish_zone": " ".join(str(r.finish_zone).split()) if r.finish_zone else r.finish_zone,
+            "finish_grade": finish_grade,
+            "finish_grade_label": finish_grade_label,
             "zone": r.zone,
             "naming_threshold_used": naming_threshold,
             "fixture_count": fixture_count,

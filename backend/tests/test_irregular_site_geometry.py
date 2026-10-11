@@ -448,6 +448,45 @@ def test_site_sheet_drawing_ir_and_pdf_parity():
     assert "CADASTRAL" in all_text
 
 
+def test_single_storey_irregular_plot_pdf_export():
+    """
+    REGRESSION: single-storey irregular plot must export Sheet 10.SP.
+    The typology label used by the single-floor site sheet was resolved inside
+    the multi-storey branch, so a G (1 Level) plan on a non-rectangular plot
+    raised UnboundLocalError('typology_raw') and Download PDF returned HTTP 500.
+    """
+    import io
+    from pypdf import PdfReader
+
+    poly_model = PlotPolygonModel(
+        vertices=TRAPEZOID_VERTICES,
+        shape_type="trapezoid",
+        is_regular_rectangle=False,
+    )
+    req = FloorPlanRequest(
+        plot_width_m=16.0,
+        plot_depth_m=14.0,
+        floors=1,
+        building_typology="T1_SINGLE_FAMILY",
+        plot_polygon=poly_model,
+        required_rooms=["living", "kitchen", "master_bed", "bath_1"],
+    )
+    res = generate_floor_plan(req)
+    assert res.multi_storey is not None
+    assert len(res.multi_storey.floors) == 1, "fixture must stay single-storey"
+
+    buf = generate_pdf_report({"project_id": "test_single_irregular"}, floor_plan=res.model_dump())
+    pdf_bytes = buf.getvalue()
+    assert len(pdf_bytes) > 2000
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    assert len(reader.pages) >= 5
+    all_text = "".join(p.extract_text() for p in reader.pages)
+    assert "SITE PLAN & CADASTRAL SURVEY" in all_text
+    assert "TRAPEZOID" in all_text
+    assert "CADASTRAL" in all_text
+
+
 # ==============================================================================
 # 6. PROOFS: CURVES, L-SHAPE MULTI-WING, COURTYARD TOPOLOGY
 # ==============================================================================

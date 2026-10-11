@@ -509,18 +509,40 @@ def make_construction_schedules_table(
             })
 
     if not r_sched:
+        # Synthesized path (no wall graph): still resolve the finish through the
+        # specification-grade table so a Basic sheet never prints standard-grade
+        # materials and vice versa.
+        try:
+            from app.services.floorplan.wall_graph import resolve_finish, GRADE_TIER_LABELS
+            _synth_grade = str(
+                _get(floor_data, "quality_grade", None)
+                or _get(_get(floor_data, "params_snapshot", None), "quality_grade", None)
+                or _get(_get(_get(floor_data, "multi_storey", None), "params_snapshot", None), "quality_grade", None)
+                or "standard"
+            )
+        except Exception:
+            resolve_finish = None  # type: ignore[assignment]
+            GRADE_TIER_LABELS = {}  # type: ignore[assignment]
+            _synth_grade = "standard"
         rooms_raw = _get(floor_data, "rooms", []) or (_get(floor_data, "rectangles", {}) or {}).get("rooms", []) or _get(floor_data, "placements", [])
         for idx, r in enumerate(rooms_raw, 1):
             r_nm = str(_get(r, "room_name", f"Room {idx}"))
             r_w = _safe_float(_get(r, "width_m", _get(r, "width", 3.0)), 3.0)
             r_d = _safe_float(_get(r, "depth_m", _get(r, "height", 3.0)), 3.0)
             r_ar = _safe_float(_get(r, "area_sqm", r_w * r_d), r_w * r_d)
+            _r_finish = (
+                resolve_finish(r_nm, str(_get(r, "room_id", "")), _synth_grade)
+                if resolve_finish
+                else "Vitrified Tiles + Low-VOC Acrylic Paint"
+            )
             r_sched.append({
                 "room_number": idx,
                 "room_name": r_nm,
                 "clear_area_sqm": r_ar,
                 "clear_dims": f"{r_w:.2f}m x {r_d:.2f}m",
-                "finish_zone": "Vitrified Tiles + Low-VOC Acrylic Paint",
+                "finish_zone": _r_finish,
+                "finish_grade": _synth_grade,
+                "finish_grade_label": GRADE_TIER_LABELS.get(_synth_grade, ""),
             })
 
     # 2. Door Schedule Table
@@ -602,8 +624,26 @@ def make_construction_schedules_table(
     flowables.append(t_win)
 
     # 4. Room Schedule Table
+    # The finish specification column is resolved at the specification grade the
+    # plan was generated with; disclose the tier so a Basic sheet never reads
+    # like a Premium one.
+    _finish_grade_label = ""
+    for _rs in (r_sched or []):
+        _gl = _get(_rs, "finish_grade_label", None)
+        if _gl:
+            _finish_grade_label = str(_gl)
+            break
+    _room_sched_title = (
+        "<b>Room Schedule (Clear Interior Dimensions &amp; Finish Specifications)</b>"
+        + (
+            f'<br/><font color="{COLOR_TEXT_SECONDARY.hexval()}" size="7.5">'
+            f'Finish tier: {html.escape(_finish_grade_label)}</font>'
+            if _finish_grade_label
+            else ""
+        )
+    )
     flowables.append(Spacer(1, 8))
-    flowables.append(_keep_with_next(Paragraph("<b>Room Schedule (Clear Interior Dimensions &amp; Finish Specifications)</b>", p_title)))
+    flowables.append(_keep_with_next(Paragraph(_room_sched_title, p_title)))
     flowables.append(Spacer(1, 3))
     room_headers = ["No.", "Room Name", "Clear Area", "Clear Dimensions (W x D)", "Finish Specification"]
     room_table_data = [[Paragraph(h, p_th) for h in room_headers]]
@@ -1871,6 +1911,18 @@ def generate_pdf_report(
         "Physical site testing and certified structural engineer stamp are mandatory prior to any ground excavation or contract tender."
     )
 
+    # Typology label feeds the multi-storey dossier header AND the single-floor
+    # Sheet 10.SP site plan, so it is resolved once here: deriving it inside the
+    # multi-storey branch left it unbound on single-storey irregular plots and
+    # crashed the PDF export (UnboundLocalError: typology_raw).
+    typology_raw = str(
+        (multi_storey.get("building_typology") if isinstance(multi_storey, dict) else None)
+        or _get(floorplan, "building_typology")
+        or (data.get("building_typology") if isinstance(data, dict) else None)
+        or "T1_SINGLE_FAMILY"
+    )
+    typology_display = typology_raw.replace("_", " ").title()
+
     if is_multi_floor:
         # =========================================================================
         # SHEET 10.0: MULTI-STOREY ARCHITECTURAL DOSSIER & CORE STACKING ANALYSIS
@@ -1879,8 +1931,6 @@ def generate_pdf_report(
             story.append(PageBreak())
         story.append(create_section_header("10.0", "Multi-Storey Architectural Dossier & Core Stacking Analysis"))
 
-        typology_raw = str(multi_storey.get("building_typology", "T1_SINGLE_FAMILY"))
-        typology_display = typology_raw.replace("_", " ").title()
         total_storeys = int(multi_storey.get("total_storeys", len(ms_floors)))
         total_bua = float(multi_storey.get("total_built_up_area_sqm", 0.0))
         if total_bua <= 0.0:
@@ -2501,7 +2551,19 @@ def generate_pdf_report(
             )
             story.append(make_callout(sched_brief, width=CONTENT_WIDTH_PT))
             story.append(Spacer(1, 4))
-            sched_flowables = make_construction_schedules_table(floorplan, width=CONTENT_WIDTH_PT, floor_index=0)
+            # Single-floor mode still has to print the REAL schedules: the
+            # top-level response carries no room schedule, but the nested floor
+            # model carries the clear dimensions AND the grade-tiered finish
+            # column. Prefer it; fall back to the top-level payload.
+            _sched_source = floorplan
+            if not _get(floorplan, "room_schedule", []):
+                _ms_nested = floorplan.get("multi_storey") if isinstance(floorplan, dict) else None
+                _ms_nested_floors = _ms_nested.get("floors") if isinstance(_ms_nested, dict) else None
+                if _ms_nested_floors:
+                    _sched_source = _ms_nested_floors[0]
+            sched_flowables = make_construction_schedules_table(
+                _sched_source, width=CONTENT_WIDTH_PT, floor_index=0
+            )
             story.extend(sched_flowables)
 
         # Dedicated Site Survey Sheet for irregular plots in single-floor mode
