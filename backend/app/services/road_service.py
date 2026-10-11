@@ -1,7 +1,7 @@
 """
 Road service — shared Overpass nearest-road capability.
 ================================================================
-Extracted from vastu_service (defect D3): the Overpass query, cache,
+Extracted from vastu_service: the Overpass query, cache,
 rate-limit, and honest offline fallback now live in ONE place so both the
 vastu advisory and the public /api/nearest-road proxy consume the same
 implementation.
