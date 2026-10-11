@@ -805,9 +805,24 @@ export const ActionButton = React.forwardRef<HTMLButtonElement, ActionButtonProp
 /* 11. Select — iOS-style dropdown                                     */
 /* ================================================================== */
 
+/** Menu metrics: preferred height, minimum usable height, trigger gap, frame inset. */
+const MENU_MAX_HEIGHT = 264;
+const MENU_MIN_HEIGHT = 132;
+const MENU_GAP = 4;
+const MENU_MARGIN = 8;
+
 export interface SelectOption {
   id: string | number;
   label: string;
+  /** Optional supporting line rendered under the label inside the menu. */
+  description?: string;
+  /**
+   * Disabled option. When paired with `disabledReason` the row is rendered
+   * muted, is focusable-but-unselectable (aria-disabled) and shows the reason
+   * as a tooltip + inline caption, so a blocked choice always states why.
+   */
+  disabled?: boolean;
+  disabledReason?: string;
 }
 
 export interface SelectProps {
@@ -830,13 +845,26 @@ export const Select: React.FC<SelectProps> = ({
   className = '',
 }) => {
   const [open, setOpen] = useState(false);
-  const [coords, setCoords] = useState<{ top: number; left: number; width: number; above: boolean }>({
-    top: 0,
+  const [coords, setCoords] = useState<{
+    /** Trigger edge the menu hangs from: bottom edge below, top edge above. */
+    anchor: number;
+    boundsTop: number;
+    boundsBottom: number;
+    left: number;
+    minWidth: number;
+    maxWidth: number;
+    maxHeight: number;
+    above: boolean;
+  }>({
+    anchor: 0,
+    boundsTop: 0,
+    boundsBottom: 0,
     left: 0,
-    width: 0,
+    minWidth: 0,
+    maxWidth: 0,
+    maxHeight: MENU_MAX_HEIGHT,
     above: false,
   });
-
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const generatedId = useId();
@@ -845,16 +873,100 @@ export const Select: React.FC<SelectProps> = ({
 
   const selected = options.find((o) => String(o.id) === String(value)) ?? options[0];
 
+  /**
+   * Anchor the menu to its trigger without ever letting it leave the frame it
+   * lives in (sidebar, drawer, modal) or the viewport:
+   *  - the frame is the nearest scrollable ancestor and its CONTENT box bounds
+   *    the menu, so the panel lines up with the cards inside the panel instead
+   *    of spilling over their edges (the old viewport-only clamp let a
+   *    description widen the menu a few pixels past the sidebar);
+   *  - the menu may grow past a narrow trigger to fit its labels, but only as
+   *    far as that frame allows;
+   *  - its height is capped to the room actually available on the chosen side,
+   *    so every option stays reachable by scrolling rather than running off
+   *    the bottom of the screen;
+   *  - the anchor itself is finally clamped inside that frame, so a trigger
+   *    near — or scrolled past — the panel's edge can never push the menu out
+   *    of the panel or window it belongs to.
+   */
   const updateCoords = useCallback(() => {
-    const rect = triggerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const menuMaxHeight = 260;
-    const spaceBelow = window.innerHeight - rect.bottom;
-    const above = spaceBelow < menuMaxHeight && rect.top > menuMaxHeight;
-    const maxW = Math.min(rect.width, window.innerWidth - 16);
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - maxW - 8));
-    setCoords({ top: above ? rect.top - 4 : rect.bottom + 4, left, width: maxW, above });
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+
+    // Frame = nearest ancestor that can scroll its overflow. Pure
+    // `overflow: hidden` wrappers (e.g. the collapsible body, which animates
+    // its own height) are skipped: they are not the visible frame.
+    let frame: HTMLElement | null = null;
+    const scrolls = (v: string) => v === 'auto' || v === 'scroll';
+    for (let node = trigger.parentElement; node; node = node.parentElement) {
+      const { overflowX, overflowY } = getComputedStyle(node);
+      if (scrolls(overflowY) || scrolls(overflowX)) {
+        frame = node;
+        break;
+      }
+    }
+
+    const num = (v: string) => parseFloat(v) || 0;
+    let bounds = { top: 0, bottom: window.innerHeight, left: 0, right: window.innerWidth };
+    if (frame) {
+      const cs = getComputedStyle(frame);
+      const fr = frame.getBoundingClientRect();
+      const left = fr.left + frame.clientLeft + num(cs.paddingLeft);
+      const top = fr.top + frame.clientTop + num(cs.paddingTop);
+      bounds = {
+        top,
+        bottom: top + Math.max(0, frame.clientHeight - num(cs.paddingTop) - num(cs.paddingBottom)),
+        left,
+        right: left + Math.max(0, frame.clientWidth - num(cs.paddingLeft) - num(cs.paddingRight)),
+      };
+    }
+    bounds = {
+      top: Math.max(MENU_MARGIN, bounds.top),
+      bottom: Math.min(window.innerHeight - MENU_MARGIN, bounds.bottom),
+      left: Math.max(MENU_MARGIN, bounds.left),
+      right: Math.min(window.innerWidth - MENU_MARGIN, bounds.right),
+    };
+
+    const minWidth = Math.max(120, Math.min(rect.width, bounds.right - bounds.left));
+    const left = Math.max(bounds.left, Math.min(rect.left, Math.max(bounds.left, bounds.right - minWidth)));
+    const maxWidth = Math.max(minWidth, bounds.right - left);
+
+    const spaceBelow = bounds.bottom - rect.bottom - MENU_GAP;
+    const spaceAbove = rect.top - bounds.top - MENU_GAP;
+    const above = spaceBelow < MENU_MAX_HEIGHT && spaceAbove > spaceBelow;
+    const available = Math.max(MENU_MIN_HEIGHT, above ? spaceAbove : spaceBelow);
+
+    setCoords({
+      left,
+      minWidth,
+      maxWidth,
+      maxHeight: Math.min(MENU_MAX_HEIGHT, available),
+      above,
+      anchor: above ? rect.top - MENU_GAP : rect.bottom + MENU_GAP,
+      boundsTop: bounds.top,
+      boundsBottom: bounds.bottom,
+    });
   }, []);
+
+  /**
+   * Clamp the anchored menu inside the frame once its real height is known:
+   * when the trigger sits outside the frame (a panel scrolled past its own
+   * edge) the menu slides back in rather than hanging off the bottom of the
+   * window, and an over-tall menu pins to the frame's top and scrolls. Runs
+   * before paint, so the clamped position is the first one painted, and it only
+   * overrides the anchor when the anchor would leave the frame.
+   */
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!open || !menu) return;
+    const height = menu.offsetHeight;
+    const limit = Math.max(coords.boundsTop, coords.boundsBottom - height);
+    const anchored = coords.above ? coords.anchor - height : coords.anchor;
+    const top = Math.min(Math.max(anchored, coords.boundsTop), limit);
+    menu.style.top = `${top}px`;
+    menu.style.bottom = 'auto';
+  }, [open, coords, options]);
 
   const toggle = () => {
     if (disabled) return;
@@ -931,25 +1043,60 @@ export const Select: React.FC<SelectProps> = ({
             id={listboxId}
             role="listbox"
             aria-labelledby={selectId}
-            className="animate-popover-open fixed z-[1050] min-w-[120px] max-w-[calc(100vw-16px)] overflow-hidden rounded-[12px] vibrancy-panel shadow-xl"
-            style={{ top: coords.top, left: coords.left, minWidth: coords.width, transformOrigin: coords.above ? 'bottom' : 'top' }}
+            className="animate-popover-open fixed z-[1050] min-w-[120px] overflow-y-auto overflow-x-hidden overscroll-contain rounded-[12px] vibrancy-panel shadow-xl scrollbar-apple"
+            style={{
+              // Anchored to the trigger here; the layout effect clamps the final
+              // position inside the frame. `bottom` keeps an open-upwards menu
+              // clear of the trigger without a translate, which would fight the
+              // popoverOpen keyframes.
+              top: coords.above ? 'auto' : coords.anchor,
+              bottom: coords.above ? window.innerHeight - coords.anchor : 'auto',
+              left: coords.left,
+              minWidth: coords.minWidth,
+              maxWidth: coords.maxWidth,
+              maxHeight: coords.maxHeight,
+              transformOrigin: coords.above ? 'bottom' : 'top',
+            }}
           >
             {options.map((opt) => {
               const isActive = String(opt.id) === String(value);
+              const isDisabled = Boolean(opt.disabled);
               return (
                 <button
                   key={String(opt.id)}
                   type="button"
                   role="option"
                   aria-selected={isActive}
-                  onClick={() => choose(opt.id)}
+                  aria-disabled={isDisabled || undefined}
+                  disabled={isDisabled}
+                  title={isDisabled ? opt.disabledReason : opt.description}
+                  onClick={() => {
+                    if (isDisabled) return;
+                    choose(opt.id);
+                  }}
                   className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-[12.5px] ${ui('base')} focus-visible:outline-none focus-visible:bg-[var(--fill-hover)] ${
-                    isActive ? 'font-semibold text-[var(--accent)]' : 'text-[var(--text-1)] hover:bg-[var(--fill)]'
+                    isDisabled
+                      ? 'cursor-not-allowed text-[var(--text-3)] opacity-60'
+                      : isActive
+                      ? 'font-semibold text-[var(--accent)]'
+                      : 'text-[var(--text-1)] hover:bg-[var(--fill)]'
                   }`}
                 >
-                  <span className="truncate">{opt.label}</span>
-                  {isActive && (
-                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                  <span className="min-w-0">
+                    <span className="block truncate">{opt.label}</span>
+                    {opt.description && (
+                      <span className="block truncate text-[11px] font-normal text-[var(--text-3)] leading-snug">
+                        {opt.description}
+                      </span>
+                    )}
+                    {isDisabled && opt.disabledReason && (
+                      <span className="block truncate text-[11px] font-normal text-[var(--semantic-amber)] leading-snug">
+                        {opt.disabledReason}
+                      </span>
+                    )}
+                  </span>
+                  {isActive && !isDisabled && (
+                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true" className="shrink-0">
                       <path d="M2.5 6.5L5 9L9.5 3.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
                   )}
@@ -982,8 +1129,21 @@ export function registerShortcutsSheetToggle(fn: (() => void) | null): void {
 /**
  * Global keyboard shortcuts (T / M / R / ?), managed via React state:
  * single-key presses only (no modifier, not while typing in form fields).
+ * A focused slider / switch / button is not a typing surface, so the shortcuts
+ * keep working after a control in the sidebar has been keyboard-operated.
  * Escape closes the shortcuts sheet when open.
  */
+const NON_TEXT_INPUT_TYPES = new Set([
+  'range',
+  'checkbox',
+  'radio',
+  'button',
+  'submit',
+  'reset',
+  'color',
+  'file',
+]);
+
 export function useShortcuts(handler: ShortcutHandler): void {
   const handlerRef = React.useRef(handler);
   handlerRef.current = handler;
@@ -992,8 +1152,13 @@ export function useShortcuts(handler: ShortcutHandler): void {
     const isTypingTarget = (el: EventTarget | null): boolean => {
       const t = el as HTMLElement | null;
       if (!t || !t.tagName) return false;
+      if (t.isContentEditable) return true;
       const tag = t.tagName.toLowerCase();
-      return tag === 'input' || tag === 'textarea' || tag === 'select' || t.isContentEditable;
+      if (tag === 'textarea' || tag === 'select') return true;
+      if (tag !== 'input') return false;
+      // Non-text inputs accept no characters, so they must not swallow shortcuts.
+      const type = ((t as HTMLInputElement).type || 'text').toLowerCase();
+      return !NON_TEXT_INPUT_TYPES.has(type);
     };
 
     const onKeyDown = (e: KeyboardEvent): void => {
