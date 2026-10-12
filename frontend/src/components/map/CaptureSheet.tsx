@@ -273,6 +273,20 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
     wasOpenRef.current = open;
   }, [open, boundary, pin]);
 
+  // A fresh ring follows the pin. While nothing is drawn yet, placing the pin
+  // re-anchors the tangent plane, so the boundary that gets committed carries
+  // the pin the user actually placed as its origin - never this wizard's
+  // fallback point (which the app would then show as the site coordinates).
+  // Once a vertex exists the ring is a real drawn shape and stays put.
+  useEffect(() => {
+    if (!open || !pin) return;
+    if (vertices.length > 0) return;
+    if (origin.lat === pin.lat && origin.lon === pin.lon) return;
+    const next: LocalOrigin = { lat: pin.lat, lon: pin.lon };
+    setOrigin(next);
+    originRef.current = next;
+  }, [open, pin, vertices.length, origin.lat, origin.lon]);
+
   /* ---------- map lifecycle: layers, cursor, listeners ---------- */
   useEffect(() => {
     if (!open) return;
@@ -1575,9 +1589,24 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
               <p className="text-[12px] text-[var(--text-2)] leading-snug">
                 Click the map to move the pin, or use search. The boundary origin is the pin.
               </p>
-              {pin && (
-                <div className="text-[11px] ui-font-tabular text-[var(--text-2)]">
+              {pin ? (
+                <div
+                  data-testid="capture-pin-coords"
+                  className="text-[11px] ui-font-tabular text-[var(--text-2)]"
+                >
                   {pin.lat.toFixed(5)}, {pin.lon.toFixed(5)}
+                </div>
+              ) : (
+                /* No located pin yet: tracing here would anchor the boundary at
+                   the wizard's fallback point and hand the app a captured plot
+                   its own CTA still refuses to analyze. Say what is missing and
+                   keep the trace button closed. */
+                <div
+                  data-testid="capture-needs-pin"
+                  className="flex items-start gap-1.5 text-[11px] leading-snug text-[var(--text-2)]"
+                >
+                  <Icon name="crosshair" size={12} className="text-[var(--accent-ink)] shrink-0 mt-[1px]" />
+                  <span>Click the map to place the pin - it sets the boundary origin.</span>
                 </div>
               )}
               <div className="flex justify-end gap-2 pt-1">
@@ -1591,7 +1620,9 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                 <button
                   type="button"
                   onClick={() => onStepChange('trace')}
-                  className="text-[12px] font-semibold px-3.5 py-1.5 min-h-[34px] rounded-[8px] bg-[var(--accent)] text-white hover:brightness-105 active:scale-95 transition-colors shadow-sm cursor-pointer"
+                  disabled={!pin}
+                  title={pin ? undefined : 'Place the pin on the map first'}
+                  className="text-[12px] font-semibold px-3.5 py-1.5 min-h-[34px] rounded-[8px] bg-[var(--accent)] text-white hover:brightness-105 active:scale-95 transition-colors shadow-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:active:scale-100"
                 >
                   Trace boundary
                 </button>

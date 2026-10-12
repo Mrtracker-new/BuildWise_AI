@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type {
+  AnalysisParams,
   AnalysisRequest,
   AnalysisResponse,
   SiteVisionResponse,
@@ -43,14 +44,21 @@ const PIPELINE_STAGES = [
   'Synthesizing report...',
 ] as const;
 
+/** Where the site is. One pair of numbers, one owner — see `siteLocation`. */
+export interface SiteLocation {
+  latitude: number;
+  longitude: number;
+}
+
+/** The app's default site (Bengaluru Urban), used until a link or a click moves it. */
+const DEFAULT_SITE: SiteLocation = { latitude: 12.9716, longitude: 77.5946 };
+
 /**
  * Parse a shared-site deep link written by handleCopyLink (`/app?lat=&lon=`).
  * Returns coordinates only when BOTH params are present, numeric, and in range —
  * a malformed or partial link falls back to the default site, never a broken map.
  */
-function parseSiteDeepLink(
-  search: string
-): { latitude: number; longitude: number } | null {
+function parseSiteDeepLink(search: string): SiteLocation | null {
   const params = new URLSearchParams(search);
   const latRaw = params.get('lat');
   const lonRaw = params.get('lon');
@@ -74,23 +82,38 @@ const AppShell: React.FC = () => {
     () => parseSiteDeepLink(window.location.search),
     []
   );
-  // Application Parameters State
-  const [request, setRequest] = useState<AnalysisRequest>(() => ({
-    latitude: 12.9716, // Default to Bengaluru Urban, India
-    longitude: 77.5946,
+  // Application Parameters State (no coordinates: the site owns those)
+  const [request, setRequest] = useState<AnalysisParams>(() => ({
     built_up_area_sqft: 2000,
     quality_grade: 'standard',
     building_typology: 'residential_single',
     floors: 1,
     ai_provider: 'groq',
     ground_coverage_ratio: 0.6,
-    // Deep-link coordinates override the default site when a valid link is opened.
-    ...(deepLinkSite ?? {}),
   }));
 
-  const [hasLocation, setHasLocation] = useState<boolean>(true);
   // ======== Single-source site boundary + capture wizard state ========
   const [boundary, setBoundary] = useState<SharedBoundaryState | null>(null);
+
+  /** The pin, owned by setSite. Only ever the site when no plot exists. */
+  const [site, setSite] = useState<SiteLocation | null>(() => deepLinkSite ?? DEFAULT_SITE);
+
+  /**
+   * THE site location — one value pair, one owner, no second copy to drift.
+   *
+   * A captured plot OWNS the site through its own origin (the pin the ring was
+   * traced around), so the map pin, the coordinate card, the share link and
+   * every request body read the same numbers and a plot can never describe a
+   * different place than the pin drawn beside it. Without a plot the pin owns
+   * the site; with neither, the app has no site to analyse.
+   */
+  const siteLocation = useMemo<SiteLocation | null>(
+    () =>
+      boundary
+        ? { latitude: boundary.origin.lat, longitude: boundary.origin.lon }
+        : site,
+    [boundary, site]
+  );
   const [captureOpen, setCaptureOpen] = useState<boolean>(false);
   const [captureStep, setCaptureStep] = useState<CaptureStep>('locate');
   const mapInstanceRef = useRef<MaplibreMap | null>(null);
@@ -141,6 +164,9 @@ const AppShell: React.FC = () => {
 
   const handleBoundaryCommit = useCallback((b: SharedBoundaryState) => {
     setBoundary(b);
+    // The pin follows the plot from here on: a committed boundary is the located
+    // site, so the card, the map pin and the request bodies all read its origin.
+    setSite({ latitude: b.origin.lat, longitude: b.origin.lon });
     setPreviewDismissed(false); // new boundary re-arms the preview
     setCaptureOpen(false);
     pushToast({ message: 'Site boundary saved · ready to analyze', tone: 'success' });
@@ -360,15 +386,20 @@ const AppShell: React.FC = () => {
 
   /** Copy a shareable /app deep link (site coordinates). */
   const handleCopyLink = useCallback((): void => {
+    // A link needs a site to point at; with no site there is nothing to share.
+    if (!siteLocation) {
+      pushToast({ message: 'No site location to share yet', tone: 'neutral' });
+      return;
+    }
     const params = new URLSearchParams();
-    params.set('lat', request.latitude.toFixed(6));
-    params.set('lon', request.longitude.toFixed(6));
+    params.set('lat', siteLocation.latitude.toFixed(6));
+    params.set('lon', siteLocation.longitude.toFixed(6));
     const url = `${window.location.origin}/app?${params.toString()}`;
     navigator.clipboard.writeText(url).then(
       () => pushToast({ message: 'Site link copied', tone: 'success' }),
       () => pushToast({ message: 'Copy failed — clipboard unavailable', tone: 'critical' })
     );
-  }, [request.latitude, request.longitude, pushToast]);
+  }, [siteLocation, pushToast]);
 
   // Synchronize document theme attribute
   useEffect(() => {
@@ -464,15 +495,19 @@ const AppShell: React.FC = () => {
     }
   }, []);
 
-  /** Commit a site move: move the pin (and, when chosen, the captured plot). */
+  /**
+   * THE only writer of the site location (plus clear/reset/commit below). Every
+   * move — a map click, a typed coordinate, the site-move dialog — lands here, so
+   * the pin and the plot can never end up describing two different places.
+   */
   const applySiteMove = useCallback(
     (lat: number, lon: number, withPlot: boolean): void => {
       invalidateSiteResults();
-      setRequest((prev) => ({ ...prev, latitude: lat, longitude: lon }));
-      setHasLocation(true);
+      const target: SiteLocation = { latitude: lat, longitude: lon };
+      setSite(target);
       if (withPlot && boundary) {
         // The boundary is anchored to the pin: same traced shape, new origin.
-        setBoundary({ ...boundary, origin: { lat, lon } });
+        setBoundary({ ...boundary, origin: { lat: target.latitude, lon: target.longitude } });
         setSiteMovedNotice(true);
       }
     },
@@ -513,8 +548,7 @@ const AppShell: React.FC = () => {
   const handleSiteMoveRecapture = useCallback((): void => {
     if (!pendingSiteMove) return;
     invalidateSiteResults();
-    setRequest((prev) => ({ ...prev, latitude: pendingSiteMove.lat, longitude: pendingSiteMove.lon }));
-    setHasLocation(true);
+    setSite({ latitude: pendingSiteMove.lat, longitude: pendingSiteMove.lon });
     setBoundary(null);
     setPendingSiteMove(null);
     openCapture('locate');
@@ -535,7 +569,9 @@ const AppShell: React.FC = () => {
     setHudFallbackMessage(null);
     setPendingSiteMove(null);
     setSiteMovedNotice(false);
-    setHasLocation(false);
+    // Clearing drops the site itself, not just its display: nothing is left
+    // behind for a later capture to silently anchor to.
+    setSite(null);
     setAnalysisData(null);
     setSiteVisionData(null);
     setFloorPlanData(null);
@@ -551,13 +587,12 @@ const AppShell: React.FC = () => {
     }
   };
 
-  const handleRequestChange = (updated: Partial<AnalysisRequest>) => {
+  const handleRequestChange = (updated: Partial<AnalysisParams>) => {
     setRequest((prev) => ({ ...prev, ...updated }));
     // Do not clear floorPlanData on parameter changes (floors, typology, area, coverage)
     // so the stale-plan guard can display the "Parameters changed - regenerate" indicator.
-    if (updated.latitude !== undefined || updated.longitude !== undefined) {
-      setFloorPlanData(null);
-    }
+    // Moving the site is not a parameter change: it goes through applySiteMove,
+    // which invalidates the location-specific results itself.
   };
 
   // Run Satellite Vision Analysis
@@ -565,12 +600,12 @@ const AppShell: React.FC = () => {
     modeOverride?: 'segformer' | 'index-only',
     signal?: AbortSignal
   ) => {
-    if (!hasLocation) return;
+    if (!siteLocation) return;
     setIsSiteVisionLoading(true);
     try {
       const resp = await submitSiteVision({
-        latitude: request.latitude,
-        longitude: request.longitude,
+        latitude: siteLocation.latitude,
+        longitude: siteLocation.longitude,
         plot_area_sqft: overridePlotArea ?? (analysisData?.land_value?.plot_area_sqft ?? 2000),
         mode_override: modeOverride,
         orientation_deg: analysisData?.orientation?.optimal_axis_degrees ?? undefined,
@@ -599,7 +634,7 @@ const AppShell: React.FC = () => {
 
   // Run Feasibility Analysis
   const handleRunAnalysis = async () => {
-    if (!hasLocation) {
+    if (!siteLocation) {
       setErrorMessage('Please select a site location on the map before analyzing.');
       return;
     }
@@ -628,10 +663,15 @@ const AppShell: React.FC = () => {
     handleRunSiteVision(undefined, controller.signal);
 
     try {
-      // Carry the map-captured boundary (server re-validates; null
-      // keeps the legacy request shape byte-comparable).
-      const analyzeRequest = {
+      // The site's coordinates come from `siteLocation` — the same value the map
+      // pin and the coordinate card show, and the plot's own origin whenever a
+      // plot exists. Nothing here reads a second copy.
+      const analyzeRequest: AnalysisRequest = {
         ...request,
+        latitude: siteLocation.latitude,
+        longitude: siteLocation.longitude,
+        // Carry the map-captured boundary (server re-validates; null
+        // keeps the legacy request shape byte-comparable).
         boundary: boundary ? boundaryToSummaryPayload(boundary) : null,
       };
       const { data: response, fallbackTriggered } = await generateFeasibilityReport(
@@ -679,15 +719,13 @@ const AppShell: React.FC = () => {
     setHudFallbackMessage(null);
     setCurrentStageIndex(0);
     setRequest({
-      latitude: 12.9716,
-      longitude: 77.5946,
       built_up_area_sqft: 2000,
       quality_grade: 'standard',
       building_typology: 'residential_single',
       floors: 1,
       ai_provider: 'mock',
     });
-    setHasLocation(true);
+    setSite(DEFAULT_SITE);
     setAnalysisData(null);
     setSiteVisionData(null);
     setFloorPlanData(null);
@@ -758,8 +796,8 @@ const AppShell: React.FC = () => {
       {/* Coordinates Input Card */}
       <CoordinatesInput
         key={`coords-${coordinatesSyncKey}`}
-        latitude={hasLocation ? request.latitude : null}
-        longitude={hasLocation ? request.longitude : null}
+        latitude={siteLocation?.latitude ?? null}
+        longitude={siteLocation?.longitude ?? null}
         formattedAddress={analysisData?.formatted_address}
         onCoordinatesChange={handleLocationSelect}
         onClear={handleClearLocation}
@@ -769,7 +807,9 @@ const AppShell: React.FC = () => {
       <AnalysisForm
         request={request}
         isLoading={isLoading}
-        hasCoordinates={hasLocation && boundary !== null}
+        /* The plot is the gate (STEP ZERO): a captured boundary always carries
+           its own located origin, so there is no separate "has a pin" flag. */
+        hasCoordinates={boundary !== null}
         onChange={handleRequestChange}
         onSubmit={handleRunAnalysis}
         onRequestCapture={() => openCapture('locate')}
@@ -919,8 +959,8 @@ const AppShell: React.FC = () => {
         className="fixed inset-0 w-full h-full overflow-hidden z-0 pointer-events-auto"
       >
         <MapCanvas
-          latitude={hasLocation ? request.latitude : null}
-          longitude={hasLocation ? request.longitude : null}
+          latitude={siteLocation?.latitude ?? null}
+          longitude={siteLocation?.longitude ?? null}
           orientationDegrees={analysisData?.orientation.optimal_axis_degrees}
           plinthAreaSqFt={request.built_up_area_sqft}
           onLocationSelect={
@@ -948,7 +988,16 @@ const AppShell: React.FC = () => {
           step={captureStep}
           onStepChange={setCaptureStep}
           boundary={boundary}
-          pin={{ lat: request.latitude, lon: request.longitude }}
+          /* The wizard anchors its boundary at the pin, so it is only ever
+             offered a LOCATED pin: after the coordinates are cleared, request
+             still holds the old numbers, and anchoring a plot there would
+             capture a site that neither the map nor the coordinate card shows.
+             No pin means the wizard asks for one instead. */
+          pin={
+            siteLocation
+              ? { lat: siteLocation.latitude, lon: siteLocation.longitude }
+              : null
+          }
           onPinChange={handleLocationSelect}
           onCommit={handleBoundaryCommit}
           onCancel={() => setCaptureOpen(false)}
@@ -1273,7 +1322,7 @@ const AppShell: React.FC = () => {
           siteVisionData={siteVisionData}
           isSiteVisionLoading={isSiteVisionLoading}
           onRunSiteVision={handleRunSiteVision}
-          hasLocation={hasLocation}
+          hasLocation={siteLocation !== null}
           floorPlanData={floorPlanData}
           onFloorPlanGenerated={(plan) => setFloorPlanData(plan)}
           overrideLandRate={overrideLandRate}
