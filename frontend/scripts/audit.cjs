@@ -317,11 +317,19 @@ function checkDOMViolations(isDrawerOpenIntended) {
     throw new Error('"Trace boundary" not found in the capture wizard.');
   }
   await sleep(800);
-  if (!(await clickButtonByText(page, /\bRect\b/))) {
-    await browser.close();
-    throw new Error('"Rect" trace tool not found in the capture wizard.');
-  }
-  // Rect trace auto-advances to FRONTAGE, where the user picks the frontage
+  // The rectangle is a PRESET, not a toolbar mode: the flat "Rect" tool this
+  // audit used to click was replaced by [Draw][Edit][Import][Presets] in the
+  // capture-toolbar overhaul, so the lookup had been failing ever since — the
+  // run died right here with '"Rect" trace tool not found'. Seed it the way the
+  // UI offers it now, the same path e2e_trace_ui.cjs drives.
+  await page.click('[data-testid="trace-toolbar-presets"]');
+  await page.waitForSelector('[data-testid="preset-menu"]', { timeout: 8000 });
+  await page.click('[data-testid="preset-item-rect"]');
+  await sleep(900);
+  // The preset seeds a closed 4-vertex ring; the ring still has to be finished
+  // before the wizard hands over to the frontage step.
+  await clickButtonByText(page, /Finish/);
+  // Frontage comes next, where the user picks the frontage
   // edge by clicking it on the map or its row in the sheet (there is no
   // separate Accept button in the current UI); picking enables Review.
   await page.waitForFunction(() => /Confirm the frontage/.test(document.body.innerText || ''), { timeout: 40000 });
@@ -395,8 +403,8 @@ function checkDOMViolations(isDrawerOpenIntended) {
     }
   }
 
-  // STEP 3: Targeted Post-Fix Integrity Checks
-  console.log('\n--- 3. TARGETED POST-FIX INTEGRITY CHECKS ---');
+  // STEP 3: Targeted UI Integrity Checks
+  console.log('\n--- 3. TARGETED UI INTEGRITY CHECKS ---');
 
   // Make the results panel visible for the gauge check (real toggle).
   const gaugeOpen = await setResultsPanel(page, true);

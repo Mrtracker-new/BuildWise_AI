@@ -20,7 +20,7 @@ export const BoundaryChip: React.FC<BoundaryChipProps> = ({ boundary, onEdit }) 
       data-testid="boundary-chip"
       className="vibrancy-pill rounded-full flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-[12px] text-[var(--text-1)] border border-[var(--panel-border-color)] shadow-md max-w-[calc(100vw-64px)]"
     >
-      <Icon name="maximize" size={13} className="text-[var(--accent)] shrink-0" />
+      <Icon name="maximize" size={13} className="text-[var(--accent-ink)] shrink-0" />
       <span className="ui-font-tabular font-medium">{m.areaSqm.toFixed(0)} m²</span>
       <span className="text-[var(--hairline)]">|</span>
       <span className="ui-font-tabular text-[var(--text-2)]">{m.vertexCount}V</span>
@@ -30,13 +30,13 @@ export const BoundaryChip: React.FC<BoundaryChipProps> = ({ boundary, onEdit }) 
       </span>
       {!m.valid && (
         <span title={m.reason} className="flex shrink-0">
-          <Icon name="alert-triangle" size={12} className="text-[var(--semantic-amber)]" />
+          <Icon name="alert-triangle" size={12} className="text-[var(--semantic-amber-ink)]" />
         </span>
       )}
       <button
         type="button"
         onClick={onEdit}
-        className="ml-0.5 text-[11px] font-semibold text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded"
+        className="ml-0.5 text-[11px] font-semibold text-[var(--accent-ink)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded"
         aria-label="Edit boundary on map"
       >
         Edit

@@ -114,7 +114,7 @@ export const PresetMenu: React.FC<PresetMenuProps> = ({ open, onClose, widthM, d
       style={{ animation: 'bwMenuIn 140ms var(--bw-ease-apple) both' }}
     >
       <div className="flex items-center gap-1.5 px-2 pt-1 pb-1.5">
-        <Icon name="layout-grid" size={12} className="text-[var(--accent)] shrink-0" />
+        <Icon name="layout-grid" size={12} className="text-[var(--accent-ink)] shrink-0" />
         <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)]">
           Plot presets
         </span>

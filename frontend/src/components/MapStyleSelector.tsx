@@ -167,7 +167,7 @@ export const MapStyleSelector: React.FC<MapStyleSelectorProps> = ({
         onClick={() => setIsOpen((prev) => !prev)}
         className={`bw-touch-target w-8 h-8 rounded-[10px] vibrancy-panel flex items-center justify-center transition-colors border border-[var(--panel-border-color)] shadow-md active:scale-95 ${
           isOpen || currentStyle !== 'standard'
-            ? 'text-[var(--accent)] bg-[var(--accent-tint)]'
+            ? 'text-[var(--accent-ink)] bg-[var(--accent-tint)]'
             : 'text-[var(--text-1)] hover:bg-[var(--fill)]'
         }`}
         title="Map details (standard / satellite / terrain)"
@@ -226,7 +226,7 @@ export const MapStyleSelector: React.FC<MapStyleSelectorProps> = ({
                   <div className="flex-1 min-w-0">
                     <div
                       className={`text-[12.5px] leading-tight font-medium ${
-                        isSelected ? 'text-[var(--accent)]' : 'text-[var(--text-1)]'
+                        isSelected ? 'text-[var(--accent-ink)]' : 'text-[var(--text-1)]'
                       }`}
                     >
                       {opt.title}
@@ -240,7 +240,7 @@ export const MapStyleSelector: React.FC<MapStyleSelectorProps> = ({
                     <Icon
                       name="check"
                       size={14}
-                      className="text-[var(--accent)] shrink-0 ml-1"
+                      className="text-[var(--accent-ink)] shrink-0 ml-1"
                     />
                   )}
                 </button>

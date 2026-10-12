@@ -1928,7 +1928,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       {!latitude && !longitude && (
         <div className="absolute top-20 left-1/2 -translate-x-1/2 z-[1000] pointer-events-none">
           <div className="vibrancy-pill px-4 py-2 rounded-full shadow-lg flex items-center gap-2 text-[12px] font-medium text-[var(--text-1)] border border-[var(--panel-border-color)]">
-            <Icon name="crosshair" size={14} className="text-[var(--accent)] shrink-0" />
+            <Icon name="crosshair" size={14} className="text-[var(--accent-ink)] shrink-0" />
             <span>Click anywhere on the map to place site pin</span>
           </div>
         </div>
@@ -1952,7 +1952,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
               <>
                 <span className="text-[var(--hairline)] hidden xs:inline">|</span>
                 <span className="text-[11px] text-[var(--text-2)] hidden xs:flex items-center gap-1 shrink-0">
-                  <Icon name="compass" size={12} className="text-[var(--accent)]" />
+                  <Icon name="compass" size={12} className="text-[var(--accent-ink)]" />
                   {orientationDegrees.toFixed(0)}°
                 </span>
               </>
@@ -2006,7 +2006,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                 onClick={() => setShowTreeLayer((prev) => !prev)}
                 className={`bw-touch-target flex items-center gap-1 px-2 py-1 rounded-[8px] transition-colors text-[11px] font-medium cursor-pointer ${
                   showTreeLayer
-                    ? 'bg-[var(--accent-tint)] text-[var(--accent)]'
+                    ? 'bg-[var(--accent-tint)] text-[var(--accent-ink)]'
                     : 'text-[var(--text-2)] hover:bg-[var(--fill)]'
                 }`}
                 title="Toggle Tree Canopy Layer"
@@ -2015,7 +2015,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                 <Icon
                   name="tree"
                   size={12}
-                  className={showTreeLayer ? 'text-[var(--accent)]' : 'text-[var(--text-2)]'}
+                  className={showTreeLayer ? 'text-[var(--accent-ink)]' : 'text-[var(--text-2)]'}
                 />
                 <span>Canopy ({treeClusters?.features.length})</span>
               </button>
@@ -2026,7 +2026,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                 onClick={() => setShowWaterLayer((prev) => !prev)}
                 className={`bw-touch-target flex items-center gap-1 px-2 py-1 rounded-[8px] transition-colors text-[11px] font-medium cursor-pointer ${
                   showWaterLayer
-                    ? 'bg-[var(--accent-tint)] text-[var(--accent)]'
+                    ? 'bg-[var(--accent-tint)] text-[var(--accent-ink)]'
                     : 'text-[var(--text-2)] hover:bg-[var(--fill)]'
                 }`}
                 title="Toggle Water Bodies Layer"
@@ -2035,7 +2035,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                 <Icon
                   name="droplet"
                   size={12}
-                  className={showWaterLayer ? 'text-[var(--accent)]' : 'text-[var(--text-2)]'}
+                  className={showWaterLayer ? 'text-[var(--accent-ink)]' : 'text-[var(--text-2)]'}
                 />
                 <span>Water ({waterBodies?.features.length})</span>
               </button>

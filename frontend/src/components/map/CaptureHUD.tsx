@@ -104,7 +104,7 @@ export const CaptureHUD: React.FC<CaptureHUDProps> = ({
     >
       <div className="vibrancy-panel rounded-[14px] px-3 py-2.5 shadow-lg w-[232px] select-none">
         <div className="flex items-center gap-1.5 pb-1.5 mb-1.5 border-b border-[var(--hairline)]">
-          <Icon name="crosshair" size={12} className="text-[var(--accent)] shrink-0" />
+          <Icon name="crosshair" size={12} className="text-[var(--accent-ink)] shrink-0" />
           <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)]">
             Boundary
           </span>
@@ -154,9 +154,9 @@ export const CaptureHUD: React.FC<CaptureHUDProps> = ({
               <Icon
                 name="alert-triangle"
                 size={13}
-                className="text-[var(--semantic-red)] shrink-0 mt-[1px]"
+                className="text-[var(--semantic-red-ink)] shrink-0 mt-[1px]"
               />
-              <span className="text-[11px] leading-snug text-[var(--semantic-red)] font-medium">
+              <span className="text-[11px] leading-snug text-[var(--semantic-red-ink)] font-medium">
                 Self-intersecting — resolve to continue
               </span>
             </>
@@ -165,7 +165,7 @@ export const CaptureHUD: React.FC<CaptureHUDProps> = ({
               <Icon
                 name="check-circle"
                 size={13}
-                className="text-[var(--semantic-green)] shrink-0 mt-[1px]"
+                className="text-[var(--semantic-green-ink)] shrink-0 mt-[1px]"
               />
               <span className="text-[11px] leading-snug text-[var(--text-2)] font-medium">
                 Valid

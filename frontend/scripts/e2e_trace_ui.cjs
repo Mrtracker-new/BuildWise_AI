@@ -297,7 +297,7 @@ async function main() {
       });
     });
     const glyphTotal = toolbar.reduce((n, b) => n + b.glyphs, 0);
-    check(glyphTotal === 0, 'D4 toolbar pins no key glyph inside any control', `kbd inside buttons = ${glyphTotal}`);
+    check(glyphTotal === 0, 'toolbar pins no key glyph inside any control', `kbd inside buttons = ${glyphTotal}`);
     const enabledTitles = toolbar.filter((b) => !b.disabled);
     check(
       enabledTitles.every((b) => b.title.length > 0),
@@ -307,7 +307,7 @@ async function main() {
     const drawBtn = toolbar.find((b) => b.testid === 'trace-toolbar-draw');
     check(
       Boolean(drawBtn && /\(D\)/.test(drawBtn.title)),
-      'D4 the D binding is discoverable in the tooltip, not painted on the button',
+      'the D binding is discoverable in the tooltip, not painted on the button',
       drawBtn ? drawBtn.title : 'draw button missing'
     );
     check(
@@ -496,11 +496,11 @@ async function main() {
     const escLeft = Object.entries(escDrafts).filter(([, v]) => v.points > 0);
     check(
       escLeft.length === 0,
-      'D3 Esc leaves zero draft geometry in all six sources',
+      'Esc leaves zero draft geometry in all six sources',
       escLeft.length ? JSON.stringify(escLeft) : JSON.stringify(escDrafts)
     );
-    check(!afterEsc.sheet && !afterEsc.hud && !afterEsc.toolbar, 'D3 Esc unmounts wizard + HUD + toolbar', JSON.stringify(afterEsc));
-    check(afterEsc.dashedDom === 0, 'D3 no dashed draft element is left in the map container DOM', `matches = ${afterEsc.dashedDom}`);
+    check(!afterEsc.sheet && !afterEsc.hud && !afterEsc.toolbar, 'Esc unmounts wizard + HUD + toolbar', JSON.stringify(afterEsc));
+    check(afterEsc.dashedDom === 0, 'no dashed draft element is left in the map container DOM', `matches = ${afterEsc.dashedDom}`);
 
     /* --------------------------------------------------- PRESETS + EDIT MODE */
     await openTraceStep(page);
@@ -517,7 +517,7 @@ async function main() {
     );
     check(
       presetItems.length === 4 && presetItems.every((p) => p.svg >= 1),
-      'D2 the presets menu lists 4 named thumbnails',
+      'the presets menu lists 4 named thumbnails',
       JSON.stringify(presetItems.map((p) => p.id))
     );
     await shoot(page, '04-presets-menu', await rectOf(page, '[data-testid="preset-menu"]'));
@@ -546,19 +546,19 @@ async function main() {
     const seededGeom = await sourceGeometry(page, ['bw-capture-boundary', 'bw-capture-boundary-line-src', 'bw-capture-vertices']);
     check(
       seeded.vertices === 6 && seededGeom['bw-capture-vertices'].features === 6,
-      'D2 L-Shape seeds 6 vertices and 6 handles on the map',
+      'L-Shape seeds 6 vertices and 6 handles on the map',
       `hud=${seeded.vertices} handles=${seededGeom['bw-capture-vertices'].features}`
     );
     check(
       seededGeom['bw-capture-boundary-line-src'].points >= 6 && seededGeom['bw-capture-boundary-line-src'].features === 1,
-      'D2 the seeded ring is stroked on the map (closed polyline)',
+      'the seeded ring is stroked on the map (closed polyline)',
       `line points = ${seededGeom['bw-capture-boundary-line-src'].points}`
     );
-    check(seeded.editActive, 'D2 seeding switches the session into EDIT mode');
+    check(seeded.editActive, 'seeding switches the session into EDIT mode');
     const editBtnAfter = await page.$eval('[data-testid="trace-toolbar-edit"]', (el) => ({ disabled: el.disabled, title: el.title }));
     check(
       !editBtnAfter.disabled && /\(E\)/.test(editBtnAfter.title),
-      'D4 the E binding lives in the Edit tooltip once the tool is usable',
+      'the E binding lives in the Edit tooltip once the tool is usable',
       `title = "${editBtnAfter.title}"`
     );
     await shoot(page, '05-seeded-edit', { x: 0, y: 0, width: 1600, height: 1000 });
@@ -620,11 +620,11 @@ async function main() {
       await sleep(220);
     }
     check(handles.length >= 2, 'edit mode exposes draggable vertex handles', `handles = ${handles.length}`);
-    check(dragged && duringArea !== beforeArea, 'D1 the HUD area updates DURING a vertex drag (not only on release)', `${beforeArea} -> ${duringArea}`);
+    check(dragged && duringArea !== beforeArea, 'the HUD area updates DURING a vertex drag (not only on release)', `${beforeArea} -> ${duringArea}`);
     if (frameStats) {
       check(
         frameStats.n >= 10 && frameStats.p95 < 16.7,
-        'D1 a clean drag costs under one 60fps frame (p95 < 16.7ms, vsync off)',
+        'a clean drag costs under one 60fps frame (p95 < 16.7ms, vsync off)',
         `p50=${frameStats.p50.toFixed(1)}ms p95=${frameStats.p95.toFixed(1)}ms max=${frameStats.max.toFixed(1)}ms frames=${frameStats.n}`
       );
     }
@@ -637,13 +637,13 @@ async function main() {
       await sleep(260);
       const hoverGeom = await sourceGeometry(page, ['bw-capture-insert-handle']);
       insertHandleShown = hoverGeom['bw-capture-insert-handle'].points === 1;
-      check(insertHandleShown, 'D1 hovering an edge reveals the mid-edge insert handle', `insert handle points = ${hoverGeom['bw-capture-insert-handle'].points}`);
+      check(insertHandleShown, 'hovering an edge reveals the mid-edge insert handle', `insert handle points = ${hoverGeom['bw-capture-insert-handle'].points}`);
       await page.mouse.click(mid.x, mid.y);
       await sleep(260);
       const afterInsert = await sourceGeometry(page, ['bw-capture-vertices']);
       check(
         afterInsert['bw-capture-vertices'].features === ringPts.length + 1,
-        'D1 clicking the edge inserts a vertex',
+        'clicking the edge inserts a vertex',
         `${ringPts.length} -> ${afterInsert['bw-capture-vertices'].features}`
       );
       // Delete with Ctrl+click (the documented twin of right-click).
@@ -658,14 +658,14 @@ async function main() {
         const afterDelete = await sourceGeometry(page, ['bw-capture-vertices']);
         check(
           afterDelete['bw-capture-vertices'].features === pts7.length - 1,
-          'D1 Ctrl+click (and right-click) deletes a vertex',
+          'Ctrl+click (and right-click) deletes a vertex',
           `${pts7.length} -> ${afterDelete['bw-capture-vertices'].features}`
         );
       } else {
-        check(false, 'D1 Ctrl+click (and right-click) deletes a vertex', 'not enough handles to delete');
+        check(false, 'Ctrl+click (and right-click) deletes a vertex', 'not enough handles to delete');
       }
     } else {
-      check(false, 'D1 mid-edge insert handle', 'not enough handles after the drag');
+      check(false, 'mid-edge insert handle', 'not enough handles after the drag');
     }
 
     const statusText = await page.$eval('[data-testid="capture-hud-status"]', (el) => el.textContent.trim());
@@ -690,7 +690,7 @@ async function main() {
     );
     const finishDrafts = await sourceGeometry(page, DRAFT_SOURCES);
     const finishLeft = Object.entries(finishDrafts).filter(([, v]) => v.points > 0);
-    check(finishLeft.length === 0, 'D3 Finish leaves no draft residue behind', finishLeft.length ? JSON.stringify(finishLeft) : 'all six sources empty');
+    check(finishLeft.length === 0, 'Finish leaves no draft residue behind', finishLeft.length ? JSON.stringify(finishLeft) : 'all six sources empty');
     check(finishStep, 'Finish advances the wizard to the frontage step');
     await shoot(page, '06-finished', { x: 0, y: 0, width: 1600, height: 1000 });
 
@@ -724,7 +724,7 @@ async function main() {
     const wantKeys = ['D', 'E', 'Tab', 'Enter', 'Backspace', 'Ctrl+Z', 'Click P1', 'Esc'];
     check(
       Boolean(method && wantKeys.every((k) => method.keys.includes(k))),
-      'D4 the Methodology reference documents every tracing shortcut',
+      'the Methodology reference documents every tracing shortcut',
       method ? JSON.stringify(method.keys) : 'section missing'
     );
     if (method) {
@@ -769,12 +769,12 @@ async function main() {
     });
     check(
       glyphAudit.tracing.length === 0 && glyphAudit.traced >= 2,
-      'D4 the tracing UI renders zero unicode glyph icons',
+      'the tracing UI renders zero unicode glyph icons',
       `${glyphAudit.traced} tracing surfaces scanned; hits = ${JSON.stringify(glyphAudit.tracing.slice(0, 5))}`
     );
     check(
       glyphAudit.shell.length === 0,
-      'D4 no emoji or dingbat is rendered anywhere in the app shell',
+      'no emoji or dingbat is rendered anywhere in the app shell',
       JSON.stringify(glyphAudit.shell.slice(0, 5))
     );
     await page.keyboard.press('Escape');

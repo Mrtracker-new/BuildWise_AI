@@ -51,7 +51,7 @@ export const SitePreviewHUD: React.FC<SitePreviewHUDProps> = ({
       <div className="vibrancy-panel rounded-[14px] shadow-lg border border-[var(--panel-border-color)] px-2.5 sm:px-3 py-1.5 sm:py-2 pointer-events-auto max-w-full">
         <div className="flex items-center gap-2 flex-wrap">
           <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--text-1)] shrink-0">
-            <Icon name="layers" size={13} className="text-[var(--accent)]" />
+            <Icon name="layers" size={13} className="text-[var(--accent-ink)]" />
             <span>Site preview</span>
           </div>
 
@@ -64,11 +64,11 @@ export const SitePreviewHUD: React.FC<SitePreviewHUDProps> = ({
           )}
 
           {!loading && error && (
-            <span className="text-[11px] text-[var(--semantic-red)] ui-font-tabular">{error}</span>
+            <span className="text-[11px] text-[var(--semantic-red-ink)] ui-font-tabular">{error}</span>
           )}
 
           {!loading && !error && preview && !preview.ok && (
-            <span className="text-[11px] text-[var(--semantic-amber)]">
+            <span className="text-[11px] text-[var(--semantic-amber-ink)]">
               Site geometry unavailable for this boundary
             </span>
           )}

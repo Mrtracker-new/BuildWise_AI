@@ -173,14 +173,14 @@ export const TraceToolbar: React.FC<TraceToolbarProps> = ({
                 t.variant === 'accent'
                   ? 'bg-[var(--accent)] text-white shadow-sm hover:brightness-[0.98] active:brightness-95 disabled:opacity-40 disabled:cursor-not-allowed'
                   :                t.active
-                  ? 'bg-[var(--accent-tint)] text-[var(--accent)]'
+                  ? 'bg-[var(--accent-tint)] text-[var(--accent-ink)]'
                   : 'text-[var(--text-1)] hover:bg-[var(--fill)] active:bg-[var(--fill-hover)] disabled:opacity-40 disabled:cursor-not-allowed'
               }`}
             >
               <Icon
                 name={t.icon}
                 size={13}
-                className={t.active && t.variant !== 'accent' ? 'text-[var(--accent)]' : t.variant === 'accent' ? 'text-white' : 'text-[var(--text-2)] group-hover:text-[var(--text-1)]'}
+                className={t.active && t.variant !== 'accent' ? 'text-[var(--accent-ink)]' : t.variant === 'accent' ? 'text-white' : 'text-[var(--text-2)] group-hover:text-[var(--text-1)]'}
               />
               {t.id === 'presets' && (
                 <Icon name="chevron-down" size={10} className={`text-[var(--text-3)] ${presetsOpen ? 'rotate-180' : ''} transition-transform`} />

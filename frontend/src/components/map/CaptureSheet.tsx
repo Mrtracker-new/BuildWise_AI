@@ -1442,7 +1442,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
       {step === 'trace' && (
         <div className="absolute top-20 left-1/2 -translate-x-1/2 z-[1000] pointer-events-none select-none">
           <div className="vibrancy-pill px-3.5 py-1.5 rounded-full shadow-lg flex items-center gap-2.5 text-[11px] font-medium text-[var(--text-1)] border border-[var(--panel-border-color)] bg-[var(--surface-overlay)] backdrop-blur-md">
-            <Icon name="crosshair" size={13} className="text-[var(--accent)] shrink-0" />
+            <Icon name="crosshair" size={13} className="text-[var(--accent-ink)] shrink-0" />
             <div className="flex items-center gap-1.5 flex-wrap">
               {vertices.length === 0 ? (
                 <>
@@ -1496,7 +1496,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
             </div>
           ) : liveEdgeInfo ? (
             <div className="vibrancy-pill px-2.5 py-1 rounded-[8px] shadow-lg border border-[var(--panel-border-color)] bg-[var(--surface-overlay)] text-[var(--text-1)] text-[11px] font-medium flex items-center gap-2 backdrop-blur-md">
-              <span className="font-semibold ui-font-tabular text-[var(--accent)]">
+              <span className="font-semibold ui-font-tabular text-[var(--accent-ink)]">
                 {liveEdgeInfo.len.toFixed(2)} m
               </span>
               <span className="text-[var(--hairline)]">|</span>
@@ -1504,12 +1504,12 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                 {liveEdgeInfo.bearing}
               </span>
               {snapMode !== 'FREE' && (
-                <span className="text-[9px] uppercase px-1 py-0.5 rounded bg-[var(--accent-tint)] text-[var(--accent)] font-bold">
+                <span className="text-[9px] uppercase px-1 py-0.5 rounded bg-[var(--accent-tint)] text-[var(--accent-ink)] font-bold">
                   {snapMode === 'ORTHOGONAL' ? '90°' : 'PAR'}
                 </span>
               )}
               {!liveRingCheck.valid && (
-                <span className="text-[10px] text-[var(--semantic-red)] font-medium flex items-center gap-0.5">
+                <span className="text-[10px] text-[var(--semantic-red-ink)] font-medium flex items-center gap-0.5">
                   <Icon name="alert-triangle" size={11} className="shrink-0" />
                   Invalid
                 </span>
@@ -1554,7 +1554,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                   i === stepIndex
                     ? 'bg-[var(--accent)] text-white'
                     : i < stepIndex
-                      ? 'bg-[var(--accent-tint)] text-[var(--accent)]'
+                      ? 'bg-[var(--accent-tint)] text-[var(--accent-ink)]'
                       : 'bg-[var(--fill)] text-[var(--text-3)]'
                 }`}
                 aria-current={i === stepIndex ? 'step' : undefined}
@@ -1630,12 +1630,12 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                 <span>{live.perimeterM.toFixed(1)} m</span>
               </div>
               {liveEdgeInfo && (
-                <div className="text-[11px] ui-font-tabular text-[var(--accent)]">
+                <div className="text-[11px] ui-font-tabular text-[var(--accent-ink)]">
                   Live edge: {liveEdgeInfo.len.toFixed(2)} m · {liveEdgeInfo.bearing}
                 </div>
               )}
               {!liveRingCheck.valid && cursor && vertices.length >= 2 && (
-                <div className="text-[11px] text-[var(--semantic-red)]">{liveRingCheck.reason}</div>
+                <div className="text-[11px] text-[var(--semantic-red-ink)]">{liveRingCheck.reason}</div>
               )}
 
               {/* EDIT-mode affordance legend: every gesture is named in plain
@@ -1646,15 +1646,15 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                   className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] text-[var(--text-3)]"
                 >
                   <span className="flex items-center gap-1">
-                    <Icon name="edit" size={11} className="text-[var(--accent)]" />
+                    <Icon name="edit" size={11} className="text-[var(--accent-ink)]" />
                     Drag a handle to move
                   </span>
                   <span className="flex items-center gap-1">
-                    <Icon name="plus" size={11} className="text-[var(--accent)]" />
+                    <Icon name="plus" size={11} className="text-[var(--accent-ink)]" />
                     Click an edge to insert
                   </span>
                   <span className="flex items-center gap-1">
-                    <Icon name="x" size={11} className="text-[var(--semantic-red)]" />
+                    <Icon name="x" size={11} className="text-[var(--semantic-red-ink)]" />
                     Right-click or <Kbd>Ctrl</Kbd>+click to delete
                   </span>
                 </div>
@@ -1695,8 +1695,8 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                   placeholder='{"type":"Polygon",...} or <kml>...'
                   className="mt-1.5 w-full text-[11px] font-mono p-2 rounded-[6px] bg-[var(--fill)] border border-[var(--hairline)] text-[var(--text-1)] outline-none focus:ring-1 focus:ring-[var(--accent)]"
                 />
-                {importError && <div className="text-[11px] text-[var(--semantic-red)] mt-1">{importError}</div>}
-                <button type="button" onClick={handleImport} title="Import the pasted GeoJSON or KML boundary" className="mt-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-[6px] bg-[var(--accent-tint)] text-[var(--accent)] inline-flex items-center gap-1.5">
+                {importError && <div className="text-[11px] text-[var(--semantic-red-ink)] mt-1">{importError}</div>}
+                <button type="button" onClick={handleImport} title="Import the pasted GeoJSON or KML boundary" className="mt-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-[6px] bg-[var(--accent-tint)] text-[var(--accent-ink)] inline-flex items-center gap-1.5">
                   <Icon name="upload" size={12} />
                   Import
                 </button>
@@ -1748,7 +1748,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
               {hoveredEdge !== null && edgeRows[hoveredEdge] && (
                 <div
                   data-testid="frontage-hover-readout"
-                  className="text-[11px] ui-font-tabular text-[var(--accent)] font-semibold"
+                  className="text-[11px] ui-font-tabular text-[var(--accent-ink)] font-semibold"
                 >
                   {edgeRows[hoveredEdge].label} · click to pick
                 </div>
@@ -1773,7 +1773,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                         onClick={() => pickEdge(row.index)}
                         className={`w-full flex items-center justify-between gap-2 rounded-[8px] px-2 py-1 text-[11px] ui-font-tabular text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
                           isHovered
-                            ? 'bg-[var(--accent-tint)] text-[var(--accent)]'
+                            ? 'bg-[var(--accent-tint)] text-[var(--accent-ink)]'
                             : 'bg-[var(--fill)] text-[var(--text-2)] hover:bg-[var(--fill-hover)]'
                         }`}
                       >
@@ -1787,8 +1787,8 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                           <span
                             className={`px-1.5 py-0.5 rounded-full text-[9px] font-semibold tracking-[0.06em] ${
                               role === 'PICKED'
-                                ? 'bg-[var(--semantic-green)]/15 text-[var(--semantic-green)]'
-                                : 'bg-[var(--semantic-amber)]/15 text-[var(--semantic-amber)]'
+                                ? 'bg-[var(--semantic-green)]/15 text-[var(--semantic-green-ink)]'
+                                : 'bg-[var(--semantic-amber)]/15 text-[var(--semantic-amber-ink)]'
                             }`}
                           >
                             {role}
@@ -1802,7 +1802,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
               {missHint && (
                 <div
                   data-testid="frontage-miss-hint"
-                  className="text-[11px] text-[var(--semantic-amber)]"
+                  className="text-[11px] text-[var(--semantic-amber-ink)]"
                 >
                   Click directly on an edge - each label shows its length and bearing.
                 </div>
@@ -1816,7 +1816,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                 </div>
               )}
               {!roadLoading && roadError && (
-                <div className="text-[11px] text-[var(--semantic-amber)]">{roadError}</div>
+                <div className="text-[11px] text-[var(--semantic-amber-ink)]">{roadError}</div>
               )}
               {!roadLoading && !roadError && road?.found && road.road && (
                 <div className="text-[11px] ui-font-tabular text-[var(--text-2)]">
@@ -1839,7 +1839,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                     </div>
                     {fromSuggestion ? (
                       <div className="flex items-center gap-1.5">
-                        <span className="px-1.5 py-0.5 rounded-full text-[9px] font-semibold tracking-[0.06em] bg-[var(--semantic-amber)]/15 text-[var(--semantic-amber)]">ASSUMED</span>
+                        <span className="px-1.5 py-0.5 rounded-full text-[9px] font-semibold tracking-[0.06em] bg-[var(--semantic-amber)]/15 text-[var(--semantic-amber-ink)]">ASSUMED</span>
                         <span className="text-[11px] text-[var(--text-2)]">Suggested from OSM road bearing</span>
                         <button
                           type="button"
@@ -1847,14 +1847,14 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                             setFrontageEdge(suggestion!.edgeIndex);
                             setFrontageConfirmed(true);
                           }}
-                          className="text-[11px] font-semibold px-2 py-0.5 rounded-[6px] bg-[var(--accent-tint)] text-[var(--accent)]"
+                          className="text-[11px] font-semibold px-2 py-0.5 rounded-[6px] bg-[var(--accent-tint)] text-[var(--accent-ink)]"
                         >
                           Accept
                         </button>
                       </div>
                     ) : frontageConfirmed && frontageEdge !== null ? (
                       <div className="flex items-center gap-1.5">
-                        <span className="px-1.5 py-0.5 rounded-full text-[9px] font-semibold tracking-[0.06em] bg-[var(--semantic-green)]/15 text-[var(--semantic-green)]">VERIFIED</span>
+                        <span className="px-1.5 py-0.5 rounded-full text-[9px] font-semibold tracking-[0.06em] bg-[var(--semantic-green)]/15 text-[var(--semantic-green-ink)]">VERIFIED</span>
                         <span className="text-[11px] text-[var(--text-2)]">Confirmed by you on the map</span>
                       </div>
                     ) : null}
@@ -1889,7 +1889,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                 <span className="px-2 py-0.5 rounded-full bg-[var(--fill)] text-[11px] ui-font-tabular text-[var(--text-1)]">{live.areaSqm.toFixed(1)} m²</span>
                 <span className="px-2 py-0.5 rounded-full bg-[var(--fill)] text-[11px] ui-font-tabular text-[var(--text-1)]">{live.perimeterM.toFixed(1)} m</span>
                 <span className="px-2 py-0.5 rounded-full bg-[var(--fill)] text-[11px] ui-font-tabular text-[var(--text-1)]">{live.vertexCount} vertices</span>
-                <span className="px-2 py-0.5 rounded-full bg-[var(--accent-tint)] text-[11px] text-[var(--accent)]">{String(live.shapeType).replace('_', '-')}</span>
+                <span className="px-2 py-0.5 rounded-full bg-[var(--accent-tint)] text-[11px] text-[var(--accent-ink)]">{String(live.shapeType).replace('_', '-')}</span>
               </div>
               {activeFrontage !== null && (
                 <div className="text-[11px] text-[var(--text-2)] ui-font-tabular">
