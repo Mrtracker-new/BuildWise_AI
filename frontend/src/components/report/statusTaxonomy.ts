@@ -7,12 +7,6 @@ import type { FactorScore } from '../../services/types';
  */
 export type ProvenanceStatus = 'VERIFIED' | 'CALCULATED' | 'ASSUMED' | 'UNKNOWN';
 
-/** One census entry per rendered factor badge. */
-export interface FactorProvenanceEntry {
-  factor_id: string;
-  status: ProvenanceStatus;
-}
-
 /** Multiple meanings disambiguated per context — never one word, two meanings. */
 export interface LegendRow {
   status: ProvenanceStatus;
@@ -76,18 +70,6 @@ export function deriveFactorProvenance(factor: FactorScore): ProvenanceStatus {
     return 'ASSUMED';
   }
   return 'VERIFIED';
-}
-
-/** Full census over the factor list — strip counts must equal this multiset. */
-export function factorProvenanceCensus(factors: FactorScore[]): FactorProvenanceEntry[] {
-  return factors.map((f) => ({ factor_id: f.factor_id, status: deriveFactorProvenance(f) }));
-}
-
-/** Counts keyed by status, in canonical display order. */
-export function countProvenance(entries: FactorProvenanceEntry[]): Record<ProvenanceStatus, number> {
-  const counts: Record<ProvenanceStatus, number> = { VERIFIED: 0, CALCULATED: 0, ASSUMED: 0, UNKNOWN: 0 };
-  for (const e of entries) counts[e.status] += 1;
-  return counts;
 }
 
 /** Microcopy for the popover fallback note on an ASSUMED factor. */

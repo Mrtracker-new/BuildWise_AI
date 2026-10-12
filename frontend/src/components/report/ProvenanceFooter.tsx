@@ -38,9 +38,9 @@ export const ProvenanceFooter: React.FC<ProvenanceFooterProps> = ({ data }) => {
             <div key={row.status} className="text-[11px] leading-snug">
               <span
                 className={`font-bold mr-1.5 ${
-                  row.style === 'verified' ? 'text-[var(--semantic-green)]'
-                  : row.style === 'calculated' ? 'text-[var(--accent)]'
-                  : row.style === 'assumed' ? 'text-[var(--semantic-amber)]'
+                  row.style === 'verified' ? 'text-[var(--semantic-green-ink)]'
+                  : row.style === 'calculated' ? 'text-[var(--accent-ink)]'
+                  : row.style === 'assumed' ? 'text-[var(--semantic-amber-ink)]'
                   : 'text-[var(--text-2)]'
                 }`}
               >

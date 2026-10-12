@@ -32,7 +32,15 @@ export const SeismicZoneChip: React.FC<SeismicZoneChipProps> = ({ seismic }) => 
   const isHigh = zone.includes('V') || zone.includes('IV');
   const isModerate = zone.includes('III');
 
+  // Two roles, two tokens: the bright hue paints the dot, the -ink hue paints
+  // the text (the bright green/amber/red measure 2.0-3.0:1 as 12px text on the
+  // chip's own 12% tint).
   const color = isHigh ? 'var(--semantic-red)' : isModerate ? 'var(--semantic-amber)' : 'var(--semantic-green)';
+  const ink = isHigh
+    ? 'var(--semantic-red-ink)'
+    : isModerate
+    ? 'var(--semantic-amber-ink)'
+    : 'var(--semantic-green-ink)';
   const bg = isHigh ? 'rgba(255,59,48,0.12)' : isModerate ? 'rgba(255,159,10,0.12)' : 'rgba(52,199,89,0.12)';
 
   return (
@@ -41,7 +49,7 @@ export const SeismicZoneChip: React.FC<SeismicZoneChipProps> = ({ seismic }) => 
       data-zone-assessed="true"
       data-zone-value={zone}
       className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[12px] font-semibold shrink-0"
-      style={{ backgroundColor: bg, color }}
+      style={{ backgroundColor: bg, color: ink }}
       title={`${zone} · Zone factor Z=${seismic.zone_factor?.toFixed(2) ?? '—'} per ${seismic.standard}`}
     >
       <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} aria-hidden="true" />

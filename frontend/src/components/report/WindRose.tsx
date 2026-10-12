@@ -95,7 +95,7 @@ function Row({ label, value, tone }: { label: string; value: string; tone?: 'acc
       <span className="text-[11px] text-[var(--text-3)]">{label}</span>
       <span
         className={`${TABULAR_NUMS_CLASS} text-[12px] font-semibold ${
-          tone === 'accent' ? 'text-[var(--accent)]' : tone === 'green' ? 'text-[var(--semantic-green)]' : 'text-[var(--text-1)]'
+          tone === 'accent' ? 'text-[var(--accent-ink)]' : tone === 'green' ? 'text-[var(--semantic-green-ink)]' : 'text-[var(--text-1)]'
         }`}
       >
         {value}

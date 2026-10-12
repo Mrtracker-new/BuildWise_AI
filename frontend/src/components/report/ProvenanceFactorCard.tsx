@@ -11,6 +11,12 @@ interface ProvenanceFactorCardProps {
   rank?: number;
   /** Server-verified per-source fetch provenance (real timestamps). */
   dataSources?: Record<string, DataSourceProvenance>;
+  /**
+   * 'full'    — the report tab card (rank + disclosure popover).
+   * 'compact' — the sidebar list (no rank; tighter padding).
+   * 'print'   — the PDF/print stack (no interactive popover; badges print).
+   */
+  variant?: 'full' | 'compact' | 'print';
 }
 
 function getFactorIcon(id: string): IconName {
@@ -56,7 +62,17 @@ const FACTOR_SOURCE_KEY: Record<string, string> = {
   environmental_comfort: 'climate',
 };
 
-export const ProvenanceFactorCard: React.FC<ProvenanceFactorCardProps> = ({ factor, rank, dataSources }) => {
+export const ProvenanceFactorCard: React.FC<ProvenanceFactorCardProps> = ({
+  factor,
+  rank,
+  dataSources,
+  variant = 'full',
+}) => {
+  const isCompact = variant === 'compact';
+  const isPrint = variant === 'print';
+  const showPopover = !isPrint;
+  const showRank = !isCompact && !isPrint && rank !== undefined;
+
   const status = deriveFactorProvenance(factor);
   const isUnknown = status === 'UNKNOWN';
   const isAssumed = status === 'ASSUMED';
@@ -94,12 +110,14 @@ export const ProvenanceFactorCard: React.FC<ProvenanceFactorCardProps> = ({ fact
   return (
     <div
       data-testid={`factor-card-${factor.factor_id}`}
-      className="flex flex-col gap-1.5 py-3 min-w-0 first:pt-1 last:pb-1"
+      className={`flex flex-col gap-1.5 min-w-0 first:pt-1 last:pb-1 ${
+        isCompact ? 'py-2.5' : 'py-3'
+      }`}
     >
       <div className="flex items-center justify-between gap-2 min-w-0">
         <div className="flex items-center gap-2 min-w-0 flex-wrap">
           <Icon name={getFactorIcon(factor.factor_id)} size={14} className="text-[var(--text-2)] shrink-0" />
-          {rank !== undefined && (
+          {showRank && (
             <span className="text-[10px] font-semibold text-[var(--text-3)] tabular-nums order-first">
               {rank}
             </span>
@@ -111,7 +129,7 @@ export const ProvenanceFactorCard: React.FC<ProvenanceFactorCardProps> = ({ fact
             w&nbsp;{Math.round(factor.weight * 100)}%
           </span>
           <StatusBadge status={status} />
-          <MethodologyPopover factorName={factor.name} payload={payload} />
+          {showPopover && <MethodologyPopover factorName={factor.name} payload={payload} />}
         </div>
         <div className="flex items-center gap-2 text-right shrink-0">
           <span className="text-[11px] text-[var(--text-3)] tabular-nums">

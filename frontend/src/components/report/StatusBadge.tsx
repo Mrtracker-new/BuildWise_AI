@@ -15,17 +15,17 @@ const STYLES: Record<
 > = {
   VERIFIED: {
     icon: 'badge-check',
-    className: 'bg-[var(--semantic-green)]/10 text-[var(--semantic-green)] border border-[var(--semantic-green)]/30',
+    className: 'bg-[var(--semantic-green)]/10 text-[var(--semantic-green-ink)] border border-[var(--semantic-green)]/30',
     dashed: false,
   },
   CALCULATED: {
     icon: 'info',
-    className: 'bg-[var(--accent-tint)] text-[var(--accent)] border border-[var(--accent)]/30',
+    className: 'bg-[var(--accent-tint)] text-[var(--accent-ink)] border border-[var(--accent)]/30',
     dashed: false,
   },
   ASSUMED: {
     icon: 'alert-triangle',
-    className: 'bg-[var(--semantic-amber)]/10 text-[var(--semantic-amber)] border border-[var(--semantic-amber)]/30',
+    className: 'bg-[var(--semantic-amber)]/10 text-[var(--semantic-amber-ink)] border border-[var(--semantic-amber)]/30',
     dashed: false,
   },
   UNKNOWN: {

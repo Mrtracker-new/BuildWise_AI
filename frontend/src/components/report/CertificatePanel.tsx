@@ -10,9 +10,9 @@ interface CertificatePanelProps {
 type GateStatus = 'PASS' | 'WARN' | 'FAIL' | 'N/A';
 
 const CHIP_STYLES: Record<GateStatus, string> = {
-  PASS: 'bg-[var(--semantic-green)]/10 text-[var(--semantic-green)] border border-[var(--semantic-green)]/30',
-  WARN: 'bg-[var(--semantic-amber)]/10 text-[var(--semantic-amber)] border border-[var(--semantic-amber)]/30',
-  FAIL: 'bg-[var(--semantic-red)]/10 text-[var(--semantic-red)] border border-[var(--semantic-red)]/30',
+  PASS: 'bg-[var(--semantic-green)]/10 text-[var(--semantic-green-ink)] border border-[var(--semantic-green)]/30',
+  WARN: 'bg-[var(--semantic-amber)]/10 text-[var(--semantic-amber-ink)] border border-[var(--semantic-amber)]/30',
+  FAIL: 'bg-[var(--semantic-red)]/10 text-[var(--semantic-red-ink)] border border-[var(--semantic-red)]/30',
   'N/A': 'bg-[var(--fill)] text-[var(--text-2)] border border-dashed border-[var(--hairline)]',
 };
 
@@ -31,7 +31,7 @@ export const CertificatePanel: React.FC<CertificatePanelProps> = ({ qa }) => {
     <section
       data-testid="certificate-panel"
       aria-label="Universal validation gate certificate"
-      className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-3 w-full min-w-0"
+      className="bw-card rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-3 w-full min-w-0"
     >
       <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
@@ -43,10 +43,10 @@ export const CertificatePanel: React.FC<CertificatePanelProps> = ({ qa }) => {
         <span
           className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold ${
             overall === 'PASS'
-              ? 'bg-[var(--semantic-green)]/10 text-[var(--semantic-green)]'
+              ? 'bg-[var(--semantic-green)]/10 text-[var(--semantic-green-ink)]'
               : overall === 'WARN'
-              ? 'bg-[var(--semantic-amber)]/10 text-[var(--semantic-amber)]'
-              : 'bg-[var(--semantic-red)]/10 text-[var(--semantic-red)]'
+              ? 'bg-[var(--semantic-amber)]/10 text-[var(--semantic-amber-ink)]'
+              : 'bg-[var(--semantic-red)]/10 text-[var(--semantic-red-ink)]'
           }`}
         >
           {overall}
@@ -90,7 +90,7 @@ export const CertificatePanel: React.FC<CertificatePanelProps> = ({ qa }) => {
         {relaxZero && (
           <span
             title="No solver relaxation or dimensional exception was used anywhere in this layout"
-            className="font-medium text-[var(--semantic-green)]"
+            className="font-medium text-[var(--semantic-green-ink)]"
           >
             Zero relaxations applied
           </span>

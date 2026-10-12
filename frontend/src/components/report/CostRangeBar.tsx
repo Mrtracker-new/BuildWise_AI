@@ -44,7 +44,7 @@ export const CostRangeBar: React.FC<CostRangeBarProps> = ({ cost }) => {
         </div>
         <div className="flex justify-between mt-1.5 text-[11px] text-[var(--text-3)]">
           <span className={TABULAR_NUMS_CLASS}>{fmt(min)}</span>
-          <span className={`${TABULAR_NUMS_CLASS} font-semibold text-[var(--accent)]`} style={{ marginLeft: 'calc(' + totalPos + '% - 3ch)' }}>
+          <span className={`${TABULAR_NUMS_CLASS} font-semibold text-[var(--accent-ink)]`} style={{ marginLeft: 'calc(' + totalPos + '% - 3ch)' }}>
             {fmt(total)}
           </span>
           <span className={TABULAR_NUMS_CLASS}>{fmt(max)}</span>

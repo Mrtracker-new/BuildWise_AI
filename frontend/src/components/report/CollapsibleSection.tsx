@@ -71,7 +71,7 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
-        className={`w-full flex items-center justify-between gap-2 text-left cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 ${
+        className={`w-full flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-left cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 ${
           isCard
             ? 'px-4 py-3 rounded-[14px]'
             : 'py-1.5 rounded-[8px]'
@@ -79,13 +79,16 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
         aria-expanded={open}
         aria-controls={contentId}
       >
-        <span className="flex items-center gap-2 min-w-0">
+        {/* The title owns the first line; the meta slot wraps to its own line
+            when the panel is narrow (in the 340px sidebar the meta pill used to
+            squeeze "Building Configuration" down to "Building C…"). */}
+        <span className="flex items-center gap-2 min-w-0 flex-1 basis-[max-content]">
           {icon && <Icon name={icon} size={15} className="text-[var(--text-2)] shrink-0" />}
           <span className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight truncate">
             {title}
           </span>
         </span>
-        <span className="flex items-center gap-2 shrink-0">
+        <span className="flex items-center gap-2 shrink-0 ml-auto">
           {meta}
           <Icon
             name="chevron-down"

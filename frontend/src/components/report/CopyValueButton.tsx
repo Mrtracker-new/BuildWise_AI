@@ -38,7 +38,7 @@ export const CopyValueButton: React.FC<CopyValueButtonProps> = ({ value, label, 
       title={`Copy ${label}`}
       className={`print-hide inline-flex w-5 h-5 rounded-[5px] items-center justify-center shrink-0 text-[var(--text-3)] hover:text-[var(--text-1)] hover:bg-[var(--fill-hover)] transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 ${className}`}
     >
-      <Icon name={copied ? 'check' : 'copy'} size={11} className={copied ? 'text-[var(--semantic-green)]' : ''} />
+      <Icon name={copied ? 'check' : 'copy'} size={11} className={copied ? 'text-[var(--semantic-green-ink)]' : ''} />
     </button>
   );
 };
