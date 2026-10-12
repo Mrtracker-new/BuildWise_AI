@@ -26,7 +26,6 @@ import {
   Z_INDEX,
   RADII,
   HIT_TARGETS,
-  type MotionToken,
 } from './tokens';
 
 /* ================================================================== */
@@ -242,47 +241,17 @@ export const ShortcutHint: React.FC<{ shortcutKey: string; className?: string }>
 );
 
 /* ================================================================== */
-/* 3. SURFACES — GlassPanel (vibrancy)                                 */
-/* ================================================================== */
-
-export type GlassLevel = 'panel' | 'pill' | 'hud';
-
-export interface GlassPanelProps extends React.HTMLAttributes<HTMLDivElement> {
-  /** Vibrancy level: panel (chrome), pill (toolbar chips), hud (overlays) */
-  level?: GlassLevel;
-  motion?: MotionToken;
-}
-
-const GLASS_CLASS: Record<GlassLevel, string> = {
-  panel: 'vibrancy-panel',
-  pill: 'vibrancy-pill',
-  hud: 'vibrancy-hud',
-};
-
-export const GlassPanel: React.FC<GlassPanelProps> = ({
-  level = 'panel',
-  motion = 'none',
-  className = '',
-  children,
-  ...rest
-}) => (
-  <div className={`${GLASS_CLASS[level]} ${ui(motion)} ${className}`} {...rest}>
-    {children}
-  </div>
-);
-
-/* ================================================================== */
-/* 4. PillChip — status / summary chips (tabular numerals built in)    */
+/* 3. PillChip — status / summary chips (tabular numerals built in)    */
 /* ================================================================== */
 
 export type ChipTone = 'neutral' | 'accent' | 'success' | 'warning' | 'critical';
 
 const CHIP_TONE_CLASS: Record<ChipTone, string> = {
   neutral: 'bg-[var(--fill)] text-[var(--text-1)]',
-  accent: 'bg-[var(--accent-tint)] text-[var(--accent)]',
-  success: 'bg-[var(--accent-tint)] text-[var(--semantic-green)]',
-  warning: 'bg-[var(--accent-tint)] text-[var(--semantic-amber)]',
-  critical: 'bg-[var(--accent-tint)] text-[var(--semantic-red)]',
+  accent: 'bg-[var(--accent-tint)] text-[var(--accent-ink)]',
+  success: 'bg-[var(--accent-tint)] text-[var(--semantic-green-ink)]',
+  warning: 'bg-[var(--accent-tint)] text-[var(--semantic-amber-ink)]',
+  critical: 'bg-[var(--accent-tint)] text-[var(--semantic-red-ink)]',
 };
 
 export interface PillChipProps extends React.HTMLAttributes<HTMLSpanElement> {
@@ -328,7 +297,7 @@ export const PillChip: React.FC<PillChipProps> = ({
 );
 
 /* ================================================================== */
-/* 5. SegmentedControl — iOS style, roving focus, arrow keys           */
+/* 4. SegmentedControl — iOS style, roving focus, arrow keys           */
 /* ================================================================== */
 
 export interface SegmentedOption<T extends string = string> {
@@ -337,6 +306,9 @@ export interface SegmentedOption<T extends string = string> {
   sublabel?: string;
   icon?: React.ReactNode;
   disabled?: boolean;
+  title?: string;
+  /** Count pill rendered after the label (e.g. a warning count). */
+  badge?: string | number;
 }
 
 export interface SegmentedControlProps<T extends string = string> {
@@ -346,8 +318,26 @@ export interface SegmentedControlProps<T extends string = string> {
   size?: 'sm' | 'md';
   ariaLabel: string;
   className?: string;
+  /**
+   * 'radiogroup' (default) for value pickers; 'tablist' for tab bars, which
+   * swaps aria-checked for aria-selected and wires aria-controls to the panel.
+   */
+  role?: 'radiogroup' | 'tablist';
+  /** Panel id each tab controls (role="tablist" only). */
+  panelId?: string;
+  /** DOM-id prefix applied per tab button, e.g. `report-tab` (tablist only). */
+  optionIdPrefix?: string;
+  /** Equal-width grid cells instead of content-sized flex cells. */
+  stretch?: boolean;
+  /** Render a sliding accent pill behind the selected option (macOS toolbar). */
+  indicator?: boolean;
 }
 
+/**
+ * iOS-style segmented control. One primitive serves every segmented surface:
+ * value pickers (role=radiogroup) and tab bars (role=tablist), with roving
+ * tabindex and arrow-key navigation. Tokenized motion + focus ring.
+ */
 export function SegmentedControl<T extends string = string>({
   options,
   value,
@@ -355,9 +345,62 @@ export function SegmentedControl<T extends string = string>({
   size = 'md',
   ariaLabel,
   className = '',
+  role = 'radiogroup',
+  panelId,
+  optionIdPrefix,
+  stretch = false,
+  indicator = false,
 }: SegmentedControlProps<T>): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
   const sizeCls = size === 'sm' ? 'p-[2px] text-[11px]' : 'p-[3px] text-[12px]';
+  const isTablist = role === 'tablist';
+
+  // Reduced motion is an explicit branch, not a stylesheet hope: the global rule
+  // only collapses the DURATION, and `transition-property` defaults to `all`,
+  // so merely dropping the utility still leaves a 0.01ms transition on `all`.
+  // The pill is then composited, which holds its RENDERED box at the old
+  // position for two frames after the selection changes (the inline transform
+  // is already correct in that first frame — measured: transform updated at
+  // raf1, rect only at raf3). `transition-none` sets `transition-property: none`,
+  // so under reduced motion the pill snaps in the same frame as the selection.
+  const reducedMotion = useReducedMotion();
+
+  // Sliding accent pill: measure the selected option and animate the pill to it.
+  const [pill, setPill] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const measurePill = useCallback(() => {
+    if (!indicator) return;
+    const root = rootRef.current;
+    if (!root) return;
+    const el = root.querySelector<HTMLElement>(`[data-seg-id="${value}"]`);
+    if (!el) return;
+    const next = { left: el.offsetLeft, top: el.offsetTop, width: el.offsetWidth, height: el.offsetHeight };
+    setPill((prev) =>
+      prev && prev.left === next.left && prev.top === next.top && prev.width === next.width && prev.height === next.height
+        ? prev
+        : next
+    );
+  }, [indicator, value]);
+
+  useLayoutEffect(() => {
+    measurePill();
+  }, [measurePill, options.length]);
+
+  useEffect(() => {
+    if (!indicator) return;
+    const root = rootRef.current;
+    if (!root) return;
+    const onResize = () => measurePill();
+    window.addEventListener('resize', onResize);
+    let ro: ResizeObserver | undefined;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(onResize);
+      ro.observe(root);
+    }
+    return () => {
+      window.removeEventListener('resize', onResize);
+      ro?.disconnect();
+    };
+  }, [indicator, measurePill]);
 
   const moveFocus = (dir: 1 | -1) => {
     const enabled = options.filter((o) => !o.disabled);
@@ -374,19 +417,44 @@ export function SegmentedControl<T extends string = string>({
   return (
     <div
       ref={rootRef}
-      role="radiogroup"
+      role={role}
       aria-label={ariaLabel}
-      className={`inline-flex items-stretch rounded-[9px] bg-[var(--fill)] ${sizeCls} ${className}`}
+      className={`relative ${stretch ? 'grid' : 'inline-flex items-stretch'} rounded-[9px] bg-[var(--fill)] ${sizeCls} ${className}`}
+      style={stretch ? { gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` } : undefined}
     >
+      {indicator && pill && (
+        /* The indicator is positioned with translate() rather than left/top and
+           only ever animates composited properties: an in-flow or left/top
+           animation on a visible box is an invisible-to-the-user but REAL
+           layout shift (measured CLS 0.0005 per tab switch on the report tab
+           bar). With equal-width (stretch) segments the box is also constant
+           sized, so a switch costs no layout at all. */
+        <span
+          aria-hidden="true"
+          className={`absolute left-0 top-0 rounded-[7px] bg-[var(--segmented-active-bg)] bw-segmented-active-shadow pointer-events-none ${
+            reducedMotion ? 'transition-none' : 'transition-[transform,width,height] duration-200 ease-apple'
+          }`}
+          style={{
+            transform: `translate(${pill.left}px, ${pill.top}px)`,
+            width: pill.width,
+            height: pill.height,
+          }}
+          data-testid="segmented-indicator"
+        />
+      )}
       {options.map((opt) => {
         const selected = opt.id === value;
         return (
           <button
             key={opt.id}
             type="button"
-            role="radio"
+            role={isTablist ? 'tab' : 'radio'}
             data-seg-id={opt.id}
-            aria-checked={selected}
+            id={isTablist && optionIdPrefix ? `${optionIdPrefix}-${opt.id}` : undefined}
+            aria-selected={isTablist ? selected : undefined}
+            aria-checked={isTablist ? undefined : selected}
+            aria-controls={isTablist ? panelId : undefined}
+            title={opt.title}
             tabIndex={selected ? 0 : -1}
             disabled={opt.disabled}
             onClick={() => onChange(opt.id)}
@@ -399,14 +467,24 @@ export function SegmentedControl<T extends string = string>({
                 moveFocus(-1);
               }
             }}
-            className={`relative flex flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-[7px] px-2.5 font-medium ${ui('base')} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:opacity-40 ${
+            className={`relative z-[1] flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-[7px] px-2.5 font-medium ${ui('base')} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:opacity-40 ${
               selected
-                ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
+                ? `text-[var(--segmented-active-label)] font-semibold ${indicator ? '' : 'bg-[var(--segmented-active-bg)] bw-segmented-active-shadow'}`
                 : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
             } ${opt.disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
           >
             {opt.icon}
-            <span>{opt.label}</span>
+            <span className="truncate">{opt.label}</span>
+            {opt.badge !== undefined && opt.badge !== null && opt.badge !== 0 && (
+              <span
+                className={`inline-flex items-center justify-center min-w-[1.1rem] h-[1.1rem] px-1 rounded-full text-[10px] font-bold ui-font-tabular shrink-0 ${
+                  selected ? 'bg-[var(--accent)] text-white' : 'bg-[var(--accent-tint)] text-[var(--accent-ink)]'
+                }`}
+                title={`${opt.badge} warning${Number(opt.badge) === 1 ? '' : 's'}`}
+              >
+                {opt.badge}
+              </span>
+            )}
             {opt.sublabel && (
               <span
                 className={`hidden text-[10px] font-normal sm:inline ${
@@ -424,7 +502,7 @@ export function SegmentedControl<T extends string = string>({
 }
 
 /* ================================================================== */
-/* 6. Sheet — centered modal with scrim (ESC, focus, scroll lock)      */
+/* 5. Sheet — centered modal with scrim (ESC, focus, scroll lock)      */
 /* ================================================================== */
 
 export interface SheetProps {
@@ -610,10 +688,10 @@ export const ToastViewport: React.FC = () => {
               aria-hidden="true"
               className={`shrink-0 ${
                 t.tone === 'success'
-                  ? 'text-[var(--semantic-green)]'
+                  ? 'text-[var(--semantic-green-ink)]'
                   : t.tone === 'warning'
-                    ? 'text-[var(--semantic-amber)]'
-                    : 'text-[var(--semantic-red)]'
+                    ? 'text-[var(--semantic-amber-ink)]'
+                    : 'text-[var(--semantic-red-ink)]'
               }`}
             >
               <path d={TOAST_TONE_PATH[t.tone]} stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
@@ -741,7 +819,7 @@ export const Stepper: React.FC<StepperProps> = ({
 };
 
 /* ================================================================== */
-/* 10. IconButton + ActionButton — focus ring, hit target, motion      */
+/* 10. IconButton — focus ring, hit target, motion                     */
 /* ================================================================== */
 
 export interface IconButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -762,7 +840,7 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(f
       aria-label={label}
       aria-pressed={active}
       className={`relative flex items-center justify-center text-[var(--text-1)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:opacity-40 disabled:hover:bg-transparent ${
-        active ? 'bg-[var(--accent-tint)] text-[var(--accent)]' : 'bg-[var(--fill)] hover:bg-[var(--fill-hover)]'
+        active ? 'bg-[var(--accent-tint)] text-[var(--accent-ink)]' : 'bg-[var(--fill)] hover:bg-[var(--fill-hover)]'
       } ${ui('base')} active:scale-[0.92] ${className}`}
       style={{
         width: HIT_TARGETS.iconButton,
@@ -774,30 +852,6 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(f
     >
       {children}
     </button>
-  );
-});
-
-export interface ActionButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary';
-}
-
-export const ActionButton = React.forwardRef<HTMLButtonElement, ActionButtonProps>(function ActionButton(
-  { variant = 'primary', className = '', type = 'button', ...rest },
-  ref
-) {
-  const variantCls =
-    variant === 'primary'
-      ? 'bg-[var(--accent)] text-white hover:brightness-105'
-      : 'bg-[var(--fill)] text-[var(--text-1)] hover:bg-[var(--fill-hover)]';
-  return (
-    <button
-      ref={ref}
-      type={type}
-      className={`h-8 select-none rounded-[10px] px-3.5 text-[12.5px] font-semibold active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 ${variantCls} ${ui(
-        'base'
-      )} ${className}`}
-      {...rest}
-    />
   );
 });
 
@@ -1078,7 +1132,7 @@ export const Select: React.FC<SelectProps> = ({
                     isDisabled
                       ? 'cursor-not-allowed text-[var(--text-3)] opacity-60'
                       : isActive
-                      ? 'font-semibold text-[var(--accent)]'
+                      ? 'font-semibold text-[var(--accent-ink)]'
                       : 'text-[var(--text-1)] hover:bg-[var(--fill)]'
                   }`}
                 >
@@ -1090,7 +1144,7 @@ export const Select: React.FC<SelectProps> = ({
                       </span>
                     )}
                     {isDisabled && opt.disabledReason && (
-                      <span className="block truncate text-[11px] font-normal text-[var(--semantic-amber)] leading-snug">
+                      <span className="block truncate text-[11px] font-normal text-[var(--semantic-amber-ink)] leading-snug">
                         {opt.disabledReason}
                       </span>
                     )}

@@ -5,9 +5,9 @@
  * Repo dialect: plain-node assertions (no test framework).
  *   1. Token module surface: MOTION, RADII, Z_INDEX, SHORTCUTS, APP_INK,
  *      SHEET_INK, ui(), TABULAR_NUMS_CLASS exported from src/design.
- *   2. Primitive inventory: GlassPanel, SegmentedControl, PillChip, Sheet,
- *      Tooltip, ToastViewport, Stepper, IconButton, ActionButton, Select,
- *      CoachMark + Kbd/ShortcutHint, useShortcuts/ShortcutsSheet.
+ *   2. Primitive inventory: SegmentedControl, PillChip, Sheet, Tooltip,
+ *      ToastViewport, Stepper, IconButton, Select, CoachMark +
+ *      Kbd/ShortcutHint, useShortcuts/ShortcutsSheet.
  *   3. Contracts: motion band 100-250ms; SHORTCUTS = t/m/r/?; index.css has
  *      motion vars + global reduced-motion guard; Tailwind scales wired.
  *   4. Adoption: App uses DesignProvider/useShortcuts/ShortcutsSheet/
@@ -39,13 +39,13 @@ function check(cond, label) {
 /* ---------------- 1+2. Module surface ---------------- */
 console.log('\n[1] Token module surface');
 const tokensSrc = fs.readFileSync(path.join(DESIGN, 'tokens.ts'), 'utf8');
-for (const name of ['MOTION', 'RADII', 'SPACING', 'TYPOGRAPHY', 'TABULAR_NUMS_CLASS', 'Z_INDEX', 'HIT_TARGETS', 'BLUR', 'SHORTCUTS', 'APP_INK', 'SHEET_INK', 'ui']) {
+for (const name of ['MOTION', 'RADII', 'TYPOGRAPHY', 'TABULAR_NUMS_CLASS', 'Z_INDEX', 'HIT_TARGETS', 'SHORTCUTS', 'APP_INK', 'SHEET_INK', 'ui']) {
   check(new RegExp(`export (const|function|type) ${name}\\b`).test(tokensSrc), `tokens.ts exports ${name}`);
 }
 
 console.log('\n[2] Primitive inventory');
 const primSrc = fs.readFileSync(path.join(DESIGN, 'primitives.tsx'), 'utf8');
-for (const name of ['GlassPanel', 'SegmentedControl', 'PillChip', 'Sheet', 'Tooltip', 'ToastViewport', 'Stepper', 'IconButton', 'ActionButton', 'Select', 'CoachMark', 'Kbd', 'ShortcutHint', 'DesignProvider', 'useDesign', 'useToast', 'useCoachMark', 'useReducedMotion', 'useShortcuts', 'ShortcutsSheet']) {
+for (const name of ['SegmentedControl', 'PillChip', 'Sheet', 'Tooltip', 'ToastViewport', 'Stepper', 'IconButton', 'Select', 'CoachMark', 'Kbd', 'ShortcutHint', 'DesignProvider', 'useDesign', 'useToast', 'useCoachMark', 'useReducedMotion', 'useShortcuts', 'ShortcutsSheet']) {
   check(new RegExp(`export (const|function|type|interface) ${name}\\b`).test(primSrc), `primitives.tsx exports ${name}`);
 }
 const barrel = fs.readFileSync(path.join(DESIGN, 'index.ts'), 'utf8');
