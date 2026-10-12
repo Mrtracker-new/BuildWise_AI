@@ -13,6 +13,8 @@
     "lint:emoji": "node scripts/lint_emoji.cjs",
     "check:contrast": "node scripts/check_contrast.cjs",
     "test:design": "node scripts/test_design_system.cjs",
+    "test:map-controls": "node --experimental-strip-types scripts/test_map_controls_offset.cjs",
+    "test:ghost": "node --experimental-strip-types scripts/test_ghost_invariant.cjs",
     "test:trace-ui": "node scripts/e2e_trace_ui.cjs",
     "test:e2e": "node scripts/e2e_full_funnel.cjs"
   },
