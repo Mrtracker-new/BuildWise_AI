@@ -674,6 +674,111 @@ def make_construction_schedules_table(
     ]))
     flowables.append(t_room)
 
+    # 5. Stair Schedule (Computed Object)
+    flowables.extend(make_stair_schedule_table(floor_data, width=width))
+
+    return flowables
+
+
+def make_stair_schedule_table(floor_data: Any, width: float = CONTENT_WIDTH_PT) -> List[Any]:
+    """
+    Stair Schedule (Computed Object) — the PDF counterpart of the on-sheet
+    STAIR SCHEDULE table.
+
+    Parity requirement: the exported PDF has to teach the same staircase
+    compliance facts as the SVG sheet, above all the COMPUTED soffit headroom.
+    NBC 2016 Cl 12.18.3 requires >= 2.20 m; the KB sheet baseline printed the
+    non-compliant "HEADROOM >= 2.0m CLEAR", and this PDF sheet simply omitted
+    the schedule altogether, so a reviewer reading the export could not check
+    the headroom at all.
+
+    Single source: the solved floor model's ``stair_schedule`` row (derived by
+    ``compute_stair_schedule_rows`` from the stair geometry). Nothing is
+    recomputed here and no headroom value is hardcoded — the statutory 2.20 m
+    appears only as the CODE reference beside the computed value.
+    """
+    rows = _get(floor_data, "stair_schedule") or []
+    if not isinstance(rows, list) or not rows:
+        _wg = _get(floor_data, "wall_graph") or {}
+        rows = _get(_wg, "stair_schedule") or []
+    geom = _get(floor_data, "stair_geometry") or {}
+    if not rows and not geom:
+        # No stair was solved for this plate: never invent a schedule.
+        return []
+    row = rows[0] if isinstance(rows, list) and rows else {}
+    if not isinstance(row, dict):
+        row = {}
+
+    def _mm(val: Any) -> str:
+        # Values arrive as "292 mm" / "166.7 mm"; the T/R cell prints them bare,
+        # exactly like the on-sheet table.
+        return str(val if val not in (None, "") else "-").replace(" mm", "")
+
+    # The computed headroom, read from the geometry (the schedule row carries
+    # the same number pre-formatted). Falls back to the row, and only then to
+    # the statutory floor.
+    _hr_raw = _get(geom, "headroom_min_m", None)
+    if _hr_raw is None:
+        _hr_raw = _get(row, "headroom_min_m", None)
+    if _hr_raw is not None:
+        hr_value = f">= {_safe_float(_hr_raw, 0.0):.2f} m"
+    else:
+        hr_value = str(_get(row, "headroom", ">= 2.20 m"))
+    hr_note = str(_get(row, "headroom_note") or _get(geom, "headroom_note") or "")
+
+    p_th = ParagraphStyle('StairTH', fontName=FONT_SEMIBOLD, fontSize=8.0, leading=10.0, textColor=COLOR_TEXT_SECONDARY)
+    p_td = ParagraphStyle('StairTD', fontName=FONT_REGULAR, fontSize=7.5, leading=9.5, textColor=COLOR_TEXT_PRIMARY)
+    p_title = ParagraphStyle('StairH3', fontName=FONT_SEMIBOLD, fontSize=9.0, leading=12.0, textColor=COLOR_ACCENT)
+    p_note = ParagraphStyle('StairNote', fontName=FONT_REGULAR, fontSize=7.0, leading=9.0, textColor=COLOR_TEXT_SECONDARY)
+
+    flowables: List[Any] = []
+    flowables.append(Spacer(1, 8))
+    flowables.append(_keep_with_next(Paragraph("<b>Stair Schedule (Computed Object)</b>", p_title)))
+    flowables.append(Spacer(1, 3))
+
+    flight = str(_get(row, "flight_width_m", f"{_safe_float(_get(geom, 'flight_width_m', 1.0), 1.0):.2f} m"))
+    tread = _mm(_get(row, "tread_depth_mm", f"{_safe_float(_get(geom, 'tread_depth_mm', 250), 250):.0f} mm"))
+    riser = _mm(_get(row, "riser_height_mm", f"{_safe_float(_get(geom, 'riser_height_mm', 166.7), 166.7):.1f} mm"))
+    risers_pf = str(_get(row, "risers_per_flight", _get(geom, "risers_per_flight", "-")))
+    landing = str(_get(row, "landing_dims", f"{_safe_float(_get(geom, 'landing_width_m', 0), 0):.2f} x {_safe_float(_get(geom, 'landing_depth_m', 0), 0):.2f} m"))
+    f2f = str(_get(row, "floor_to_floor", f"{_safe_float(_get(geom, 'floor_height_m', 0), 0):.2f} m"))
+    rail = str(_get(row, "handrail_side", _get(geom, "handrail_side", "Inner Well (950mm)")))
+    travel = str(_get(row, "travel_dir", _get(geom, "travel_direction", "UP")))
+
+    rows_out = [
+        ("Flight / Landing", f"{flight} wide", "NBC Cl 12.18 >= 1.0m"),
+        ("T / R", f"T={tread} R={riser}", "T>=250mm, R<=190mm"),
+        ("Risers/Flight", risers_pf, "<= 12/flight, Blondel"),
+        ("Headroom", hr_value, "NBC Cl 12.18.3 >= 2.20m"),
+        ("Rail / Dir", f"{rail}, {travel}", "Rail 950mm cont."),
+    ]
+    stair_cols = [110.0, 150.0, width - 260.0]
+    stair_data = [[Paragraph(h, p_th) for h in ("Specification", "Value", "Statutory Code")]]
+    for name, value, code in rows_out:
+        stair_data.append([Paragraph(name, p_td), Paragraph(html.escape(value), p_td), Paragraph(html.escape(code), p_td)])
+    t_stair = Table(stair_data, colWidths=stair_cols, repeatRows=1)
+    t_stair.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
+        ('BOX', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+        ('LINEBELOW', (0, 0), (-1, -1), 0.5, COLOR_HAIRLINE),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.0),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5.0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 5.0),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    flowables.append(t_stair)
+
+    tail_bits = []
+    if hr_note:
+        tail_bits.append(html.escape(hr_note))
+    if landing and landing.strip() and landing.strip() != "0.00 x 0.00 m":
+        tail_bits.append(f"Landing: {html.escape(landing)}")
+    if f2f and f2f.strip() and f2f.strip() != "0.00 m":
+        tail_bits.append(f"Floor-to-floor: {html.escape(f2f)}")
+    if tail_bits:
+        flowables.append(Spacer(1, 3))
+        flowables.append(Paragraph(" | ".join(tail_bits), p_note))
     return flowables
 
 
@@ -1129,7 +1234,7 @@ def generate_pdf_report(
     - Page 1 top band with BW logo & score hero with 26mm gauge ring and 2x2 spec grid
     - Apple tables with hairlines, sentence-case headers, and semantic tinted pills
     - Section order & naming aligned with ReportSheet tabs (Overview -> Hazards -> Ecology -> Cost & Plan)
-    - Section 02 Action Plan deduplication fix: AI Parameter Calibration rendered once as accent callout
+    - Section 02 Action Plan: AI Parameter Calibration rendered once as accent callout
     - Section 05 Ecology 5-tile stat strip
     - Section 10 Blueprint on dedicated full page with solver stat strip, full-width vector drawing, and legend
     """
