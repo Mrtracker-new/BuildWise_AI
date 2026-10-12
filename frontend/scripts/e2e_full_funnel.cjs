@@ -57,6 +57,21 @@ async function clickByLabel(page, label) {
   }, label);
 }
 
+/**
+ * Trace a rectangle through the path the UI actually offers. The flat "Rect"
+ * tool this script used to click was replaced by [Draw][Edit][Import][Presets],
+ * so the look-up matched nothing and the run died waiting for the frontage
+ * step. The preset seeds a CLOSED 4-vertex ring, which still has to be finished
+ * before the wizard hands over to the frontage step.
+ */
+async function traceRectPreset(page) {
+  await page.click('[data-testid="trace-toolbar-presets"]');
+  await page.waitForSelector('[data-testid="preset-menu"]', { timeout: 8000 });
+  await page.click('[data-testid="preset-item-rect"]');
+  await sleep(900);
+  await clickByLabel(page, 'Finish');
+}
+
 async function main() {
   console.log('=== E2E: full funnel ===');
   const browser = await puppeteer.launch({
@@ -84,6 +99,16 @@ async function main() {
     if (res.url().includes('/api/') && res.status() >= 400) {
       apiFailures.push(`${res.status()} ${res.url()}`);
       console.log('[api failure]', res.status(), res.url());
+    }
+  });
+
+  // Every analysis body, so "one site" can be checked where it matters: the
+  // request the app actually sends, the boundary inside it and the card the
+  // reader is looking at.
+  const analyzeBodies = [];
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && req.url().includes('/api/analyze')) {
+      try { analyzeBodies.push(JSON.parse(req.postData() || '{}')); } catch (e) { analyzeBodies.push(null); }
     }
   });
 
@@ -124,7 +149,7 @@ async function main() {
     console.log('- tracing a rectangular boundary');
     await clickByLabel(page, 'Trace boundary');
     await sleep(800);
-    await clickByLabel(page, 'Rect');
+    await traceRectPreset(page);
     await page.waitForFunction(
       () => /Confirm the frontage/.test(document.body.innerText || ''),
       { timeout: 40000 },
@@ -274,6 +299,36 @@ async function main() {
     );
     await sleep(1500);
     check(true, 'site feasibility report opened (Cost & Plan reachable)');
+
+    // 3.2 One site. The plot owns the location, so the body the analysis ran on,
+    // the boundary inside it and the coordinate card must be the same place —
+    // otherwise the report would describe a different site than the plot drawn
+    // on the map (the bug this guards against).
+    const analyze = analyzeBodies.find((b) => b && b.boundary) || null;
+    const coordCard = await page.evaluate(() => {
+      const field = (id) => (document.getElementById(id) || {}).value || '';
+      return { lat: field('lat-input'), lon: field('lon-input') };
+    });
+    check(Boolean(analyze), 'the analysis request body was captured');
+    if (analyze) {
+      const same = (a, b) => Math.abs(a - b) < 1e-9;
+      check(
+        same(analyze.latitude, analyze.boundary.origin_lat) && same(analyze.longitude, analyze.boundary.origin_lon),
+        'the analysis asks about the plot it was handed (request coords == boundary origin)',
+        `request ${analyze.latitude},${analyze.longitude} vs origin ${analyze.boundary.origin_lat},${analyze.boundary.origin_lon}`,
+      );
+      check(
+        analyze.boundary.vertices.length >= 3,
+        'the analysis carried the captured ring, not just a point',
+        `${analyze.boundary.vertices.length} vertices`,
+      );
+      check(
+        Math.abs(analyze.latitude - Number(coordCard.lat)) < 5e-5 &&
+          Math.abs(analyze.longitude - Number(coordCard.lon)) < 5e-5,
+        'the coordinate card shows the site that was analysed',
+        `card ${coordCard.lat},${coordCard.lon} vs request ${analyze.latitude},${analyze.longitude}`,
+      );
+    }
 
     // 3.5 Gestalt guard: a captured plot renders as ONE plot with ONE
     // buildable envelope and ONE building outline, all ON the plot - and the
@@ -533,7 +588,10 @@ async function main() {
       if (recaptureBtn) recaptureBtn.click();
       await sleep(1400);
       const afterRecapture = {
-        plotCleared: !/m²/.test(document.body.innerText),
+        // "Plot cleared" is read from the wizard's own loaded ring, not from the
+        // page text: the parameters card legitimately prints "185.8 m²" for the
+        // plinth area, which made the old /m²/ probe report a lingering plot.
+        ringVertices: srcLen('bw-capture-boundary'),
         wizardOpen: /Locate the site/.test(document.body.innerText),
         dialog: Boolean(document.querySelector('[data-testid="site-move-dialog"]')),
       };
@@ -572,13 +630,133 @@ async function main() {
       check(siteMove.afterApply.plotStillCaptured, 'take: the captured plot travelled with the pin');
       check(siteMove.afterApply.notice, 'take: the user is told to re-run the analysis');
       check(
-        siteMove.afterRecapture.plotCleared && siteMove.afterRecapture.wizardOpen && !siteMove.afterRecapture.dialog,
+        siteMove.afterRecapture.ringVertices === 0 && siteMove.afterRecapture.wizardOpen && !siteMove.afterRecapture.dialog,
         're-capture: plot cleared and the wizard opens at locate',
         JSON.stringify(siteMove.afterRecapture)
       );
     }
 
-    // 7. zero browser errors
+    // 7. Unlocated-trace guard (regression). Clearing the coordinates used to
+    //    leave the app holding a committed plot while its own CTA still read
+    //    "Select Location on Map to Begin", and pressing that CTA re-opened the
+    //    wizard instead of advancing. A plot can no longer be traced without a
+    //    pin, and committing one locates the site at the pin it was traced
+    //    around (never at the wizard's fallback point).
+    console.log('- unlocated-trace guard');
+    await page.goto(URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    await sleep(2000);
+    const clearedPin = await page.evaluate(() => {
+      const b = document.querySelector('button[title="Clear coordinates"]');
+      if (!b) return false;
+      b.click();
+      return true;
+    });
+    check(clearedPin, 'coordinates cleared from the card');
+    await sleep(700);
+    const afterClear = await page.evaluate(() => {
+      const cta = Array.from(document.querySelectorAll('button'))
+        .find((b) => /Select Location on Map to Begin|Run Site Feasibility Analysis/.test(b.textContent || ''));
+      return {
+        cta: cta ? cta.textContent.trim() : null,
+        chip: Boolean(document.querySelector('[data-testid="boundary-chip"]')),
+      };
+    });
+    check(
+      afterClear.cta === 'Select Location on Map to Begin' && !afterClear.chip,
+      'cleared: no plot captured, CTA asks for a location',
+      JSON.stringify(afterClear),
+    );
+    // A cleared site must leave nothing behind for a later capture to anchor to
+    // (the stale coordinates used to be the hidden site the wizard traced at).
+    const staleAfterClear = await page.evaluate(() => {
+      const field = (id) => (document.getElementById(id) || {}).value || '';
+      return { lat: field('lat-input'), lon: field('lon-input') };
+    });
+    check(
+      staleAfterClear.lat === '' && staleAfterClear.lon === '',
+      'cleared: no stale coordinates left in the card',
+      JSON.stringify(staleAfterClear),
+    );
+
+    await clickByLabel(page, 'Select Location on Map to Begin');
+    await page.waitForFunction(() => /Locate the site/.test(document.body.innerText || ''), { timeout: 15000 });
+    const guard = await page.evaluate(() => {
+      const btn = Array.from(document.querySelectorAll('button')).find((b) => /Trace boundary/.test(b.textContent || ''));
+      return {
+        needsPin: Boolean(document.querySelector('[data-testid="capture-needs-pin"]')),
+        disabled: btn ? Boolean(btn.disabled) : null,
+      };
+    });
+    check(
+      guard.needsPin && guard.disabled === true,
+      'no pin: the wizard asks for one and blocks tracing',
+      JSON.stringify(guard),
+    );
+
+    await page.mouse.click(900, 420);
+    await sleep(1000);
+    const placed = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="capture-pin-coords"]');
+      const btn = Array.from(document.querySelectorAll('button')).find((b) => /Trace boundary/.test(b.textContent || ''));
+      return { pin: el ? el.textContent.trim() : null, disabled: btn ? Boolean(btn.disabled) : null };
+    });
+    check(
+      Boolean(placed.pin) && placed.disabled === false,
+      'pin placed on the map: tracing is offered again',
+      JSON.stringify(placed),
+    );
+
+    await clickByLabel(page, 'Trace boundary');
+    await sleep(800);
+    await traceRectPreset(page);
+    await page.waitForFunction(() => /Confirm the frontage/.test(document.body.innerText || ''), { timeout: 40000 });
+    await page.waitForFunction(() => Boolean(document.querySelector('[data-testid="edge-row-2"]')), { timeout: 20000 });
+    await page.evaluate(() => document.querySelector('[data-testid="edge-row-2"]').click());
+    await page.waitForFunction(
+      () => {
+        const btn = Array.from(document.querySelectorAll('button')).find((b) => (b.textContent || '').trim() === 'Review');
+        return Boolean(btn) && !btn.disabled;
+      },
+      { timeout: 15000 },
+    );
+    await clickByLabel(page, 'Review');
+    await page.waitForFunction(() => /Review boundary/.test(document.body.innerText || ''), { timeout: 15000 });
+    await page.waitForFunction(
+      () => {
+        const btn = Array.from(document.querySelectorAll('button')).find((b) => (b.textContent || '').includes('Use this boundary'));
+        return Boolean(btn) && !btn.disabled;
+      },
+      { timeout: 15000 },
+    );
+    await clickByLabel(page, 'Use this boundary');
+    await sleep(1500);
+    const committed = await page.evaluate((pin) => {
+      const cta = Array.from(document.querySelectorAll('button'))
+        .find((b) => /Select Location on Map to Begin|Run Site Feasibility Analysis/.test(b.textContent || ''));
+      const field = (id) => (document.getElementById(id) || {}).value || '';
+      const [pinLat, pinLon] = (pin || '').split(',').map((s) => s.trim());
+      return {
+        cta: cta ? cta.textContent.trim() : null,
+        chip: /m²/.test(document.body.innerText),
+        lat: field('lat-input'),
+        lon: field('lon-input'),
+        pinLat,
+        pinLon,
+      };
+    }, placed.pin);
+    check(committed.chip, 'the unlocated trace captured a plot', JSON.stringify(committed));
+    check(
+      committed.cta === 'Run Site Feasibility Analysis',
+      'committing the plot advances the CTA to Run',
+      committed.cta || 'CTA not found',
+    );
+    check(
+      committed.lat === committed.pinLat && committed.lon === committed.pinLon,
+      'the site becomes the pin the plot was traced around',
+      `${committed.lat}, ${committed.lon} vs pinned ${committed.pinLat}, ${committed.pinLon}`,
+    );
+
+    // 8. zero browser errors
     check(consoleErrors.length === 0, 'zero console errors', consoleErrors.slice(0, 3).join(' | '));
     check(pageErrors.length === 0, 'zero page errors', pageErrors.slice(0, 3).join(' | '));
   } catch (err) {
