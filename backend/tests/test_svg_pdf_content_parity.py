@@ -58,7 +58,7 @@ def test_svg_pdf_content_parity_per_layer(typology: str, floors: int):
 
     from app.services.report_service import generate_pdf_report
     payload = {
-        "request_id": "BW-PARITY-STAGE6",
+        "request_id": "BW-PARITY-VERIFICATION",
         "timestamp": "2026-10-02 12:00:00 UTC",
         "coordinates": {"latitude": 12.9716, "longitude": 77.5946},
         "formatted_address": "Parity Test Site",
