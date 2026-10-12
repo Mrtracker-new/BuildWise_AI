@@ -12,14 +12,14 @@ import { AppHeader } from './components/AppHeader';
 import { MapCanvas } from './components/MapCanvas';
 import { CoordinatesInput } from './components/CoordinatesInput';
 import { AnalysisForm } from './components/AnalysisForm';
-import { ScoreSummaryCard } from './components/ScoreSummaryCard';
-import { FactorBreakdown } from './components/FactorBreakdown';
+import { ReportHeroHeader } from './components/report/ReportHeroHeader';
+import { ProvenanceFactorCard } from './components/report/ProvenanceFactorCard';
 import { ReportSheet, type ResultsTab } from './components/ReportSheet';
 import { TelemetryStrip, ErrorBanner } from './components/StatusBanner';
 import { EmptyState } from './components/EmptyState';
 import { SiteMoveDialog } from './components/SiteMoveDialog';
 import { AnalysisHUD } from './components/AnalysisHUD';
-import { DesignProvider, ToastViewport, ShortcutsSheet, useShortcuts, Drawer, useTier, useViewportClass, useCompactAuthoring, useDesign } from './design';
+import { DesignProvider, ToastViewport, ShortcutsSheet, useShortcuts, Drawer, useTier, useViewportClass, useCompactAuthoring, useDesign, mapControlsRight } from './design';
 import { UnitsProvider } from './components/report/units';
 import { AssistedBar } from './components/AssistedBar';
 import { isAssistedNoticeSessionDismissed, dismissAssistedNoticeForSession } from './services/sessionPrefs';
@@ -149,13 +149,6 @@ const AppShell: React.FC = () => {
     }
   }, [tier, pushToast]);
 
-  // Deep-link from the generator card ("Edit on map").
-  useEffect(() => {
-    const onEditRequest = (): void => openCapture('trace');
-    window.addEventListener('bw:edit-boundary', onEditRequest);
-    return () => window.removeEventListener('bw:edit-boundary', onEditRequest);
-  }, [openCapture]);
-
   const [isShortcutsOpen, setIsShortcutsOpen] = useState<boolean>(false);
   // Confirm an honored shared-site deep link once per mount (StrictMode-safe).
   const deepLinkToastShown = useRef<boolean>(false);
@@ -258,6 +251,20 @@ const AppShell: React.FC = () => {
       openReportCtaRef.current?.focus();
     }, 50);
   }, []);
+
+  // Deep-link from the generator card ("Edit on map"): the capture sheet lives
+  // in the map layer (z-0) while the report sheet is a modal (z-[2000]), so the
+  // report must close first or the control looks inert - its target opens
+  // underneath the sheet. Reuses the normal close path so the #report hash and
+  // focus handling stay single-sourced.
+  useEffect(() => {
+    const onEditRequest = (): void => {
+      handleCloseReport();
+      openCapture('trace');
+    };
+    window.addEventListener('bw:edit-boundary', onEditRequest);
+    return () => window.removeEventListener('bw:edit-boundary', onEditRequest);
+  }, [handleCloseReport, openCapture]);
 
   // Single-source the #report hash:
   // - page load with '#report' AND existing results -> reopen sheet
@@ -820,9 +827,11 @@ const AppShell: React.FC = () => {
     if (analysisData) {
       return (
         <div className="@container w-full min-w-0 space-y-3.5 animate-fade-in">
-          {/* Panel Header */}
-          <div className="flex items-center justify-between pb-2.5 border-b border-[var(--hairline)] min-w-0">
-            <div className="flex items-center gap-2 min-w-0">
+          {/* Panel Header. Wrapping row: in the 360px panel the copy-ref pill
+              used to squeeze the title into "Land Suitability Asses…", so the
+              pill drops to its own line instead of truncating the heading. */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 pb-2.5 border-b border-[var(--hairline)] min-w-0">
+            <div className="flex items-center gap-2 min-w-0 flex-1 basis-[max-content]">
               <Icon name="shield-check" size={16} className="text-[var(--text-1)] shrink-0" />
               <h2 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight truncate">
                 Land Suitability Assessment
@@ -831,27 +840,50 @@ const AppShell: React.FC = () => {
             <button
               type="button"
               onClick={handleCopyRef}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[12px] font-mono text-[var(--text-2)] hover:text-[var(--text-1)] transition-colors cursor-pointer select-none shrink-0"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[12px] font-mono text-[var(--text-2)] hover:text-[var(--text-1)] transition-colors cursor-pointer select-none shrink-0 ml-auto"
               title="Click to copy analysis reference ID"
             >
               <Icon
                 name={copiedRef ? 'check' : 'copy'}
                 size={12}
-                className={copiedRef ? 'text-[var(--semantic-green)]' : 'text-[var(--text-3)]'}
+                className={copiedRef ? 'text-[var(--semantic-green-ink)]' : 'text-[var(--text-3)]'}
               />
               <span>{copiedRef ? 'Copied' : `Ref: ${analysisData.request_id.slice(0, 8)}`}</span>
             </button>
           </div>
 
           {/* Score Hero Card (Clicking hero triggers open report) */}
-          <ScoreSummaryCard
+          <ReportHeroHeader
             data={analysisData}
-            variant="panel"
+            variant="compact"
             onClickHero={handleOpenReport}
           />
 
-          {/* Top 3 Factor Breakdown Rows */}
-          <FactorBreakdown factors={analysisData.factors} limit={3} />
+          {/* Top 3 Factor Breakdown Rows — same factor card as the report, so
+              status badges and provenance are present in the sidebar too. */}
+          <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 sm:p-[18px] space-y-3.5 w-full min-w-0">
+            <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <Icon name="layers" size={15} className="text-[var(--text-2)] shrink-0" />
+                <h3 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight">
+                  Multi-Criteria Factor Breakdown
+                </h3>
+              </div>
+              <span className="text-[12px] font-normal text-[var(--text-3)] shrink-0">
+                MCDA model (Top 3)
+              </span>
+            </div>
+            <div className="divide-y divide-[var(--hairline)]">
+              {analysisData.factors.slice(0, 3).map((factor) => (
+                <ProvenanceFactorCard
+                  key={factor.factor_id}
+                  factor={factor}
+                  dataSources={analysisData.data_sources}
+                  variant="compact"
+                />
+              ))}
+            </div>
+          </div>
 
           {/* ONE Primary CTA: "Open Full Report" */}
           <button
@@ -877,7 +909,7 @@ const AppShell: React.FC = () => {
   return (
     <div
       className="h-screen w-screen relative overflow-hidden select-text text-[var(--text-1)] antialiased font-sans"
-      style={{ '--map-controls-right': isDrawerOpen ? '384px' : '16px' } as React.CSSProperties}
+      style={{ '--map-controls-right': mapControlsRight(isDrawerOpen, viewportClass) } as React.CSSProperties}
     >
       {/* ========================================================================= */}
       {/* LAYER 0: FULL-BLEED MAP CANVAS (Edge-to-edge background, no inset/frame)  */}
@@ -990,10 +1022,10 @@ const AppShell: React.FC = () => {
         <div className="print-hide fixed top-[98px] sm:top-[114px] left-2 sm:left-3 right-2 sm:right-3 lg:left-[364px] lg:right-[384px] z-[1001] pointer-events-auto animate-fade-in">
           <div
             role="alert"
-            className="vibrancy-panel rounded-[12px] border border-[var(--semantic-amber)]/50 bg-[var(--surface)] text-[var(--semantic-amber)] px-3.5 py-2.5 text-[12px] flex items-center justify-between gap-3 shadow-lg"
+            className="vibrancy-panel rounded-[12px] border border-[var(--semantic-amber)]/50 bg-[var(--surface)] text-[var(--semantic-amber-ink)] px-3.5 py-2.5 text-[12px] flex items-center justify-between gap-3 shadow-lg"
           >
             <div className="flex items-center gap-2 min-w-0 flex-1">
-              <Icon name="alert-triangle" size={14} className="text-[var(--semantic-amber)] shrink-0" />
+              <Icon name="alert-triangle" size={14} className="text-[var(--semantic-amber-ink)] shrink-0" />
               <span className="font-semibold shrink-0 uppercase tracking-[0.08em] text-[11px]">
                 Notice:
               </span>
@@ -1026,7 +1058,7 @@ const AppShell: React.FC = () => {
         {/* Mobile Header with Close action */}
         <div className="flex lg:hidden items-center justify-between border-b border-[var(--hairline)] pb-2 mb-1">
           <div className="flex items-center gap-1.5 text-[13px] font-semibold text-[var(--text-1)]">
-            <Icon name="sliders" size={14} className="text-[var(--accent)]" />
+            <Icon name="sliders" size={14} className="text-[var(--accent-ink)]" />
             <span>Site Parameters</span>
           </div>
           <button
@@ -1057,7 +1089,7 @@ const AppShell: React.FC = () => {
         >
           <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 mb-1">
             <div className="flex items-center gap-1.5 text-[13px] font-semibold text-[var(--text-1)]">
-              <Icon name="sliders" size={14} className="text-[var(--accent)]" />
+              <Icon name="sliders" size={14} className="text-[var(--accent-ink)]" />
               <span>Site Parameters</span>
             </div>
             <button
@@ -1105,10 +1137,10 @@ const AppShell: React.FC = () => {
           aria-label={isDrawerOpen ? 'Close analysis panel' : 'Open analysis panel'}
           className="h-8 flex items-center gap-2 px-3 rounded-[12px] vibrancy-panel text-[12px] font-medium text-[var(--text-1)] border border-[var(--panel-border-color)] shadow-md hover:bg-[var(--fill)] transition-colors active:brightness-95 cursor-pointer select-none"
         >
-          <Icon name="layers" size={14} className="text-[var(--accent)]" />
+          <Icon name="layers" size={14} className="text-[var(--accent-ink)]" />
           <span>{isDrawerOpen ? (analysisData ? 'Hide Results' : 'Hide Panel') : (analysisData ? 'View Results' : 'View Panel')}</span>
           {analysisData && (
-            <span className="font-mono font-semibold bg-[var(--accent-tint)] text-[var(--accent)] px-1.5 py-0.5 rounded-[6px] text-[11px] ml-0.5">
+            <span className="font-mono font-semibold bg-[var(--accent-tint)] text-[var(--accent-ink)] px-1.5 py-0.5 rounded-[6px] text-[11px] ml-0.5">
               {analysisData.overall_suitability_score.toFixed(1)}
             </span>
           )}
@@ -1154,7 +1186,7 @@ const AppShell: React.FC = () => {
         >
           <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 mb-1">
             <div className="flex items-center gap-1.5 text-[13px] font-semibold text-[var(--text-1)]">
-              <Icon name="layers" size={14} className="text-[var(--accent)]" />
+              <Icon name="layers" size={14} className="text-[var(--accent-ink)]" />
               <span>Feasibility Results</span>
             </div>
             <button
@@ -1206,7 +1238,7 @@ const AppShell: React.FC = () => {
           className="fixed top-[72px] left-1/2 -translate-x-1/2 z-[1050] pointer-events-none animate-fade-in"
         >
           <div className="vibrancy-pill px-4 py-2 rounded-full text-[13px] font-medium text-[var(--text-1)] flex items-center gap-2 shadow-lg border border-[var(--panel-border-color)] max-w-[92vw]">
-            <Icon name="map-pin" size={14} className="text-[var(--accent)] shrink-0" />
+            <Icon name="map-pin" size={14} className="text-[var(--accent-ink)] shrink-0" />
             <span>
               Plot moved with the pin - re-run the analysis for this location.
             </span>
@@ -1218,7 +1250,7 @@ const AppShell: React.FC = () => {
       {cancelToast && (
         <div className="fixed top-[72px] left-1/2 -translate-x-1/2 z-[1050] pointer-events-auto animate-fade-in">
           <div className="vibrancy-pill px-4 py-2 rounded-full text-[13px] font-medium text-[var(--text-1)] flex items-center gap-2 shadow-lg border border-[var(--panel-border-color)]">
-            <Icon name="info" size={14} className="text-[var(--accent)]" />
+            <Icon name="info" size={14} className="text-[var(--accent-ink)]" />
             <span>{cancelToast}</span>
           </div>
         </div>
