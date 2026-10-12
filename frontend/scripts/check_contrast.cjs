@@ -145,6 +145,54 @@ checkPair('App Dark (css)', cssThemes.dark, tokenApp.dark);
 checkPair('Sheet CAD (ir)', sheetThemes.cad, tokenSheet.cad);
 checkPair('Sheet Paper (ir)', sheetThemes.paper, tokenSheet.paper);
 
+/* ---------------- Text-safe ink tokens (muted + semantic) ----------------
+ * The pairs above only cover ink/ink2 on the theme PAGE background. Muted and
+ * semantic inks are rendered as small text on other app surfaces (`--fill`
+ * composites and the hues' own tints), which is where the DOM a11y probe found
+ * sub-AA text. This section pins those text inks against the surfaces they are
+ * actually drawn on, so a future palette edit cannot silently regress them.
+ * The composites are the darkest measured values for each family (a `--fill`
+ * chip over the sheet = #EFEFF0; the nested-fill case that reached #E1E1E2 is
+ * avoided by not stacking translucent fills under text).
+ */
+const SHEET_WHITE = '#FFFFFF';
+const FILL_ON_SHEET = '#EFEFF0';
+const inkPairs = [
+  ['text-2 on sheet fill', cssVar(lightStart, 'text-2'), FILL_ON_SHEET],
+  ['text-3 on white', cssVar(lightStart, 'text-3'), SHEET_WHITE],
+  ['text-3 on sheet fill', cssVar(lightStart, 'text-3'), FILL_ON_SHEET],
+  ['accent ink on accent tint', cssVar(lightStart, 'accent-ink'), '#CBDCEE'],
+  ['green ink on green tint', cssVar(lightStart, 'semantic-green-ink'), '#CEE7DF'],
+  ['amber ink on amber tint', cssVar(lightStart, 'semantic-amber-ink'), '#F1E3CE'],
+  ['red ink on red tint', cssVar(lightStart, 'semantic-red-ink'), '#F1D4D3'],
+  ['green ink on sheet fill', cssVar(lightStart, 'semantic-green-ink'), FILL_ON_SHEET],
+  ['amber ink on white', cssVar(lightStart, 'semantic-amber-ink'), SHEET_WHITE],
+];
+for (const [label, ink, bg] of inkPairs) {
+  if (!ink) {
+    failures.push(`${label}: ink token missing from index.css`);
+    continue;
+  }
+  const c = contrast(ink, bg);
+  rows.push({ label, bg, ink, c1: c, ink2: ink, c2: c });
+  if (c < 4.5) failures.push(`${label}: ${ink} on ${bg} = ${c.toFixed(2)}:1 (< 4.5 AA)`);
+}
+
+/* The semantic ink tokens must be the AA text form of the bright hues: if a
+ * `*-ink` value equals its bright sibling, the ink swap was undone. */
+for (const [bright, inkName] of [
+  ['accent', 'accent-ink'],
+  ['semantic-green', 'semantic-green-ink'],
+  ['semantic-amber', 'semantic-amber-ink'],
+  ['semantic-red', 'semantic-red-ink'],
+]) {
+  const b = cssVar(lightStart, bright);
+  const i = cssVar(lightStart, inkName);
+  if (b && i && b.toLowerCase() === i.toLowerCase()) {
+    failures.push(`${inkName}: identical to --${bright}; the light theme needs a darker text ink`);
+  }
+}
+
 /* ---------------- Report ---------------- */
 console.log('=== AA contrast gate (WCAG 2.x, normal-text 4.5:1) ===');
 for (const r of rows) {

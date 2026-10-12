@@ -74,23 +74,6 @@ export function ui(token: MotionToken): string {
 export const RADII = { xs: 6, sm: 8, md: 10, lg: 12, xl: 16, full: 9999 } as const;
 
 /* ------------------------------------------------------------------ */
-/* SPACING — 4 pt grid                                                 */
-/* ------------------------------------------------------------------ */
-export const SPACING = { 1: 4, 2: 8, 3: 12, 4: 16, 5: 20, 6: 24, 8: 32 } as const;
-
-/* ------------------------------------------------------------------ */
-/* DENSITY — chrome compactness per breakpoint class.                  */
-/* Mirrors --density-* vars in index.css (compact media query).        */
-/* Touch targets NEVER shrink below HIT_TARGETS.minTarget effective.   */
-/* ------------------------------------------------------------------ */
-export type DensityClass = 'default' | 'compact';
-
-export const DENSITY = {
-  default: { rowH: 40, padCard: 16, padControlY: 6 },
-  compact: { rowH: 44, padCard: 12, padControlY: 8 },
-} as const;
-
-/* ------------------------------------------------------------------ */
 /* TYPOGRAPHY — SF-adjacent stack; tabular figures for every number    */
 /* that changes or compares (apply class `ui-font-tabular`).           */
 /* ------------------------------------------------------------------ */
@@ -120,11 +103,6 @@ export const Z_INDEX = {
 /* target via ::before hit-slop (see IconButton primitive).            */
 /* ------------------------------------------------------------------ */
 export const HIT_TARGETS = { iconButton: 32, minTarget: 44 } as const;
-
-/* ------------------------------------------------------------------ */
-/* BLUR — vibrancy levels (mirrored by .vibrancy-* classes)            */
-/* ------------------------------------------------------------------ */
-export const BLUR = { panel: 24, hud: 40 } as const;
 
 /* ------------------------------------------------------------------ */
 /* SHORTCUTS — single source of truth for the ? shortcuts help sheet   */
@@ -163,9 +141,38 @@ export interface InkPair {
 }
 
 export const APP_INK: Record<ThemeMode, InkPair> = {
-  light: { name: 'App Light', bg: '#F5F5F7', ink: '#1D1D1F', inkSecondary: '#6E6E73' },
+  light: { name: 'App Light', bg: '#F5F5F7', ink: '#1D1D1F', inkSecondary: '#6A6A6F' },
   dark: { name: 'App Dark', bg: '#000000', ink: '#F5F5F7', inkSecondary: '#A1A1A6' },
 };
+
+/**
+ * Text-safe counterparts of the bright semantic hues (mirrors the `*-ink`
+ * custom properties in index.css). The bright --semantic-* / --accent values
+ * are fill and stroke tokens: as SMALL TEXT they measured 1.8–4.0:1 on the
+ * app's light surfaces. These pass AA (>= 4.5:1) against the darkest surface
+ * each lands on, so the -ink custom property is the ink form and the bright
+ * hues stay for fills, borders and graphic use.
+ */
+export const SEMANTIC_INK = {
+  light: {
+    accent: '#0055B8',
+    green: '#0F6E31',
+    amber: '#8A5300',
+    red: '#B3261E',
+  },
+  dark: {
+    accent: '#0A84FF',
+    green: '#34C759',
+    amber: '#FF9F0A',
+    red: '#FF453A',
+  },
+} as const satisfies Record<ThemeMode, Record<string, string>>;
+
+/** The muted text ramp, mirrored from index.css --text-2 / --text-3. */
+export const TEXT_INK = {
+  light: { secondary: '#6A6A6F', tertiary: '#5F5F64' },
+  dark: { secondary: '#A1A1A6', tertiary: '#86868B' },
+} as const satisfies Record<ThemeMode, Record<string, string>>;
 
 /** Mirrors backend/app/services/floorplan/drawing_ir.py:2359–2370. */
 export const SHEET_INK: Record<SheetTheme, InkPair> = {

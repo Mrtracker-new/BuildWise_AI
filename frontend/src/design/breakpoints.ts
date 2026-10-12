@@ -34,13 +34,21 @@ export function viewportClassFor(width: number): ViewportClass {
   return 'xl';
 }
 
-/** Authoring capability tier for a viewport class (pure). */
+/** Authoring capability tier for a viewport class. */
 export type CapabilityTier = 'COMPACT' | 'ADAPTIVE' | 'FULL';
 
-export function tierFor(width: number): CapabilityTier {
-  if (width >= BP.lg) return 'FULL';
-  if (width >= BP.md) return 'ADAPTIVE';
-  return 'COMPACT';
+/**
+ * Horizontal offset for the map-anchored control cluster.
+ *
+ * The analysis drawer only insets the controls while it is docked beside the
+ * map (desktop: lg/xl). Below lg the drawer presents as a bottom sheet, so the
+ * controls keep the base 16px inset. This is the single source for the offset —
+ * index.css reads the `--map-controls-right` custom property it feeds, so no
+ * stylesheet rule needs to (and must not) force the value with !important.
+ */
+export function mapControlsRight(isDrawerOpen: boolean, viewportClass: ViewportClass): string {
+  const isDesktopDocked = viewportClass === 'lg' || viewportClass === 'xl';
+  return isDrawerOpen && isDesktopDocked ? '384px' : '16px';
 }
 
 /* ------------------------------------------------------------------ */
@@ -126,29 +134,3 @@ export function useCompactAuthoring(): boolean {
   return tier === 'COMPACT' || coarse;
 }
 
-/** Live viewport size (for visualViewport-aware surfaces like the viewer modal). */
-export function useViewportSize(): { width: number; height: number } {
-  const [size, setSize] = useState(() => ({
-    width: typeof window === 'undefined' ? 0 : window.innerWidth,
-    height: typeof window === 'undefined' ? 0 : window.innerHeight,
-  }));
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    let raf = 0;
-    const measure = (): void => {
-      raf = 0;
-      setSize({ width: window.innerWidth, height: window.innerHeight });
-    };
-    const onResize = (): void => {
-      if (!raf) raf = requestAnimationFrame(measure);
-    };
-    window.addEventListener('resize', onResize);
-    window.addEventListener('orientationchange', onResize);
-    return () => {
-      if (raf) cancelAnimationFrame(raf);
-      window.removeEventListener('resize', onResize);
-      window.removeEventListener('orientationchange', onResize);
-    };
-  }, []);
-  return size;
-}

@@ -11,23 +11,46 @@
      0.96 keeps 11px muted ink at >= 4.5:1 even over the darkest map tiles. */
   --surface-overlay: rgba(255, 255, 255, 0.96);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 12px 32px rgba(0, 0, 0, 0.12);
+  /* Hover-elevation shadow (card grammar); one step above --shadow. */
+  --shadow-lift: 0 2px 4px rgba(0, 0, 0, 0.05), 0 18px 44px rgba(0, 0, 0, 0.16);
   --fill: rgba(120, 120, 128, 0.12);
   --fill-hover: rgba(120, 120, 128, 0.18);
   --fill-active: rgba(120, 120, 128, 0.24);
   --hairline: rgba(0, 0, 0, 0.08);
   --text-1: #1D1D1F;
-  --text-2: #6E6E73;
-  --text-3: #86868B;
+  /* Muted inks are darkened to clear AA as SMALL text on the app's own
+     surfaces. The translucent --fill composites vary with what sits behind
+     them: over the sheet it is #EFEFF0, but a --fill chip nested inside a
+     --fill card lands on ~#E1E1E2. Both were measured with the DOM probe
+     (text-2 was 4.41:1 on the sheet and 3.88:1 nested; text-3 was 3.62:1 on
+     white and 2.75:1 on a tinted chip). */
+  --text-2: #6A6A6F;
+  --text-3: #5F5F64;
   --accent: #0071E3;
   --accent-tint: rgba(0, 113, 227, 0.12);
   --accent-press: #0062C4;
   --semantic-green: #34C759;
   --semantic-amber: #FF9F0A;
   --semantic-red: #FF3B30;
+  /* TEXT-SAFE semantic inks. The three hues above are FILL/graphic tokens
+     (dots, bars, borders, tint bases) and must stay bright; as small text on
+     light surfaces, or on their own tints, they measured amber 2.06:1, green
+     2.01:1, red 3.01:1 and accent-on-tint 3.98:1 - all below AA. These are
+     their AA-passing text counterparts, verified against the darkest
+     composite each one lands on (worst case: amber 5.51:1, green 4.72:1,
+     red 5.55:1, accent 5.23:1; the green chip at 15% tint needs #0F6E31, since
+     the one-step-lighter #147A38 measures 4.16:1 there). Rule: -ink is TEXT; the bright
+     hues stay for fills, borders, dots and strokes. (Written without glob
+     syntax on purpose: Tailwind scans this file and would emit a bogus
+     utility from an asterisk pattern.) */
+  --accent-ink: #0055B8;
+  --semantic-green-ink: #0F6E31;
+  --semantic-amber-ink: #8A5300;
+  --semantic-red-ink: #B3261E;
   --bg-page: #F5F5F7;
   --segmented-active-bg: #FFFFFF;
   --segmented-active-label: #1D1D1F;
-  --segmented-active-sublabel: #6E6E73;
+  --segmented-active-sublabel: #6A6A6F;
   --segmented-active-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
   --blueprint-bg: #F4F6F8;
   --card-bg-subtle: #FFFFFF;
@@ -53,6 +76,7 @@
   /* Near-opaque float surface for chips/pills read over a busy basemap */
   --surface-overlay: rgba(28, 28, 30, 0.94);
   --shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --shadow-lift: 0 18px 44px rgba(0, 0, 0, 0.62);
   --fill: rgba(120, 120, 128, 0.24);
   --fill-hover: rgba(120, 120, 128, 0.32);
   --fill-active: rgba(120, 120, 128, 0.40);
@@ -66,6 +90,13 @@
   --semantic-green: #34C759;
   --semantic-amber: #FF9F0A;
   --semantic-red: #FF453A;
+  /* Dark ink text sits on near-black surfaces, where the bright hues already
+     clear AA (green 8.8:1, amber 10.4:1, red 5.9:1, accent 5.5:1), so the ink
+     tokens alias them rather than darkening anything. */
+  --accent-ink: #0A84FF;
+  --semantic-green-ink: #34C759;
+  --semantic-amber-ink: #FF9F0A;
+  --semantic-red-ink: #FF453A;
   --bg-page: #000000;
   --segmented-active-bg: #636366;
   --segmented-active-label: #FFFFFF;
@@ -121,26 +152,11 @@
     font-feature-settings: "tnum";
   }
 
-  /* Uniform focus ring; components may override width/color but not presence */
-  .focus-ring-apple {
-    outline: none;
-  }
-  .focus-ring-apple:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px var(--bg-page), 0 0 0 4px var(--accent);
-  }
-
   /* Color-only transition preset (paint-safe properties only) */
   .transition-ui {
     transition-property: color, background-color, border-color, opacity, box-shadow, transform;
     transition-duration: var(--motion-duration-base);
     transition-timing-function: var(--motion-ease-out);
-  }
-}
-
-@media (max-width: 1023.98px) {
-  .map-controls-anchor {
-    right: 16px !important;
   }
 }
 
@@ -171,6 +187,16 @@
 .bw-scroll-pane {
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+}
+
+/* Segmented control's active pill shadow.
+   Declared as a real class rather than a Tailwind shadow utility because
+   Tailwind v3 parses `shadow-[var(--x)]` as a shadow COLOUR: it emitted
+   `--tw-shadow-color: var(--segmented-active-shadow)`, so the token never
+   reached `box-shadow` and every segmented control lost its pill elevation.
+   Keeping the declaration here preserves the token as the single source. */
+.bw-segmented-active-shadow {
+  box-shadow: var(--segmented-active-shadow);
 }
 
 /* Horizontal tab strips: scrollable, snap to tab starts, hide the bar
@@ -206,17 +232,6 @@
     black calc(100% - var(--bw-fade-x-w)),
     transparent 100%
   );
-}
-
-/* Fluid chrome type: primary control labels stay >=12px on compact
-   viewports without redesigning the desktop type ramp. */
-.bw-fluid-label {
-  font-size: 11px;
-}
-@media (max-width: 767.98px) {
-  .bw-fluid-label {
-    font-size: 12px;
-  }
 }
 
 /* Touch-target slop: keeps the rendered control compact (32px) while the
@@ -598,9 +613,97 @@
 /* REPORT SHEET — anchored sections & async placeholders                     */
 /* ========================================================================= */
 
-/* Anchor targets clear the sticky sheet header (56px) + mobile tab strip */
+/* Anchor targets land just inside the pane. The sheet header, the sub-header
+   row (read-out + section nav) and the mobile tab strip are all OUTSIDE the
+   scroll pane, so only the pane's own padding needs clearing — the 72px this
+   used to reserve was sized for the sticky section strip that lived in the pane
+   and has since moved into the sub-header. */
 [data-report-section] {
-  scroll-margin-top: 72px;
+  scroll-margin-top: 32px;
+}
+
+/* Skeleton placeholder for async report cards (the Skeleton primitive):
+   tokenized shimmer. The global prefers-reduced-motion rule freezes it to a
+   static tint, so nothing animates when the user asks for reduced motion. */
+.report-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--fill) 25%,
+    var(--fill-hover) 50%,
+    var(--fill) 75%
+  );
+  background-size: 200% 100%;
+  animation: reportSkeletonShimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes reportSkeletonShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* ========================================================================= */
+/* CARD GRAMMAR — hover elevation, pressed state, staggered entrance         */
+/* ========================================================================= */
+
+/* Hover elevation + pressed feedback. Paint-safe props only (transform /
+   shadow) so a hover never triggers layout. 200ms ease-out; pressed snaps to
+   100ms. Motion is frozen by the global prefers-reduced-motion rule. */
+.bw-card {
+  transition:
+    transform var(--motion-duration-slow) var(--motion-ease-out),
+    box-shadow var(--motion-duration-slow) var(--motion-ease-out);
+}
+@media (hover: hover) {
+  .bw-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lift);
+  }
+}
+.bw-card:active {
+  transform: scale(0.98);
+  transition-duration: var(--motion-duration-fast);
+}
+
+/* Staggered entrance for stacked cards: 40ms increments, capped at 8 (the 9th
+   card onward starts with the batch). Reduced motion disables the animation
+   entirely — including its delay, which the global duration rule does not
+   neutralise. */
+@keyframes bwCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.bw-stagger > * {
+  animation: bwCardIn var(--motion-duration-slow) var(--motion-ease-out) both;
+}
+.bw-stagger > *:nth-child(1) { animation-delay: 0ms; }
+.bw-stagger > *:nth-child(2) { animation-delay: 40ms; }
+.bw-stagger > *:nth-child(3) { animation-delay: 80ms; }
+.bw-stagger > *:nth-child(4) { animation-delay: 120ms; }
+.bw-stagger > *:nth-child(5) { animation-delay: 160ms; }
+.bw-stagger > *:nth-child(6) { animation-delay: 200ms; }
+.bw-stagger > *:nth-child(7) { animation-delay: 240ms; }
+.bw-stagger > *:nth-child(8) { animation-delay: 280ms; }
+.bw-stagger > *:nth-child(n + 9) { animation-delay: 0ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bw-stagger > * {
+    animation: none !important;
+  }
+  .bw-card,
+  .bw-card:hover,
+  .bw-card:active {
+    transform: none;
+  }
 }
 
 
@@ -681,15 +784,6 @@
     break-before: auto;
   }
 
-  /* Warnings banner always prints at the top of page 1, before the hero. */
-  .report-print-warnings {
-    page-break-before: auto;
-    break-before: auto;
-    page-break-after: avoid;
-    break-after: avoid;
-    order: -1;
-  }
-
   /* Grayscale-safe provenance badges for B&W printers:
      VERIFIED  = solid black border (measured, trusted)
      CALCULATED = solid 1.5px black border + light gray fill (derived)
@@ -744,10 +838,6 @@
     print-color-adjust: exact;
   }
 
-  /* Tab strip becomes section context; hide interactive-only controls. */
-  .report-tab-strip-print-label {
-    display: block !important;
-  }
 }
 
 
@@ -934,10 +1024,7 @@ html.bw-landing-open.lenis body {
   -webkit-text-fill-color: transparent;
 }
 
-/* iOS-style landing toggle track/knob colors (mirror app switches) */
-.bw-switch-track {
-  transition: background-color 300ms var(--bw-ease-apple);
-}
+/* iOS-style landing toggle knob shadow (mirrors the app switches) */
 .bw-switch-knob {
   box-shadow: 0 2px 5px rgba(11, 18, 32, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
 }
