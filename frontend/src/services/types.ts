@@ -23,6 +23,16 @@ export interface AnalysisRequest {
   boundary?: BoundarySummaryPayload | null;
 }
 
+/**
+ * Analysis parameters: everything the request carries EXCEPT where the site is.
+ *
+ * The site's coordinates are deliberately not part of the app's parameter state.
+ * The captured plot owns them (see `siteLocation` in App.tsx), so there is only
+ * one value pair for "where this is" and no second copy to keep in step; the
+ * coordinates are attached when a request is built.
+ */
+export type AnalysisParams = Omit<AnalysisRequest, 'latitude' | 'longitude'>;
+
 /** Mirrors the backend BoundarySummary wire shape ({x,y} vertices in local meters). */
 export interface BoundarySummaryPayload {
   vertices: { x: number; y: number }[];

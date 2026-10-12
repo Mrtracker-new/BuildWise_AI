@@ -4,7 +4,7 @@ import type {
   SiteVisionResponse,
   FloorPlanResponse,
   ReportRequestPayload,
-  AnalysisRequest,
+  AnalysisParams,
 } from '../services/types';
 import { ReportHeroHeader } from './report/ReportHeroHeader';
 import { CollapsibleSection } from './report/CollapsibleSection';
@@ -43,7 +43,8 @@ export interface ReportSheetProps {
   isOpen: boolean;
   onClose: () => void;
   analysisData: AnalysisResponse;
-  analysisRequest?: AnalysisRequest;
+  /** Parameters only (no coordinates): the plot owns where this report is. */
+  analysisRequest?: AnalysisParams;
   siteVisionData: SiteVisionResponse | null;
   isSiteVisionLoading: boolean;
   onRunSiteVision: (modeOverride?: 'segformer' | 'index-only') => void;

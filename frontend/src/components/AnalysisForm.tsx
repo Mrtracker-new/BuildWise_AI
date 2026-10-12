@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import type { AnalysisRequest } from '../services/types';
+import type { AnalysisParams } from '../services/types';
 import { Icon, type IconName } from './Icon';
 import { Select, Tooltip, useDesign } from '../design';
 import { ConstraintChips } from './ConstraintChips';
@@ -20,10 +20,11 @@ export interface ProviderAvailability {
 }
 
 interface AnalysisFormProps {
-  request: AnalysisRequest;
+  /** Parameters only — the site's coordinates live with the plot (App.tsx). */
+  request: AnalysisParams;
   isLoading: boolean;
   hasCoordinates: boolean;
-  onChange: (updated: Partial<AnalysisRequest>) => void;
+  onChange: (updated: Partial<AnalysisParams>) => void;
   onSubmit: () => void;
   /** Opened when the CTA is pressed before a boundary exists. */
   onRequestCapture?: () => void;

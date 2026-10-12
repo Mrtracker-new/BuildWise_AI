@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import type { FloorPlanRequest, FloorPlanResponse, AnalysisRequest, FloorPlanParamsSnapshot, PlotPolygon } from '../services/types';
+import type { FloorPlanRequest, FloorPlanResponse, AnalysisParams, FloorPlanParamsSnapshot, PlotPolygon } from '../services/types';
 import { generateFloorPlan } from '../services/api';
 import { BlueprintViewer } from './BlueprintViewer';
 import { Icon } from './Icon';
@@ -33,8 +33,9 @@ interface FloorPlanGeneratorCardProps {
   defaultDepthM?: number;
   onFloorPlanGenerated?: (plan: FloorPlanResponse) => void;
   activeFloorPlan?: FloorPlanResponse | null;
-  // Shared AnalysisRequest object from App.tsx (single source of truth)
-  analysisRequest?: AnalysisRequest;
+  // Shared analysis parameters from App.tsx (single source of truth). Parameters
+  // only — the site's coordinates live with the captured plot.
+  analysisRequest?: AnalysisParams;
   buildingTypology?: string;
   qualityGrade?: string;
   floors?: number;
