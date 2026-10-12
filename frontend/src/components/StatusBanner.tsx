@@ -22,10 +22,10 @@ export const TelemetryStrip: React.FC<TelemetryStripProps> = ({
   return (
     <div
       role="status"
-      className="vibrancy-panel rounded-[12px] border border-[var(--panel-border-color)] text-[var(--semantic-amber)] px-3.5 py-2 text-[12px] flex items-center justify-between gap-3 shrink-0 z-[1000]"
+      className="vibrancy-panel rounded-[12px] border border-[var(--panel-border-color)] text-[var(--semantic-amber-ink)] px-3.5 py-2 text-[12px] flex items-center justify-between gap-3 shrink-0 z-[1000]"
     >
       <div className="flex items-center gap-2 min-w-0 flex-1">
-        <Icon name="alert-triangle" size={14} className="text-[var(--semantic-amber)] shrink-0" />
+        <Icon name="alert-triangle" size={14} className="text-[var(--semantic-amber-ink)] shrink-0" />
         <span className="font-semibold shrink-0 uppercase tracking-[0.08em] text-[11px]">
           Notice:
         </span>
@@ -63,9 +63,9 @@ export const ErrorBanner: React.FC<ErrorBannerProps> = ({ errorMessage, onDismis
       className="bg-[var(--fill)] border border-[var(--hairline)] text-[var(--text-1)] p-3 rounded-[12px] text-[12px] flex items-start justify-between gap-3 shadow-sm"
     >
       <div className="flex items-start gap-2.5">
-        <Icon name="shield-alert" size={15} className="text-[var(--semantic-red)] mt-0.5 shrink-0" />
+        <Icon name="shield-alert" size={15} className="text-[var(--semantic-red-ink)] mt-0.5 shrink-0" />
         <div className="space-y-0.5">
-          <span className="font-semibold block text-[12px] text-[var(--semantic-red)]">
+          <span className="font-semibold block text-[12px] text-[var(--semantic-red-ink)]">
             System Alert
           </span>
           <p className="text-[12px] text-[var(--text-2)] leading-normal">{errorMessage}</p>
@@ -81,33 +81,6 @@ export const ErrorBanner: React.FC<ErrorBannerProps> = ({ errorMessage, onDismis
         >
           <Icon name="x" size={13} />
         </button>
-      )}
-    </div>
-  );
-};
-
-export const StatusBanner: React.FC<{
-  warnings: string[];
-  errorMessage?: string | null;
-  onDismissError?: () => void;
-  onDismissWarnings?: () => void;
-  isWarningDismissed?: boolean;
-}> = ({
-  warnings,
-  errorMessage,
-  onDismissError,
-  onDismissWarnings,
-  isWarningDismissed = false,
-}) => {
-  return (
-    <div className="space-y-2">
-      <ErrorBanner errorMessage={errorMessage || null} onDismiss={onDismissError} />
-      {warnings && warnings.length > 0 && !isWarningDismissed && onDismissWarnings && (
-        <TelemetryStrip
-          warnings={warnings}
-          isDismissed={isWarningDismissed}
-          onDismiss={onDismissWarnings}
-        />
       )}
     </div>
   );

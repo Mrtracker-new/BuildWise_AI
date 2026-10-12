@@ -44,7 +44,7 @@ export const AssistedBar: React.FC<AssistedBarProps> = ({
           aria-live="polite"
           className="pointer-events-auto vibrancy-panel rounded-[14px] border border-[var(--panel-border-color)] shadow-lg pl-2.5 sm:pl-3 pr-1.5 py-1.5 flex items-center gap-2 min-w-0"
         >
-          <Icon name="info" size={15} className="text-[var(--accent)] shrink-0" aria-hidden="true" />
+          <Icon name="info" size={15} className="text-[var(--accent-ink)] shrink-0" aria-hidden="true" />
           <p className="min-w-0 text-[11px] sm:text-[12px] leading-[1.45] text-[var(--text-1)]">
             <span className="font-semibold">Assisted mode.</span>{' '}
             <span className="text-[var(--text-2)]">

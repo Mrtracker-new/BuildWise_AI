@@ -9,6 +9,8 @@ import {
   type SharedBoundaryState,
 } from '../services/siteBoundary';
 import { ConstraintChips } from './ConstraintChips';
+import { SegmentedControl } from '../design';
+import { Skeleton } from './report/Skeleton';
 import { groupGateLayers, qaRowText, QA_CHIP_CLASSES } from '../services/validationGateUI';
 import {
   type CanonicalTypology,
@@ -487,7 +489,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
 
       {/* Error Notice */}
       {errorMessage && (
-        <div className="p-2.5 rounded-[10px] bg-[var(--fill)] text-[12px] text-[var(--semantic-red)] flex items-center gap-2">
+        <div className="p-2.5 rounded-[10px] bg-[var(--fill)] text-[12px] text-[var(--semantic-red-ink)] flex items-center gap-2">
           <Icon name="alert-triangle" size={14} className="shrink-0" />
           <span>{errorMessage}</span>
         </div>
@@ -503,13 +505,13 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
               : `Boundary: ${String(polyMetrics.shapeType).replace('_', '-').toUpperCase()} · ${polyMetrics.area.toFixed(0)} m² · ${polyMetrics.bbox ? '' : ''}${irregularVertices.length} vertices`}
           </span>
           {!polyMetrics.isValid && siteMode === 'irregular' && (
-            <span className="text-[11px] text-[var(--semantic-red)] truncate">{polyMetrics.reason}</span>
+            <span className="text-[11px] text-[var(--semantic-red-ink)] truncate">{polyMetrics.reason}</span>
           )}
         </div>
         <button
           type="button"
           onClick={requestBoundaryEdit}
-          className="px-2.5 py-1 rounded-[8px] text-[11px] font-medium bg-[var(--accent-tint)] text-[var(--accent)] hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] shrink-0"
+          className="px-2.5 py-1 rounded-[8px] text-[11px] font-medium bg-[var(--accent-tint)] text-[var(--accent-ink)] hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] shrink-0"
         >
           Edit on map
         </button>
@@ -574,25 +576,18 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
           <label className="text-[12px] font-normal text-[var(--text-3)] block">
             Vastu strictness
           </label>
-          <div className="bg-[var(--fill)] rounded-[10px] p-[2px] grid grid-cols-3 gap-1">
-            {(['high', 'medium', 'low'] as const).map((lvl) => (
-              <button
-                key={lvl}
-                type="button"
-                onClick={() => setStrictness(lvl)}
-                className={`py-1 px-2 rounded-[8px] text-[12px] font-medium capitalize text-center transition-all ${
-                  strictness === lvl
-                    ? 'bg-[var(--segmented-active-bg)] shadow-[var(--segmented-active-shadow)] font-semibold'
-                    : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
-                }`}
-                style={{
-                  color: strictness === lvl ? 'var(--segmented-active-label)' : 'var(--text-2)',
-                }}
-              >
-                {lvl}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            ariaLabel="Vastu strictness"
+            size="sm"
+            stretch
+            value={strictness}
+            onChange={setStrictness}
+            options={[
+              { id: 'high', label: 'High' },
+              { id: 'medium', label: 'Medium' },
+              { id: 'low', label: 'Low' },
+            ]}
+          />
           <span className="text-[11px] text-[var(--text-3)] block leading-tight">
             {strictness === 'high'
               ? 'Canonical zones (Kitchen SE, Puja NE, Bed SW).'
@@ -614,7 +609,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
               <span
                 className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-medium ${
                   polyMetrics.isValid
-                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                    ? 'bg-emerald-500/15 text-[var(--semantic-green-ink)]'
                     : 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
                 }`}
               >
@@ -638,7 +633,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
             <button
               type="button"
               onClick={requestBoundaryEdit}
-              className="text-[11px] font-medium text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded"
+              className="text-[11px] font-medium text-[var(--accent-ink)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded"
             >
               Open capture
             </button>
@@ -651,7 +646,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
             <span className="font-semibold uppercase tracking-wider">Active Client Constraints</span>
             <span>Inherited from Project Parameters</span>
           </div>
-          <ConstraintChips constraints={activeConstraints} onChange={() => {}} />
+          <ConstraintChips constraints={activeConstraints} readOnly />
         </div>
       )}
 
@@ -668,7 +663,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
           </div>
           <div className="flex items-center gap-1.5 text-[11px]">
             {activeFloors > 1 ? (
-              <span className="text-amber-600 dark:text-amber-400 font-medium">
+              <span className="text-[var(--semantic-amber-ink)] font-medium">
                 Vertical cores anchor-locked
               </span>
             ) : (
@@ -690,7 +685,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                   isChecked
                     ? isVerticalCore
                       ? 'bg-purple-500/15 text-purple-700 dark:text-purple-300 font-semibold ring-1 ring-purple-500/30'
-                      : 'bg-[var(--accent-tint)] text-[var(--accent)] font-semibold'
+                      : 'bg-[var(--accent-tint)] text-[var(--accent-ink)] font-semibold'
                     : 'bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)]'
                 }`}
               >
@@ -741,7 +736,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         <div className="space-y-2 p-3 rounded-[12px] bg-[var(--fill)] border border-[var(--hairline)]">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
-              <Icon name="layers" size={14} className="text-[var(--accent)]" />
+              <Icon name="layers" size={14} className="text-[var(--accent-ink)]" />
               <span className="text-[12px] font-semibold text-[var(--text-1)]">
                 Per-Floor Floorplate Variations
               </span>
@@ -766,7 +761,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                       className="flex items-center gap-1 text-[var(--text-2)] cursor-not-allowed opacity-75"
                       title="Contains vertical core & egress stairs (RULE-FP-01)"
                     >
-                      <input type="checkbox" checked={true} disabled={true} className="rounded text-[var(--accent)]" />
+                      <input type="checkbox" checked={true} disabled={true} className="rounded text-[var(--accent-ink)]" />
                       <span>Wing A (Core)</span>
                     </label>
 
@@ -776,7 +771,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                         className="flex items-center gap-1 text-[var(--text-2)] cursor-not-allowed opacity-75"
                         title="Ground floor footprint must be occupied (RULE-FP-01)"
                       >
-                        <input type="checkbox" checked={true} disabled={true} className="rounded text-[var(--accent)]" />
+                        <input type="checkbox" checked={true} disabled={true} className="rounded text-[var(--accent-ink)]" />
                         <span>Wing B (Ground)</span>
                       </label>
                     ) : (
@@ -813,7 +808,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       <div className="space-y-2 p-3 rounded-[12px] bg-[var(--fill)] border border-[var(--hairline)]">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
-            <Icon name="layers" size={14} className="text-[var(--accent)]" />
+            <Icon name="layers" size={14} className="text-[var(--accent-ink)]" />
             <span className="text-[12px] font-semibold text-[var(--text-1)]">Design Intent</span>
           </div>
           <span className="text-[10px] text-[var(--text-3)] font-mono">L8 PROGRAM INTENT</span>
@@ -857,7 +852,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       <div className="space-y-2 p-3 rounded-[12px] bg-[var(--fill)] border border-[var(--hairline)]">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
-            <Icon name="layers" size={14} className="text-[var(--accent)]" />
+            <Icon name="layers" size={14} className="text-[var(--accent-ink)]" />
             <span className="text-[12px] font-semibold text-[var(--text-1)]">Engineering Drawing Layers</span>
           </div>
           <span className="text-[10px] text-[var(--text-3)] font-mono">L9-L14</span>
@@ -892,7 +887,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         <div className="space-y-2 p-3 rounded-[12px] bg-[var(--fill)] border border-[var(--hairline)]">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
-              <Icon name="layers" size={14} className="text-[var(--accent)]" />
+              <Icon name="layers" size={14} className="text-[var(--accent-ink)]" />
               <span className="text-[12px] font-semibold text-[var(--text-1)]">
                 Per-Floor Terrace Bands (Rectangular)
               </span>
@@ -960,7 +955,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                     <div className="flex items-center justify-between pt-1 border-t border-[var(--hairline)]/50 gap-3">
                       <div className="flex items-center gap-1.5 text-[var(--text-2)]">
                         <span>Depth:</span>
-                        <span className="font-mono font-semibold text-[var(--accent)]">
+                        <span className="font-mono font-semibold text-[var(--accent-ink)]">
                           {band.depth_m.toFixed(1)}m
                         </span>
                         <span className="text-[10px] text-[var(--text-3)]">
@@ -1017,6 +1012,19 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         )}
       </button>
 
+      {/* Blueprint render placeholder while the solver runs (no plan yet) */}
+      {isGenerating && !floorPlan && (
+        <div className="space-y-3 pt-1" aria-label="Solving architectural layout">
+          <Skeleton className="h-[320px] w-full rounded-[16px]" label="Generating architectural blueprint" />
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+            <Skeleton className="h-12" />
+            <Skeleton className="h-12" />
+            <Skeleton className="h-12" />
+            <Skeleton className="h-12" />
+          </div>
+        </div>
+      )}
+
       {/* Blueprint & Metrics Display */}
       {floorPlan && (
         <div className="space-y-3 pt-1">
@@ -1055,7 +1063,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                 </div>
                 <div className="bg-[var(--fill)]/50 rounded-[6px] p-1.5 text-center">
                   <span className="text-[var(--text-3)] block text-[10px]">Ghost Overlay</span>
-                  <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                  <span className="font-semibold text-[var(--semantic-green-ink)]">
                     Active on F1+
                   </span>
                 </div>
@@ -1066,7 +1074,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
           {/* Design Brief Accent-tinted Callout */}
           <div className="rounded-[10px] bg-[var(--accent-tint)] border border-[var(--accent)]/20 p-3 space-y-1.5">
             <div className="flex items-center justify-between flex-wrap gap-1.5">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--accent)]">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--accent-ink)]">
                 Design Brief
               </span>
               <div className="flex items-center gap-1.5">
@@ -1131,7 +1139,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
               if (logicList.length === 0) return null;
               return (
                 <details className="mt-2 text-[12px] group">
-                  <summary className="cursor-pointer text-[11px] font-medium text-[var(--accent)] hover:underline select-none flex items-center gap-1">
+                  <summary className="cursor-pointer text-[11px] font-medium text-[var(--accent-ink)] hover:underline select-none flex items-center gap-1">
                     <span>Placement Logic ({logicList.length} rules applied)</span>
                   </summary>
                   <ul className="mt-1.5 space-y-1 pl-4 list-disc text-[11px] text-[var(--text-1)]">
@@ -1226,7 +1234,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
             </div>
             <div className="h-10 flex items-center justify-between px-0.5">
               <span className="text-[13px] font-normal text-[var(--text-2)]">Circulation</span>
-              <span className="text-[13px] font-semibold text-emerald-600 dark:text-emerald-400 capitalize tabular-nums whitespace-nowrap">
+              <span className="text-[13px] font-semibold text-[var(--semantic-green-ink)] capitalize tabular-nums whitespace-nowrap">
                 {floorPlan.metrics.circulation_status || floorPlan.qa?.circulation || 'Connected'}
               </span>
             </div>
@@ -1243,7 +1251,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                     <span className="text-[13px] font-normal text-[var(--text-2)]">Architect review</span>
                     <span className={`text-[13px] font-semibold tabular-nums whitespace-nowrap capitalize ${
                       floorPlan.qa.critic === 'pass'
-                        ? 'text-emerald-600 dark:text-emerald-400'
+                        ? 'text-[var(--semantic-green-ink)]'
                         : floorPlan.qa.critic === 'skipped'
                         ? 'text-[var(--text-2)]'
                         : 'text-rose-600'
@@ -1316,9 +1324,9 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
               <div className="p-3 rounded-[12px] bg-emerald-500/5 border border-emerald-500/20 text-[12px] space-y-2.5">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-1.5 font-semibold text-[13px] text-emerald-800 dark:text-emerald-300">
-                    <Icon name="check-circle" size={15} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    <Icon name="check-circle" size={15} className="text-[var(--semantic-green-ink)] shrink-0" />
                     <span>Mathematical Validity Certificate</span>
-                    <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                    <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-[var(--semantic-green-ink)]">
                       {certId}
                     </span>
                   </div>
@@ -1341,7 +1349,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                         <span className="text-[var(--text-3)]">{chk.ref}</span>
                         <span className={`font-bold px-1.5 py-0.2 rounded ${
                           chk.pass
-                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                            ? 'bg-emerald-500/15 text-[var(--semantic-green-ink)]'
                             : 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
                         }`}>
                           {chk.pass ? 'PASS' : 'FAIL'}
@@ -1435,7 +1443,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <div className="text-[10px] text-emerald-700 dark:text-emerald-400 font-medium">
+                  <div className="text-[10px] text-[var(--semantic-green-ink)] dark:text-emerald-400 font-medium">
                     Zero Relaxations: Strict statutory compliance across all spaces.
                   </div>
                 )}

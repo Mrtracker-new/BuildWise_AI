@@ -44,7 +44,7 @@ export const EmptyState: React.FC = () => {
       <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
         {steps.map((step, idx) => (
           <div key={idx} className="py-3 flex items-start gap-3 min-w-0">
-            <div className="w-6 h-6 rounded-[6px] bg-[var(--accent-tint)] flex items-center justify-center text-[var(--accent)] shrink-0 mt-0.5">
+            <div className="w-6 h-6 rounded-[6px] bg-[var(--accent-tint)] flex items-center justify-center text-[var(--accent-ink)] shrink-0 mt-0.5">
               <Icon name={step.icon} size={14} />
             </div>
             <div className="space-y-0.5 min-w-0 flex-1">

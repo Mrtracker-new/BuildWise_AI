@@ -154,11 +154,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               onClick={() => setIsPopoverOpen(!isPopoverOpen)}
               aria-haspopup="dialog"
               aria-expanded={isPopoverOpen}
-              className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 text-[11px] sm:text-[12px] font-medium text-[var(--semantic-amber)] bg-[var(--fill)] hover:bg-[var(--fill-hover)] rounded-[10px] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--semantic-amber)]/30 min-h-[32px]"
+              className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 text-[11px] sm:text-[12px] font-medium text-[var(--semantic-amber-ink)] bg-[var(--fill)] hover:bg-[var(--fill-hover)] rounded-[10px] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--semantic-amber)]/30 min-h-[32px]"
               title={`Telemetry Notices (${warnings.length}): Click or press Enter to view details`}
               aria-label={`View ${warnings.length} telemetry notices`}
             >
-              <Icon name="alert-triangle" size={13} className="text-[var(--semantic-amber)] shrink-0" />
+              <Icon name="alert-triangle" size={13} className="text-[var(--semantic-amber-ink)] shrink-0" />
               <span className="font-semibold">{warnings.length}</span>
               <span className="hidden sm:inline">Notice{warnings.length > 1 ? 's' : ''}</span>
             </button>
@@ -172,7 +172,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                 className="absolute right-0 top-full mt-2 w-80 sm:w-96 max-w-[calc(100vw-32px)] vibrancy-panel rounded-[16px] shadow-2xl z-[1050] p-4 space-y-3 text-[12px] border border-[var(--panel-border-color)]"
               >
                 <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2.5">
-                  <div className="flex items-center gap-1.5 text-[var(--semantic-amber)] font-semibold">
+                  <div className="flex items-center gap-1.5 text-[var(--semantic-amber-ink)] font-semibold">
                     <Icon name="alert-triangle" size={14} />
                     <span>Active Telemetry Notices ({warnings.length})</span>
                   </div>
@@ -192,7 +192,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                       key={idx}
                       className="bg-[var(--fill)] p-2.5 rounded-[10px] text-[var(--text-1)] leading-relaxed whitespace-normal break-words flex items-start gap-2"
                     >
-                      <span className="font-bold text-[11px] text-[var(--semantic-amber)] mt-0.5 shrink-0">
+                      <span className="font-bold text-[11px] text-[var(--semantic-amber-ink)] mt-0.5 shrink-0">
                         {idx + 1}.
                       </span>
                       <p className="flex-1 text-[12px]">{w}</p>

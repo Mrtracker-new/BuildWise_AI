@@ -55,7 +55,7 @@ export const AnalysisHUD: React.FC<AnalysisHUDProps> = ({
             className="w-5 h-5 rounded-full border-2 border-[var(--accent)] shrink-0 flex items-center justify-center"
             title={`${Math.round(progressPct)}% complete`}
           >
-            <span className="text-[8px] font-bold text-[var(--accent)] tabular-nums leading-none">
+            <span className="text-[8px] font-bold text-[var(--accent-ink)] tabular-nums leading-none">
               {Math.round(progressPct)}%
             </span>
           </div>
@@ -77,9 +77,9 @@ export const AnalysisHUD: React.FC<AnalysisHUDProps> = ({
       {fallbackMessage && (
         <div
           role="alert"
-          className="mt-3.5 px-3 py-1.5 rounded-[10px] bg-[var(--semantic-amber)]/10 border border-[var(--semantic-amber)]/30 flex items-center gap-2 text-[12px] text-[var(--semantic-amber)] font-medium animate-fade-in"
+          className="mt-3.5 px-3 py-1.5 rounded-[10px] bg-[var(--semantic-amber)]/10 border border-[var(--semantic-amber)]/30 flex items-center gap-2 text-[12px] text-[var(--semantic-amber-ink)] font-medium animate-fade-in"
         >
-          <Icon name="alert-triangle" size={13} className="shrink-0 text-[var(--semantic-amber)]" />
+          <Icon name="alert-triangle" size={13} className="shrink-0 text-[var(--semantic-amber-ink)]" />
           <span className="truncate">{fallbackMessage}</span>
         </div>
       )}

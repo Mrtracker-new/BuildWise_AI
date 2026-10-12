@@ -38,6 +38,7 @@ export type IconName =
   | 'copy'
   | 'map'
   | 'arrow-up-right'
+  | 'arrow-up'
   | 'printer'
   | 'shield'
   | 'sparkles'
@@ -373,6 +374,13 @@ export const Icon: React.FC<IconProps> = ({
         <svg {...commonProps}>
           <line x1="7" y1="17" x2="17" y2="7" />
           <polyline points="7 7 17 7 17 17" />
+        </svg>
+      );
+    case 'arrow-up':
+      return (
+        <svg {...commonProps}>
+          <line x1="12" y1="19" x2="12" y2="5" />
+          <polyline points="5 12 12 5 19 12" />
         </svg>
       );
     case 'printer':

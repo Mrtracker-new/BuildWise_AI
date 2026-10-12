@@ -61,7 +61,7 @@ export const DataSourcesDisclosure: React.FC<DataSourcesDisclosureProps> = ({ ca
       >
         <div className="overflow-hidden space-y-2">
           {degraded && (
-            <div className="flex items-start gap-2 text-[12px] text-[var(--semantic-amber)] leading-snug">
+            <div className="flex items-start gap-2 text-[12px] text-[var(--semantic-amber-ink)] leading-snug">
               <Icon name="alert-triangle" size={12} className="shrink-0 mt-0.5" />
               <span>
                 Some telemetry services were unavailable during this analysis; deterministic
@@ -71,7 +71,7 @@ export const DataSourcesDisclosure: React.FC<DataSourcesDisclosureProps> = ({ ca
           )}
           {sources.map((src, idx) => (
             <div key={idx} className="flex items-start gap-2 text-[12px] text-[var(--text-3)] leading-snug">
-              <Icon name="info" size={12} className="text-[var(--accent)] shrink-0 mt-0.5" />
+              <Icon name="info" size={12} className="text-[var(--accent-ink)] shrink-0 mt-0.5" />
               <span>{src}</span>
             </div>
           ))}

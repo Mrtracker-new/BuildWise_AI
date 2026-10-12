@@ -60,7 +60,7 @@ export const DownloadReportButton: React.FC<DownloadReportButtonProps> = ({
           )}
         </button>
         {downloadError && (
-          <div className="absolute right-0 top-full mt-1.5 w-48 p-2 rounded-[8px] bg-[var(--surface)] border border-[var(--semantic-red)]/40 shadow-lg text-[11px] text-[var(--semantic-red)] z-50">
+          <div className="absolute right-0 top-full mt-1.5 w-48 p-2 rounded-[8px] bg-[var(--surface)] border border-[var(--semantic-red)]/40 shadow-lg text-[11px] text-[var(--semantic-red-ink)] z-50">
             {downloadError}
           </div>
         )}
@@ -94,7 +94,7 @@ export const DownloadReportButton: React.FC<DownloadReportButtonProps> = ({
       </button>
 
       {downloadError && (
-        <p className="text-[12px] text-[var(--semantic-red)] font-medium text-center">
+        <p className="text-[12px] text-[var(--semantic-red-ink)] font-medium text-center">
           {downloadError}
         </p>
       )}

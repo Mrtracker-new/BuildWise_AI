@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { RecommendationItem } from '../services/types';
 import { Icon } from './Icon';
+import { SegmentedControl } from '../design';
 
 interface RecommendationPanelProps {
   summary: string;
@@ -70,24 +71,27 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
     setTimeout(() => setCopied(false), 1500);
   };
 
+  // Pill TEXT uses the -ink hues: the bright semantic tokens are fill/graphic
+  // colours and measure below AA as small text on their own tints (red 3.01:1,
+  // amber 1.88:1, green 2.01:1 on 12% tints).
   const getSeverityStyle = (sev: string) => {
     switch (sev.toLowerCase()) {
       case 'critical':
       case 'high':
         return {
           bg: 'rgba(255, 59, 48, 0.12)',
-          text: 'var(--semantic-red)',
+          text: 'var(--semantic-red-ink)',
         };
       case 'advisory':
       case 'moderate':
         return {
           bg: 'rgba(255, 159, 10, 0.12)',
-          text: 'var(--semantic-amber)',
+          text: 'var(--semantic-amber-ink)',
         };
       default:
         return {
           bg: 'rgba(52, 199, 89, 0.12)',
-          text: 'var(--semantic-green)',
+          text: 'var(--semantic-green-ink)',
         };
     }
   };
@@ -99,7 +103,7 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
       : items.filter((it) => it.severity.toLowerCase() === filterSeverity.toLowerCase());
 
   return (
-    <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 sm:p-[18px] space-y-3.5 w-full min-w-0">
+    <div className="bw-card rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 sm:p-[18px] space-y-3.5 w-full min-w-0">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
@@ -116,7 +120,7 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
           <Icon
             name={copied ? 'check' : 'copy'}
             size={12}
-            className={copied ? 'text-[var(--semantic-green)]' : 'text-[var(--text-3)]'}
+            className={copied ? 'text-[var(--semantic-green-ink)]' : 'text-[var(--text-3)]'}
           />
           <span>{copied ? 'Copied' : 'Copy'}</span>
         </button>
@@ -125,8 +129,8 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
       {/* Parameter Reflection: styled italic quote with sparkles icon and accent-tinted surface */}
       {reflectionText && (
         <div className="p-3.5 bg-[var(--accent-tint)] border border-[var(--accent)]/20 rounded-[12px] space-y-1.5">
-          <div className="flex items-center gap-1.5 text-[12px] font-medium text-[var(--accent)]">
-            <Icon name="sparkles" size={13} className="text-[var(--accent)]" />
+          <div className="flex items-center gap-1.5 text-[12px] font-medium text-[var(--accent-ink)]">
+            <Icon name="sparkles" size={13} className="text-[var(--accent-ink)]" />
             <span>AI parameter reflection</span>
           </div>
           <p className="text-[13px] text-[var(--text-1)] leading-relaxed italic">
@@ -147,25 +151,19 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
         <div className="space-y-2 pt-1">
           {/* Sticky filter segmented control at card top */}
           <div className="sticky top-0 bg-[var(--card-bg-subtle)] z-10 pt-1 pb-1.5">
-            <div className="bg-[var(--fill)] rounded-[10px] p-[2px] grid grid-cols-4 gap-1 text-[11px] font-medium">
-              {['all', 'critical', 'advisory', 'optimal'].map((f) => (
-                <button
-                  key={f}
-                  type="button"
-                  onClick={() => setFilterSeverity(f)}
-                  className={`py-1 rounded-[8px] text-center capitalize transition-all cursor-pointer ${
-                    filterSeverity === f
-                      ? 'bg-[var(--segmented-active-bg)] shadow-[var(--segmented-active-shadow)] font-semibold'
-                      : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
-                  }`}
-                  style={{
-                    color: filterSeverity === f ? 'var(--segmented-active-label)' : 'var(--text-2)',
-                  }}
-                >
-                  {f}
-                </button>
-              ))}
-            </div>
+            <SegmentedControl
+              ariaLabel="Filter recommendations by severity"
+              size="sm"
+              stretch
+              value={filterSeverity}
+              onChange={setFilterSeverity}
+              options={[
+                { id: 'all', label: 'All' },
+                { id: 'critical', label: 'Critical' },
+                { id: 'advisory', label: 'Advisory' },
+                { id: 'optimal', label: 'Optimal' },
+              ]}
+            />
           </div>
 
           {/* Grouped Recommendations List: hairline separators, no per-entry cards, scrollable */}
@@ -205,12 +203,37 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
                       <button
                         type="button"
                         onClick={() => toggleExpand(itemId)}
-                        className="text-[12px] font-medium text-[var(--accent)] hover:underline mt-1 cursor-pointer select-none inline-block"
+                        className="text-[12px] font-medium text-[var(--accent-ink)] hover:underline mt-1 cursor-pointer select-none inline-block"
                       >
                         {isExpanded ? 'Less' : 'More'}
                       </button>
                     )}
                   </div>
+
+                  {/* Traceability: why this recommendation fired + which payload field it reads. */}
+                  {(item.trigger_condition || item.source_data_ref) && (
+                    <details className="group">
+                      <summary className="cursor-pointer text-[11px] font-medium text-[var(--accent-ink)] hover:underline select-none inline-flex items-center gap-1 list-none">
+                        <Icon name="info" size={11} className="shrink-0" />
+                        Why this recommendation
+                      </summary>
+                      <div className="mt-1.5 space-y-1 pl-4 text-[11px] text-[var(--text-3)] leading-snug">
+                        {item.trigger_condition && (
+                          <p>
+                            <span className="font-semibold text-[var(--text-2)]">Trigger:</span>{' '}
+                            {item.trigger_condition}
+                          </p>
+                        )}
+                        {item.source_data_ref && (
+                          <p>
+                            <span className="font-semibold text-[var(--text-2)]">Source data:</span>{' '}
+                            {item.source_data_ref}
+                          </p>
+                        )}
+                        {item.rule_id && <p className="font-mono">Rule {item.rule_id}</p>}
+                      </div>
+                    </details>
+                  )}
                 </div>
               );
             })}
@@ -234,7 +257,7 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({
                       <button
                         type="button"
                         onClick={() => toggleExpand(idx)}
-                        className="text-[12px] font-medium text-[var(--accent)] hover:underline mt-1 cursor-pointer select-none inline-block"
+                        className="text-[12px] font-medium text-[var(--accent-ink)] hover:underline mt-1 cursor-pointer select-none inline-block"
                       >
                         {isExpanded ? 'Less' : 'More'}
                       </button>

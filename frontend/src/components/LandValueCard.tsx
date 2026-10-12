@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useId } from 'react';
 import type { LandValueEstimate } from '../services/types';
 import { Icon } from './Icon';
+import { Skeleton } from './report/Skeleton';
 
 interface LandValueCardProps {
   landValue: LandValueEstimate;
@@ -19,6 +20,15 @@ export const LandValueCard: React.FC<LandValueCardProps> = ({
       : ''
   );
   const [overrideArea, setOverrideArea] = useState<string>('');
+  // This card renders in more than one place (sheet + panel), so the override
+  // inputs need instance-unique ids: hardcoded ones duplicated in the DOM and
+  // broke the label/control association for assistive tech.
+  const fieldId = useId();
+  const rateId = `${fieldId}-rate`;
+  const areaId = `${fieldId}-area`;
+  // True while the debounced recomputation of the derived totals is pending —
+  // the affected figures show a Skeleton rather than a stale value.
+  const [isPending, setIsPending] = useState(false);
 
   useEffect(() => {
     const handler = setTimeout(() => {
@@ -30,6 +40,7 @@ export const LandValueCard: React.FC<LandValueCardProps> = ({
           parsedArea && !isNaN(parsedArea) && parsedArea > 0 ? parsedArea : null
         );
       }
+      setIsPending(false);
     }, 300);
 
     return () => clearTimeout(handler);
@@ -72,7 +83,7 @@ export const LandValueCard: React.FC<LandValueCardProps> = ({
     (isRateKnown ? 'SRO valuation baseline' : 'No guidance table match');
 
   return (
-    <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-3.5 w-full min-w-0">
+    <div className="bw-card rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-3.5 w-full min-w-0">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
@@ -98,9 +109,13 @@ export const LandValueCard: React.FC<LandValueCardProps> = ({
           <span className="font-normal">Combined project total</span>
           <span className="text-[11px]">Civil + Land budget</span>
         </div>
-        <div className="text-[24px] font-bold text-[var(--text-1)] tabular-nums tracking-tight">
-          {combinedTotal !== null ? formatInr(combinedTotal) : '—'}
-        </div>
+        {isPending ? (
+          <Skeleton className="h-7 w-36" label="Updating combined project total" />
+        ) : (
+          <div className="text-[24px] font-bold text-[var(--text-1)] tabular-nums tracking-tight">
+            {combinedTotal !== null ? formatInr(combinedTotal) : '—'}
+          </div>
+        )}
       </div>
 
       {/* Key-Value Rows (No 2-column tile pair) */}
@@ -122,9 +137,13 @@ export const LandValueCard: React.FC<LandValueCardProps> = ({
         </div>
         <div className="h-10 flex items-center justify-between px-0.5">
           <span className="text-[13px] font-normal text-[var(--text-2)]">Estimated land cost</span>
-          <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
-            {landCost !== null ? formatInr(landCost) : '—'}
-          </span>
+          {isPending ? (
+            <Skeleton className="h-4 w-24" label="Updating estimated land cost" />
+          ) : (
+            <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
+              {landCost !== null ? formatInr(landCost) : '—'}
+            </span>
+          )}
         </div>
         <div className="h-10 flex items-center justify-between px-0.5">
           <span className="text-[13px] font-normal text-[var(--text-2)]">Locality multiplier</span>
@@ -132,7 +151,53 @@ export const LandValueCard: React.FC<LandValueCardProps> = ({
             {(landValue.locality_multiplier ?? 1.0).toFixed(2)}x
           </span>
         </div>
+        {landValue.base_table_rate_per_sqft != null && (
+          <div className="h-10 flex items-center justify-between px-0.5">
+            <span className="text-[13px] font-normal text-[var(--text-2)]">Published table rate</span>
+            <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
+              ₹{landValue.base_table_rate_per_sqft.toLocaleString('en-IN')}/sq ft
+            </span>
+          </div>
+        )}
+        <div className="h-10 flex items-center justify-between px-0.5">
+          <span className="text-[13px] font-normal text-[var(--text-2)]">Civil construction cost</span>
+          <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
+            {formatInr(landValue.construction_cost_inr)}
+          </span>
+        </div>
+        {landValue.as_of_year != null && (
+          <div className="h-10 flex items-center justify-between px-0.5">
+            <span className="text-[13px] font-normal text-[var(--text-2)]">Valuation as of</span>
+            <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
+              {landValue.as_of_year}
+            </span>
+          </div>
+        )}
       </div>
+
+      {/* Locality multiplier provenance: how the road + facility scores compose. */}
+      {landValue.multiplier_breakdown && (
+        <details className="text-[11px] text-[var(--text-3)]">
+          <summary className="cursor-pointer text-[11px] font-medium text-[var(--accent-ink)] hover:underline select-none inline-flex items-center gap-1">
+            <Icon name="info" size={11} className="shrink-0" />
+            Locality multiplier breakdown
+          </summary>
+          <div className="mt-1.5 space-y-1 pl-1">
+            <div className="flex items-center justify-between gap-2">
+              <span>Road accessibility ({landValue.multiplier_breakdown.road_accessibility_score.toFixed(0)}/100)</span>
+              <span className="font-mono tabular-nums">{landValue.multiplier_breakdown.road_contribution.toFixed(3)}x</span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span>Facility proximity ({landValue.multiplier_breakdown.facility_proximity_score.toFixed(0)}/100)</span>
+              <span className="font-mono tabular-nums">{landValue.multiplier_breakdown.facility_contribution.toFixed(3)}x</span>
+            </div>
+            <div className="flex items-center justify-between gap-2 font-semibold text-[var(--text-2)]">
+              <span>Net multiplier{landValue.multiplier_breakdown.is_clamped ? ' (clamped)' : ''}</span>
+              <span className="font-mono tabular-nums">{landValue.multiplier_breakdown.net_multiplier.toFixed(2)}x</span>
+            </div>
+          </div>
+        </details>
+      )}
 
       {/* Interactive Override Inputs */}
       <div className="p-3 bg-[var(--fill)] rounded-[12px] space-y-2">
@@ -141,22 +206,34 @@ export const LandValueCard: React.FC<LandValueCardProps> = ({
         </span>
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="text-[11px] text-[var(--text-3)] block mb-1">Custom rate (₹/sq ft)</label>
+            <label htmlFor={rateId} className="text-[11px] text-[var(--text-3)] block mb-1">
+              Custom rate (₹/sq ft)
+            </label>
             <input
+              id={rateId}
               type="number"
               placeholder={isRateKnown ? String(effectiveRate) : ''}
               value={overrideRate}
-              onChange={(e) => setOverrideRate(e.target.value)}
+              onChange={(e) => {
+                setOverrideRate(e.target.value);
+                setIsPending(true);
+              }}
               className="w-full h-8 bg-[var(--fill)] hover:bg-[var(--fill-hover)] border-0 rounded-[8px] px-2.5 text-[12px] font-mono text-[var(--text-1)] outline-none focus:ring-[2px] focus:ring-[var(--accent)]/30"
             />
           </div>
           <div>
-            <label className="text-[11px] text-[var(--text-3)] block mb-1">Plot area (sq ft)</label>
+            <label htmlFor={areaId} className="text-[11px] text-[var(--text-3)] block mb-1">
+              Plot area (sq ft)
+            </label>
             <input
+              id={areaId}
               type="number"
               placeholder={plotArea > 0 ? String(plotArea) : ''}
               value={overrideArea}
-              onChange={(e) => setOverrideArea(e.target.value)}
+              onChange={(e) => {
+                setOverrideArea(e.target.value);
+                setIsPending(true);
+              }}
               className="w-full h-8 bg-[var(--fill)] hover:bg-[var(--fill-hover)] border-0 rounded-[8px] px-2.5 text-[12px] font-mono text-[var(--text-1)] outline-none focus:ring-[2px] focus:ring-[var(--accent)]/30"
             />
           </div>
@@ -166,7 +243,7 @@ export const LandValueCard: React.FC<LandValueCardProps> = ({
       {/* Confidence Disclosure (staleness / table miss) - never silently dropped */}
       {landValue.confidence_warning && (
         <div className="p-3 bg-[var(--fill)] rounded-[12px] text-[12px] text-[var(--text-2)] space-y-1">
-          <div className="flex items-center gap-1.5 text-[var(--semantic-amber)] font-medium">
+          <div className="flex items-center gap-1.5 text-[var(--semantic-amber-ink)] font-medium">
             <Icon name="alert-triangle" size={13} />
             <span>Valuation confidence note</span>
           </div>

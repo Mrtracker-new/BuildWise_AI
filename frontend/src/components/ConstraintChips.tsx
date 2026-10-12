@@ -4,8 +4,11 @@ import { Icon } from './Icon';
 
 interface ConstraintChipsProps {
   constraints: ExtractedClientConstraints | null;
-  onChange: (updated: ExtractedClientConstraints) => void;
+  /** Omit for a read-only display (e.g. constraints inherited by the report). */
+  onChange?: (updated: ExtractedClientConstraints) => void;
   isLoading?: boolean;
+  /** Render as annotated, non-interactive chips (no steppers / remove buttons). */
+  readOnly?: boolean;
 }
 
 const COMMON_SPACES: { id: string; label: string; icon: string }[] = [
@@ -23,24 +26,29 @@ export const ConstraintChips: React.FC<ConstraintChipsProps> = ({
   constraints,
   onChange,
   isLoading = false,
+  readOnly = false,
 }) => {
   const [isAddingSpace, setIsAddingSpace] = useState<boolean>(false);
+  // Interactive only when a real handler is wired and the caller allows edits.
+  const canEdit = !readOnly && Boolean(onChange);
 
   if (!constraints) return null;
 
+  const emit = (updated: ExtractedClientConstraints) => onChange?.(updated);
+
   const handleUpdateBeds = (delta: number) => {
     const newCount = Math.max(1, Math.min(6, constraints.target_bedroom_count + delta));
-    onChange({ ...constraints, target_bedroom_count: newCount });
+    emit({ ...constraints, target_bedroom_count: newCount });
   };
 
   const handleUpdateBaths = (delta: number) => {
     const newCount = Math.max(1, Math.min(6, constraints.target_bathroom_count + delta));
-    onChange({ ...constraints, target_bathroom_count: newCount });
+    emit({ ...constraints, target_bathroom_count: newCount });
   };
 
   const handleRemoveSpace = (spaceId: string) => {
     const updated = constraints.specialized_spaces.filter((s) => s !== spaceId);
-    onChange({ ...constraints, specialized_spaces: updated });
+    emit({ ...constraints, specialized_spaces: updated });
   };
 
   const handleToggleSpace = (spaceId: string) => {
@@ -48,12 +56,12 @@ export const ConstraintChips: React.FC<ConstraintChipsProps> = ({
     const updated = exists
       ? constraints.specialized_spaces.filter((s) => s !== spaceId)
       : [...constraints.specialized_spaces, spaceId];
-    onChange({ ...constraints, specialized_spaces: updated });
+    emit({ ...constraints, specialized_spaces: updated });
   };
 
   const handleRemoveOrientation = (idx: number) => {
     const updated = constraints.orientation_preferences.filter((_, i) => i !== idx);
-    onChange({ ...constraints, orientation_preferences: updated });
+    emit({ ...constraints, orientation_preferences: updated });
   };
 
   const hasSpecialized = constraints.specialized_spaces.length > 0;
@@ -69,7 +77,7 @@ export const ConstraintChips: React.FC<ConstraintChipsProps> = ({
       {/* Header with Source Badge */}
       <div className="flex items-center justify-between gap-1.5 flex-wrap">
         <div className="flex items-center gap-1.5">
-          <Icon name="check" size={13} className="text-[var(--accent)] shrink-0" />
+          <Icon name="check" size={13} className="text-[var(--accent-ink)] shrink-0" />
           <span className="text-[11px] font-semibold text-[var(--text-1)] uppercase tracking-wider">
             Parsed Design Constraints
           </span>
@@ -84,7 +92,7 @@ export const ConstraintChips: React.FC<ConstraintChipsProps> = ({
           <span
             className={`px-1.5 py-0.5 rounded-[4px] text-[10px] font-semibold uppercase tracking-wider ${
               constraints.extraction_source === 'groq_llm'
-                ? 'bg-[var(--accent-tint)] text-[var(--accent)]'
+                ? 'bg-[var(--accent-tint)] text-[var(--accent-ink)]'
                 : 'bg-[var(--fill)] text-[var(--text-3)]'
             }`}
           >
@@ -101,24 +109,28 @@ export const ConstraintChips: React.FC<ConstraintChipsProps> = ({
           <span className="font-semibold text-[var(--text-1)] tabular-nums">
             {constraints.target_bedroom_count}
           </span>
-          <button
-            type="button"
-            onClick={() => handleUpdateBeds(-1)}
-            disabled={constraints.target_bedroom_count <= 1}
-            className="w-4 h-4 rounded-[4px] hover:bg-[var(--fill)] flex items-center justify-center text-[var(--text-2)] disabled:opacity-30 cursor-pointer ml-1"
-            title="Decrease bedrooms"
-          >
-            -
-          </button>
-          <button
-            type="button"
-            onClick={() => handleUpdateBeds(1)}
-            disabled={constraints.target_bedroom_count >= 6}
-            className="w-4 h-4 rounded-[4px] hover:bg-[var(--fill)] flex items-center justify-center text-[var(--text-2)] disabled:opacity-30 cursor-pointer"
-            title="Increase bedrooms"
-          >
-            +
-          </button>
+          {canEdit && (
+            <>
+              <button
+                type="button"
+                onClick={() => handleUpdateBeds(-1)}
+                disabled={constraints.target_bedroom_count <= 1}
+                className="w-4 h-4 rounded-[4px] hover:bg-[var(--fill)] flex items-center justify-center text-[var(--text-2)] disabled:opacity-30 cursor-pointer ml-1"
+                title="Decrease bedrooms"
+              >
+                -
+              </button>
+              <button
+                type="button"
+                onClick={() => handleUpdateBeds(1)}
+                disabled={constraints.target_bedroom_count >= 6}
+                className="w-4 h-4 rounded-[4px] hover:bg-[var(--fill)] flex items-center justify-center text-[var(--text-2)] disabled:opacity-30 cursor-pointer"
+                title="Increase bedrooms"
+              >
+                +
+              </button>
+            </>
+          )}
         </div>
 
         {/* Bathroom Stepper Chip */}
@@ -127,24 +139,28 @@ export const ConstraintChips: React.FC<ConstraintChipsProps> = ({
           <span className="font-semibold text-[var(--text-1)] tabular-nums">
             {constraints.target_bathroom_count}
           </span>
-          <button
-            type="button"
-            onClick={() => handleUpdateBaths(-1)}
-            disabled={constraints.target_bathroom_count <= 1}
-            className="w-4 h-4 rounded-[4px] hover:bg-[var(--fill)] flex items-center justify-center text-[var(--text-2)] disabled:opacity-30 cursor-pointer ml-1"
-            title="Decrease bathrooms"
-          >
-            -
-          </button>
-          <button
-            type="button"
-            onClick={() => handleUpdateBaths(1)}
-            disabled={constraints.target_bathroom_count >= 6}
-            className="w-4 h-4 rounded-[4px] hover:bg-[var(--fill)] flex items-center justify-center text-[var(--text-2)] disabled:opacity-30 cursor-pointer"
-            title="Increase bathrooms"
-          >
-            +
-          </button>
+          {canEdit && (
+            <>
+              <button
+                type="button"
+                onClick={() => handleUpdateBaths(-1)}
+                disabled={constraints.target_bathroom_count <= 1}
+                className="w-4 h-4 rounded-[4px] hover:bg-[var(--fill)] flex items-center justify-center text-[var(--text-2)] disabled:opacity-30 cursor-pointer ml-1"
+                title="Decrease bathrooms"
+              >
+                -
+              </button>
+              <button
+                type="button"
+                onClick={() => handleUpdateBaths(1)}
+                disabled={constraints.target_bathroom_count >= 6}
+                className="w-4 h-4 rounded-[4px] hover:bg-[var(--fill)] flex items-center justify-center text-[var(--text-2)] disabled:opacity-30 cursor-pointer"
+                title="Increase bathrooms"
+              >
+                +
+              </button>
+            </>
+          )}
         </div>
 
         {/* Specialized Space Chips */}
@@ -153,18 +169,20 @@ export const ConstraintChips: React.FC<ConstraintChipsProps> = ({
           return (
             <div
               key={space}
-              className="inline-flex items-center gap-1.5 px-2 py-1 rounded-[6px] bg-[var(--accent-tint)] text-[var(--accent)] text-[12px] font-semibold border border-[var(--accent)]/30 animate-fade-in"
+              className="inline-flex items-center gap-1.5 px-2 py-1 rounded-[6px] bg-[var(--accent-tint)] text-[var(--accent-ink)] text-[12px] font-semibold border border-[var(--accent)]/30 animate-fade-in"
             >
               <span>{formatted}</span>
-              <button
-                type="button"
-                onClick={() => handleRemoveSpace(space)}
-                className="hover:opacity-70 cursor-pointer text-[10px] w-4 h-4 rounded-full flex items-center justify-center bw-touch-target"
-                title={`Remove ${formatted}`}
-                aria-label={`Remove ${formatted}`}
-              >
-                <Icon name="x" size={9} />
-              </button>
+              {canEdit && (
+                <button
+                  type="button"
+                  onClick={() => handleRemoveSpace(space)}
+                  className="hover:opacity-70 cursor-pointer text-[10px] w-4 h-4 rounded-full flex items-center justify-center bw-touch-target"
+                  title={`Remove ${formatted}`}
+                  aria-label={`Remove ${formatted}`}
+                >
+                  <Icon name="x" size={9} />
+                </button>
+              )}
             </div>
           );
         })}
@@ -175,32 +193,36 @@ export const ConstraintChips: React.FC<ConstraintChipsProps> = ({
             key={idx}
             className="inline-flex items-center gap-1 px-2 py-1 rounded-[6px] bg-[var(--card-bg)] border border-[var(--separator)] text-[11px] text-[var(--text-1)] font-medium"
           >
-            <span className="text-[var(--accent)] font-semibold">{ori.preferred_facing}</span>
+            <span className="text-[var(--accent-ink)] font-semibold">{ori.preferred_facing}</span>
             <span className="capitalize">{ori.space.replace('_', ' ')}</span>
-            <button
-              type="button"
-              onClick={() => handleRemoveOrientation(idx)}
-              className="hover:opacity-70 cursor-pointer text-[10px] text-[var(--text-3)] ml-0.5 w-4 h-4 flex items-center justify-center rounded-full bw-touch-target"
-              title="Remove orientation constraint"
-              aria-label={`Remove ${ori.preferred_facing} orientation constraint`}
-            >
-              <Icon name="x" size={9} />
-            </button>
+            {canEdit && (
+              <button
+                type="button"
+                onClick={() => handleRemoveOrientation(idx)}
+                className="hover:opacity-70 cursor-pointer text-[10px] text-[var(--text-3)] ml-0.5 w-4 h-4 flex items-center justify-center rounded-full bw-touch-target"
+                title="Remove orientation constraint"
+                aria-label={`Remove ${ori.preferred_facing} orientation constraint`}
+              >
+                <Icon name="x" size={9} />
+              </button>
+            )}
           </div>
         ))}
 
-        {/* Add Space Button Toggle */}
-        <button
-          type="button"
-          onClick={() => setIsAddingSpace(!isAddingSpace)}
-          className="inline-flex items-center gap-1 px-2 py-1 rounded-[6px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] text-[11px] font-medium border border-dashed border-[var(--separator)] cursor-pointer transition-colors"
-        >
-          <span>{isAddingSpace ? 'Done' : '+ Add Feature'}</span>
-        </button>
+        {/* Add Space Button Toggle (editable mode only) */}
+        {canEdit && (
+          <button
+            type="button"
+            onClick={() => setIsAddingSpace(!isAddingSpace)}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-[6px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] text-[11px] font-medium border border-dashed border-[var(--separator)] cursor-pointer transition-colors"
+          >
+            <span>{isAddingSpace ? 'Done' : '+ Add Feature'}</span>
+          </button>
+        )}
       </div>
 
-      {/* Expanded Quick-Add Drawer */}
-      {isAddingSpace && (
+      {/* Expanded Quick-Add Drawer (editable mode only) */}
+      {canEdit && isAddingSpace && (
         <div className="pt-1 border-t border-[var(--separator)]/60 flex flex-wrap gap-1 items-center animate-fade-in">
           <span className="text-[10px] text-[var(--text-3)] uppercase tracking-wider mr-1">
             Quick Add:

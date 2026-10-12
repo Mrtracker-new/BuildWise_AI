@@ -309,7 +309,7 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
                       className={`w-7 h-7 rounded-[8px] flex items-center justify-center shrink-0 transition-all duration-150 ${
                         isActive
                           ? 'bg-[var(--accent)] text-white shadow-sm scale-105'
-                          : 'bg-[var(--fill)] text-[var(--text-2)] group-hover:text-[var(--accent)] group-hover:bg-[var(--accent-tint)]'
+                          : 'bg-[var(--fill)] text-[var(--text-2)] group-hover:text-[var(--accent-ink)] group-hover:bg-[var(--accent-tint)]'
                       }`}
                     >
                       <Icon name="map-pin" size={13} strokeWidth={2} />
@@ -318,7 +318,7 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
                       <div
                         className={`text-[13px] font-semibold leading-snug truncate ${
                           isActive
-                            ? 'text-[var(--accent)]'
+                            ? 'text-[var(--accent-ink)]'
                             : 'text-[var(--text-1)]'
                         }`}
                       >
@@ -336,7 +336,7 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
                         size={13}
                         className={`transition-all duration-150 ${
                           isActive
-                            ? 'text-[var(--accent)] opacity-100 translate-x-0.5 -translate-y-0.5'
+                            ? 'text-[var(--accent-ink)] opacity-100 translate-x-0.5 -translate-y-0.5'
                             : 'text-[var(--text-3)] opacity-0 group-hover:opacity-100'
                         }`}
                       />
@@ -382,7 +382,7 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
             <button
               type="button"
               onClick={handleClearAll}
-              className="text-[12px] text-[var(--text-2)] hover:text-[var(--semantic-red)] flex items-center gap-1 transition-colors px-1.5 py-0.5 rounded-[6px]"
+              className="text-[12px] text-[var(--text-2)] hover:text-[var(--semantic-red-ink)] flex items-center gap-1 transition-colors px-1.5 py-0.5 rounded-[6px]"
               title="Clear coordinates"
             >
               <Icon name="x" size={12} />
@@ -466,7 +466,7 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
         {searchError && (
           <div
             role="alert"
-            className="mt-2 px-2.5 py-1.5 rounded-[8px] bg-[var(--semantic-amber)]/10 border border-[var(--semantic-amber)]/20 flex items-center gap-2 text-[11px] text-[var(--semantic-amber)] font-medium leading-snug"
+            className="mt-2 px-2.5 py-1.5 rounded-[8px] bg-[var(--semantic-amber)]/10 border border-[var(--semantic-amber)]/20 flex items-center gap-2 text-[11px] text-[var(--semantic-amber-ink)] font-medium leading-snug"
           >
             <Icon name="alert-triangle" size={13} className="shrink-0" />
             <span>{searchError}</span>
@@ -514,7 +514,7 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
         </div>
 
         {inputError && (
-          <p className="text-[12px] text-[var(--semantic-red)] font-medium leading-snug">
+          <p className="text-[12px] text-[var(--semantic-red-ink)] font-medium leading-snug">
             {inputError}
           </p>
         )}

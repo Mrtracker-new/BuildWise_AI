@@ -7,20 +7,22 @@ interface RiskMatrixProps {
 }
 
 export const RiskMatrix: React.FC<RiskMatrixProps> = ({ risks }) => {
+  // Pill TEXT uses the -ink hues: the bright semantic tokens are fill/graphic
+  // colours and measure 1.9-3.0:1 as small text on their own 12% tints.
   const getSeverityStyle = (severity: string) => {
     switch (severity.toLowerCase()) {
       case 'high':
       case 'critical':
         return {
           bg: 'rgba(255, 59, 48, 0.12)',
-          text: 'var(--semantic-red)',
+          text: 'var(--semantic-red-ink)',
           dashed: false,
         };
       case 'medium':
       case 'moderate':
         return {
           bg: 'rgba(255, 159, 10, 0.12)',
-          text: 'var(--semantic-amber)',
+          text: 'var(--semantic-amber-ink)',
           dashed: false,
         };
       case 'unknown':
@@ -35,7 +37,7 @@ export const RiskMatrix: React.FC<RiskMatrixProps> = ({ risks }) => {
       default:
         return {
           bg: 'rgba(52, 199, 89, 0.12)',
-          text: 'var(--semantic-green)',
+          text: 'var(--semantic-green-ink)',
           dashed: false,
         };
     }

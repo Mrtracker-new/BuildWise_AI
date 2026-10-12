@@ -9,6 +9,11 @@ interface VastuAdvisoryCardProps {
 export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }) => {
   const { ranked_entrances, room_grid, slope_reading, reconciliation_notes, road_approach } = advisory;
   const [selectedZone, setSelectedZone] = useState<RoomGridZone | null>(null);
+  // Backend ranks up to four portals; show the top three by default and let the
+  // user expand — the fourth is never silently dropped.
+  const [showAllEntrances, setShowAllEntrances] = useState(false);
+  const allEntrances = ranked_entrances || [];
+  const visibleEntrances = showAllEntrances ? allEntrances : allEntrances.slice(0, 3);
 
   // 3x3 layout in standard Vastu orientation:
   // Top: NW, N, NE | Middle: W, Center, E | Bottom: SW, S, SE
@@ -46,7 +51,7 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
           Ranked entrance portals
         </span>
         <div className="divide-y divide-[var(--hairline)] border-y border-[var(--hairline)]">
-          {(ranked_entrances || []).slice(0, 3).map((ent, idx) => (
+          {visibleEntrances.map((ent, idx) => (
             <div key={ent.direction} className="py-2 space-y-1 min-w-0 first:pt-1 last:pb-1">
               <div className="flex items-center justify-between gap-2 min-w-0">
                 <div className="flex items-center gap-2">
@@ -57,7 +62,7 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
                     {ent.direction} Facing
                   </span>
                   {ent.is_approach_side && (
-                    <span className="text-[11px] font-medium bg-[var(--accent-tint)] text-[var(--accent)] px-2 py-0.5 rounded-full">
+                    <span className="text-[11px] font-medium bg-[var(--accent-tint)] text-[var(--accent-ink)] px-2 py-0.5 rounded-full">
                       Road facade
                     </span>
                   )}
@@ -72,6 +77,15 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
             </div>
           ))}
         </div>
+        {allEntrances.length > 3 && (
+          <button
+            type="button"
+            onClick={() => setShowAllEntrances((prev) => !prev)}
+            className="text-[11px] font-medium text-[var(--accent-ink)] hover:underline cursor-pointer select-none"
+          >
+            {showAllEntrances ? 'Show top 3' : `Show all ${allEntrances.length} ranked portals`}
+          </button>
+        )}
       </div>
 
       {/* 3x3 Mandala Grid */}
@@ -137,7 +151,7 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
             </p>
             {selectedZone.prohibited && selectedZone.prohibited.length > 0 && (
               <p className="text-[12px] text-[var(--text-2)]">
-                <strong className="text-[var(--semantic-red)]">Avoid:</strong> {selectedZone.prohibited.join(', ')}
+                <strong className="text-[var(--semantic-red-ink)]">Avoid:</strong> {selectedZone.prohibited.join(', ')}
               </p>
             )}
             <p className="text-[11px] text-[var(--text-3)] leading-relaxed pt-0.5">
@@ -158,6 +172,17 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
           </span>
         </div>
         <p className="text-[12px] leading-relaxed">{slope_reading.rationale}</p>
+        {slope_reading.remedy_notes && (
+          <details className="pt-0.5">
+            <summary className="cursor-pointer text-[11px] font-medium text-[var(--accent-ink)] hover:underline select-none inline-flex items-center gap-1">
+              <Icon name="info" size={11} className="shrink-0" />
+              Remediation notes
+            </summary>
+            <p className="text-[11px] text-[var(--text-2)] leading-relaxed mt-1">
+              {slope_reading.remedy_notes}
+            </p>
+          </details>
+        )}
       </div>
 
       {/* Reconciliation Notes */}
@@ -174,12 +199,26 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
                   <span
                     className={`text-[10px] font-semibold px-2 py-0.5 rounded-full capitalize ${
                       item.status === 'concordant'
-                        ? 'bg-[var(--semantic-green)]/12 text-[var(--semantic-green)]'
-                        : 'bg-[var(--semantic-amber)]/12 text-[var(--semantic-amber)]'
+                        ? 'bg-[var(--semantic-green)]/12 text-[var(--semantic-green-ink)]'
+                        : 'bg-[var(--semantic-amber)]/12 text-[var(--semantic-amber-ink)]'
                     }`}
                   >
                     {item.status}
                   </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[var(--accent-tint)] text-[var(--accent-ink)] font-medium">
+                    Vastu: {item.vastu_position}
+                  </span>
+                  <span className="text-[var(--text-3)]" aria-hidden="true">/</span>
+                  {/* Opaque pill: this chip sits INSIDE a --fill row, and a
+                      second translucent --fill composites to a mid gray, where
+                      even the darkened secondary ink only reaches 4.12:1. */}
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[var(--card-bg-subtle)] text-[var(--text-2)] font-medium">
+                    Science: {item.scientific_passive_position}
+                  </span>
+                  <span className="text-[var(--text-3)]" aria-hidden="true">→</span>
+                  <span className="font-semibold text-[var(--text-1)]">compromise</span>
                 </div>
                 <p className="text-[11px] text-[var(--text-2)] leading-relaxed">
                   {item.recommended_synthesis}

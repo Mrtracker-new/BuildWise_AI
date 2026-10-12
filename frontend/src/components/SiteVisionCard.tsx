@@ -1,6 +1,8 @@
 import React from 'react';
 import type { SiteVisionResponse, PreservationRank } from '../services/types';
 import { Icon } from './Icon';
+import { Skeleton } from './report/Skeleton';
+import { NDVI_DISCLOSURE } from './report/termDisclosures';
 
 interface SiteVisionCardProps {
   data: SiteVisionResponse | null;
@@ -26,17 +28,17 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
       case 'preserve':
         return {
           label: 'Preserve',
-          badgeClass: 'bg-[var(--semantic-green)]/12 text-[var(--semantic-green)]',
+          badgeClass: 'bg-[var(--semantic-green)]/12 text-[var(--semantic-green-ink)]',
         };
       case 'compensate':
         return {
           label: 'Compensate',
-          badgeClass: 'bg-[var(--semantic-amber)]/12 text-[var(--semantic-amber)]',
+          badgeClass: 'bg-[var(--semantic-amber)]/12 text-[var(--semantic-amber-ink)]',
         };
       case 'removable':
         return {
           label: 'Removable',
-          badgeClass: 'bg-[var(--semantic-red)]/12 text-[var(--semantic-red)]',
+          badgeClass: 'bg-[var(--semantic-red)]/12 text-[var(--semantic-red-ink)]',
         };
       case 'context':
       default:
@@ -58,13 +60,14 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
   const strokeDashoffset = circumference - (greenPct / 100) * circumference;
 
   return (
-    <div className={`rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-4 w-full min-w-0 ${className}`}>
+    <div className={`bw-card rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-4 w-full min-w-0 ${className}`}>
       {/* Header */}
       <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
           <Icon name="satellite" size={15} className="text-[var(--text-2)] shrink-0" />
-          <h3 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight">
+          <h3 className="inline-flex items-center gap-1.5 text-[14px] font-semibold text-[var(--text-1)] tracking-tight">
             Ecological Site Vision & Trees
+            {NDVI_DISCLOSURE}
           </h3>
         </div>
 
@@ -72,13 +75,13 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
         {data && (
           <div className="flex items-center gap-1.5 shrink-0">
             {data.mode === 'segformer' && (
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-[var(--semantic-green)]/12 text-[var(--semantic-green)]">
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-[var(--semantic-green)]/12 text-[var(--semantic-green-ink)]">
                 <span className="w-1.5 h-1.5 rounded-full bg-[var(--semantic-green)]" />
                 SegFormer B0
               </span>
             )}
             {data.mode === 'index-only' && (
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-[var(--semantic-amber)]/12 text-[var(--semantic-amber)]">
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-[var(--semantic-amber)]/12 text-[var(--semantic-amber-ink)]">
                 <span className="w-1.5 h-1.5 rounded-full bg-[var(--semantic-amber)]" />
                 Index Only
               </span>
@@ -89,22 +92,40 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
                 Unavailable
               </span>
             )}
+            {data.scene_metadata && data.mode !== 'unavailable' && (
+              <span
+                title={`Sentinel-2 scene ${data.scene_metadata.id} · ${data.scene_metadata.source}`}
+                className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full bg-[var(--fill)] text-[10px] font-medium text-[var(--text-3)] tabular-nums whitespace-nowrap"
+              >
+                {data.scene_metadata.datetime.slice(0, 10)} · {data.scene_metadata.cloud_cover_pct.toFixed(0)}% cloud
+              </span>
+            )}
           </div>
         )}
       </div>
 
-      {/* Loading State */}
+      {/* Loading State — Skeleton placeholder shaped like the loaded layout */}
       {isLoading && (
-        <div className="p-4 bg-[var(--fill)] rounded-[14px] flex items-center justify-center gap-2.5 text-[13px] text-[var(--text-2)] font-medium">
-          <div className="ios-spinner-16 shrink-0" aria-hidden="true" />
-          <span>Analyzing satellite canopy & ecological inference...</span>
+        <div className="space-y-3.5" aria-label="Analyzing satellite canopy and ecological inference">
+          <div className="flex items-center gap-4 bg-[var(--fill)] rounded-[12px] p-3.5">
+            <Skeleton className="w-16 h-16 rounded-full" label="Canopy cover loading" />
+            <div className="flex-1 min-w-0 space-y-1.5">
+              <Skeleton className="h-3.5 w-full" />
+              <Skeleton className="h-3.5 w-3/4" />
+              <Skeleton className="h-3.5 w-2/3" />
+            </div>
+          </div>
+          <p className="text-[12px] text-[var(--text-2)] flex items-center gap-2">
+            <span className="ios-spinner-16 shrink-0" aria-hidden="true" />
+            Analyzing satellite canopy &amp; ecological inference…
+          </p>
         </div>
       )}
 
       {/* Empty / Unscanned State */}
       {!isLoading && !data && (
         <div className="py-5 px-4 text-center bg-[var(--fill)] rounded-[12px] space-y-3">
-          <div className="w-9 h-9 mx-auto rounded-full bg-[var(--accent-tint)] text-[var(--accent)] flex items-center justify-center">
+          <div className="w-9 h-9 mx-auto rounded-full bg-[var(--accent-tint)] text-[var(--accent-ink)] flex items-center justify-center">
             <Icon name="tree" size={18} />
           </div>
           <div className="space-y-1 max-w-sm mx-auto">
@@ -131,7 +152,7 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
       {!isLoading && data && data.mode === 'unavailable' && (
         <div className="space-y-2.5 bg-[var(--semantic-amber)]/10 border border-[var(--semantic-amber)]/20 rounded-[12px] p-3 text-[12px] text-[var(--text-1)]">
           <div className="flex items-start gap-2">
-            <Icon name="alert-triangle" size={15} className="text-[var(--semantic-amber)] shrink-0 mt-0.5" />
+            <Icon name="alert-triangle" size={15} className="text-[var(--semantic-amber-ink)] shrink-0 mt-0.5" />
             <div className="space-y-1 min-w-0">
               <h4 className="font-semibold text-[var(--text-1)] text-[13px]">
                 Satellite imagery temporarily unavailable
@@ -215,6 +236,12 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
                     {data.built_up_pct.toFixed(1)}%
                   </span>
                 </div>
+                <div className="h-8 flex items-center justify-between">
+                  <span className="text-[12px] font-normal text-[var(--text-2)]">Tree clusters detected</span>
+                  <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
+                    {data.tree_clusters?.features?.length ?? 0}
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -222,13 +249,26 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
             {data.water_bodies.features.length > 0 && (
               <div className="p-3 bg-[var(--accent-tint)]/40 rounded-[12px] text-[12px] space-y-1">
                 <div className="flex items-center gap-1.5 text-[var(--text-1)] font-semibold">
-                  <Icon name="droplet" size={13} className="text-[var(--accent)] shrink-0" />
+                  <Icon name="droplet" size={13} className="text-[var(--accent-ink)] shrink-0" />
                   <span>Surface water detected on site</span>
                 </div>
                 <p className="text-[12px] text-[var(--text-2)] leading-relaxed">
                   {data.water_bodies.features.length} water feature
                   {data.water_bodies.features.length !== 1 ? 's' : ''} detected ({data.water_cover_pct.toFixed(1)}% cover). Maintain statutory drainage buffers.
                 </p>
+              </div>
+            )}
+
+            {/* Pipeline warnings (e.g. partial imagery / degraded segmentation) */}
+            {data.warnings && data.warnings.length > 0 && (
+              <div className="p-2.5 bg-[var(--semantic-amber)]/10 rounded-[10px] space-y-1 text-[11px] text-[var(--text-2)]">
+                <div className="flex items-center gap-1.5 text-[var(--semantic-amber-ink)] font-medium">
+                  <Icon name="alert-triangle" size={12} className="shrink-0" />
+                  <span>Vision pipeline notes</span>
+                </div>
+                {data.warnings.map((w, idx) => (
+                  <p key={idx} className="leading-snug">{w}</p>
+                ))}
               </div>
             )}
 
@@ -242,7 +282,7 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
               <button
                 type="button"
                 onClick={() => onScan()}
-                className="text-[var(--accent)] hover:underline transition-colors cursor-pointer font-medium"
+                className="text-[var(--accent-ink)] hover:underline transition-colors cursor-pointer font-medium"
               >
                 Rescan satellite
               </button>
@@ -253,13 +293,13 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
           <div className="space-y-2 min-w-0">
             <div className="flex items-center justify-between text-[12px] min-w-0">
               <div className="flex items-center gap-1.5 font-semibold text-[var(--text-1)]">
-                <Icon name="tree" size={13} className="text-[var(--semantic-green)] shrink-0" />
+                <Icon name="tree" size={13} className="text-[var(--semantic-green-ink)] shrink-0" />
                 <span>Tree preservation plan</span>
                 <span className="text-[11px] font-normal text-[var(--text-3)]">
                   ({data.preservation_plan.length} cluster{data.preservation_plan.length !== 1 ? 's' : ''})
                 </span>
               </div>
-              <span className="text-[11px] text-[var(--text-3)] font-mono">240m x 240m window</span>
+              <span className="text-[11px] text-[var(--text-3)] font-mono">analysis window</span>
             </div>
 
             {data.preservation_plan.length === 0 ? (
@@ -290,20 +330,21 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
                           <span>
                             Area: <b className="text-[var(--text-1)] font-medium">{item.area_sqm} m²</b>
                           </span>
-                          <span>
+                          <span className="inline-flex items-center gap-1">
                             NDVI: <b className="text-[var(--text-1)] font-medium">{item.mean_ndvi.toFixed(2)}</b>
+                            {NDVI_DISCLOSURE}
                           </span>
                         </div>
                       </div>
 
                       <div className="flex items-center gap-1.5 text-[11px]">
                         {item.overlap_footprint ? (
-                          <span className="inline-flex items-center gap-1 text-[var(--semantic-red)] font-medium">
+                          <span className="inline-flex items-center gap-1 text-[var(--semantic-red-ink)] font-medium">
                             <Icon name="alert-triangle" size={11} className="shrink-0" />
                             Overlaps proposed building footprint
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 text-[var(--semantic-green)] font-medium">
+                          <span className="inline-flex items-center gap-1 text-[var(--semantic-green-ink)] font-medium">
                             <Icon name="check-circle" size={11} className="shrink-0" />
                             Clear of building footprint
                           </span>

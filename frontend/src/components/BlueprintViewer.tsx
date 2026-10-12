@@ -3,7 +3,10 @@ import ReactDOM from 'react-dom';
 import type { RoomPlacement, MultiStoreyBuildingModel, SingleFloorPlanModel, SitePlanModel } from '../services/types';
 import { downloadFloorplanDossier } from '../services/api';
 import { Icon } from './Icon';
+import { useDesign } from '../design';
 import { frontageChipText, polygonChipText } from '../services/sheetTruth';
+import { isGhostOverlayVisible, sanitizeBlueprintSvg } from './report/svgSanitize';
+import { ECS_DISCLOSURE } from './report/termDisclosures';
 
 interface BlueprintViewerProps {
   svgString: string;
@@ -167,6 +170,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   storeys,
   isStale = false,
 }) => {
+  const { pushToast } = useDesign();
   const [mode, setMode] = useState<'cad' | 'paper'>('cad');
   const [zoom, setZoom] = useState<number>(1.0);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -246,52 +250,49 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   const containerKey = `blueprint-svg-${effectiveGenId}-${safeFloorIndex}-${mode}-${_ghostKey}`;
   const modalContainerKey = `modal-blueprint-svg-${effectiveGenId}-${safeFloorIndex}-${mode}-${_ghostKey}`;
 
-  // Sanitize raw SVG and inject paint-order halo style + dynamic ghost overlay styling
-  const sanitizedSvg = useMemo(() => {
-    if (!activeSvg) return '';
-    const cleaned = activeSvg
-      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-      .replace(/on\w+\s*=\s*["'][^"']*["']/gi, '');
+  // Sanitize raw SVG and inject paint-order halo style + dynamic ghost overlay styling.
+  // The ghost gate itself lives in report/svgSanitize.ts (isGhostOverlayVisible)
+  // so the invariant is unit-testable: the F0 anchor core is on every sheet, so
+  // the overlay is injected ONLY when the toggle is on AND an upper floor is
+  // active. `data-ghost-overlay` mirrors the same boolean in both directions.
+  const ghostVisible = isGhostOverlayVisible(showGhostOverlay, safeFloorIndex);
+  const sanitizedSvg = useMemo(
+    () => sanitizeBlueprintSvg(activeSvg, ghostVisible),
+    [activeSvg, ghostVisible]
+  );
 
-    // GHOST OVERLAY CONTRACT: the F0 anchor core lives on every sheet
-    // already, so the ghost overlay is meaningless on the ground floor - it is
-    // gated to activeFloorIndex >= 1 and the data-ghost-overlay attribute
-    // follows the same precedence in both directions (toggle ON at F0 renders
-    // false; toggle OFF at F1+ also renders false).
-    const ghostVisible = showGhostOverlay && safeFloorIndex > 0;
-    const ghostOverlayCss = ghostVisible
-      ? '.ghost-core-overlay { display: block !important; opacity: 1 !important; }'
-      : '.ghost-core-overlay { display: none !important; opacity: 0 !important; visibility: hidden !important; }';
-
-    // Sheets are authored at a fixed pixel size (a portrait site plan runs ~2500px
-    // tall); the preview box and the modal are both shorter than that, so the lower
-    // half of a tall sheet used to be cut off even at the smallest zoom. Constrain
-    // the sheet to its container instead: it scales down to fit and the ratio holds.
-    const styleInjection = `
-      <style>
-        ${ghostOverlayCss}
-        .bw-sheet-fit { max-width: 100%; max-height: 100%; width: auto; height: auto; }
-      </style>
-    `;
-
-    if (cleaned.includes('<svg')) {
-      return cleaned.replace(
-        /<svg\b([^>]*)>/i,
-        `<svg $1 class="bw-sheet-fit" data-ghost-overlay="${ghostVisible ? 'true' : 'false'}">${styleInjection}`
-      );
-    }
-    return cleaned;
-  }, [activeSvg, showGhostOverlay, safeFloorIndex]);
-
-  // Derive per-floor room placements for current floor legend
+  // Derive per-floor room placements for current floor legend.
+  // SINGLE SOURCE: the on-sheet room label and the ROOM SCHEDULE both print the
+  // CLEAR area (`clear_area_sqm`). The room model's `area_sqm` is the GROSS
+  // allocated area, so a chip reading it disagreed with the drawing by ~8%.
+  // The legend chip resolves the clear area from the same schedule rows the
+  // sheet prints, and formats it to the same one decimal place.
   const currentPlacements = useMemo(() => {
+    const schedule = (currentFloor?.room_schedule ?? []) as Array<Record<string, unknown>>;
+    const clearByRoom = new Map<string, number>();
+    for (const row of schedule) {
+      const id = typeof row.room_id === 'string' ? row.room_id : null;
+      const clear = Number(row.clear_area_sqm ?? row.area_sqm);
+      if (id && Number.isFinite(clear) && clear > 0) clearByRoom.set(id, clear);
+    }
+    const clearAreaFor = (roomId: string, fallback: number | undefined): number | undefined => {
+      const direct = clearByRoom.get(roomId);
+      if (direct !== undefined) return direct;
+      // Floor-suffixed rows (living_F0) vs base ids (living): match on the base
+      // id so a placement without its own schedule row still resolves.
+      const base = roomId.replace(/_F\d+$/, '');
+      for (const [id, area] of clearByRoom) {
+        if (id.replace(/_F\d+$/, '') === base) return area;
+      }
+      return fallback;
+    };
     if (isMultiStorey && currentFloor && currentFloor.rooms && currentFloor.rooms.length > 0) {
       return currentFloor.rooms.map((r) => ({
         room_id: r.room_id,
         room_name: r.room_name,
         zone: r.zone,
         is_core: Boolean(r.is_vertical_core),
-        area_sqm: r.area_sqm,
+        area_sqm: clearAreaFor(r.room_id, r.area_sqm),
       }));
     }
     return placements.map((p) => ({
@@ -299,7 +300,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
       room_name: p.room_name,
       zone: p.zone,
       is_core: p.room_id === 'stairs' || p.room_id.includes('stair') || p.room_id.includes('lift'),
-      area_sqm: p.area_sqm,
+      area_sqm: clearAreaFor(p.room_id, p.area_sqm),
     }));
   }, [isMultiStorey, currentFloor, placements]);
 
@@ -351,7 +352,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
       await downloadFloorplanDossier(payload);
     } catch (error) {
       console.error('Error exporting PDF dossier:', error);
-      alert('Failed to export PDF dossier. Please try again.');
+      pushToast({ message: 'Failed to export PDF dossier. Please try again.', tone: 'critical' });
     } finally {
       setIsExportingPdf(false);
     }
@@ -514,7 +515,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
         } overscroll-x-contain touch-pan-x [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden`}
       >
         <div className="flex items-center gap-1 mr-1 text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-[var(--text-3)] shrink-0 select-none">
-          <Icon name="layers" size={13} className="text-[var(--accent)]" />
+          <Icon name="layers" size={13} className="text-[var(--accent-ink)]" />
           <span>Views:</span>
         </div>
 
@@ -534,7 +535,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
             <span>Site Plan</span>
             <span
               className={`text-[9px] px-1.5 py-0.2 rounded font-bold uppercase tracking-wider ${
-                viewTab === 'site' ? 'bg-white/20 text-white' : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                viewTab === 'site' ? 'bg-white/20 text-white' : 'bg-emerald-500/15 text-[var(--semantic-green-ink)]'
               }`}
             >
               10.SP
@@ -578,7 +579,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
               {isGround && (
                 <span
                   className={`text-[9px] px-1.5 py-0.2 rounded font-bold uppercase tracking-wider ${
-                    isActive ? 'bg-amber-400 text-amber-950' : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                    isActive ? 'bg-amber-400 text-amber-950' : 'bg-amber-500/15 text-[var(--semantic-amber-ink)]'
                   }`}
                 >
                   Anchor
@@ -600,18 +601,18 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-2 px-3 sm:px-3.5 py-2 sm:py-2.5 border-b border-[var(--hairline)]">
         <div className="flex items-center justify-between sm:justify-start gap-2 min-w-0 w-full sm:w-auto">
           <div className="flex items-center gap-2 min-w-0">
-            <Icon name="blueprint" size={15} className="text-[var(--accent)] shrink-0" />
+            <Icon name="blueprint" size={15} className="text-[var(--accent-ink)] shrink-0" />
             <h3 className="text-[13px] sm:text-[15px] font-semibold text-[var(--text-1)] tracking-tight truncate">
               {isMultiStorey && currentFloor ? `${currentFloor.floor_name}` : 'Architectural Blueprint'}
             </h3>
           </div>
           <div className="flex items-center gap-1 shrink-0 sm:hidden">
             {isMultiStorey && currentFloor && (
-              <span className="font-mono text-[10px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-1.5 py-0.5 rounded-[5px] whitespace-nowrap">
+              <span className="font-mono text-[10px] font-semibold text-[var(--accent-ink)] bg-[var(--accent-tint)] px-1.5 py-0.5 rounded-[5px] whitespace-nowrap">
                 +{(currentFloor.floor_index * 3.0).toFixed(1)}m
               </span>
             )}
-            <span className="text-[10px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-1.5 py-0.5 rounded-[5px] uppercase tracking-wider whitespace-nowrap">
+            <span className="text-[10px] font-semibold text-[var(--accent-ink)] bg-[var(--accent-tint)] px-1.5 py-0.5 rounded-[5px] uppercase tracking-wider whitespace-nowrap">
               {isMultiStorey ? `${multiStorey?.total_storeys}F CAD` : 'CAD 2D'}
             </span>
           </div>
@@ -623,23 +624,23 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
               title="Parameters have changed since this blueprint was generated. Please regenerate."
               className="font-mono text-[10px] sm:text-[11px] font-semibold text-amber-800 dark:text-amber-200 bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 rounded-[6px] whitespace-nowrap flex items-center gap-1.5 select-none animate-pulse shadow-xs"
             >
-              <Icon name="alert-triangle" size={12} className="text-amber-600 dark:text-amber-400 shrink-0" />
+              <Icon name="alert-triangle" size={12} className="text-[var(--semantic-amber-ink)] shrink-0" />
               <span>Parameters changed - regenerate</span>
             </span>
           )}
           <span
             data-testid="blueprint-freshness-token"
             title={`Blueprint Generation Freshness Token (${freshnessToken})`}
-            className="font-mono text-[10px] sm:text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-2 py-0.5 rounded-[6px] border border-[var(--accent)]/20 max-w-full truncate"
+            className="font-mono text-[10px] sm:text-[11px] font-semibold text-[var(--accent-ink)] bg-[var(--accent-tint)] px-2 py-0.5 rounded-[6px] border border-[var(--accent)]/20 max-w-full truncate"
           >
             {freshnessToken}
           </span>
           {isMultiStorey && currentFloor && (
-            <span className="hidden sm:inline-block font-mono text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-2 py-0.5 rounded-[6px] whitespace-nowrap">
+            <span className="hidden sm:inline-block font-mono text-[11px] font-semibold text-[var(--accent-ink)] bg-[var(--accent-tint)] px-2 py-0.5 rounded-[6px] whitespace-nowrap">
               +{(currentFloor.floor_index * 3.0).toFixed(1)}m LVL
             </span>
           )}
-          <span className="hidden sm:inline-block text-[10px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-1.5 py-0.5 rounded-[6px] uppercase tracking-wider whitespace-nowrap">
+          <span className="hidden sm:inline-block text-[10px] font-semibold text-[var(--accent-ink)] bg-[var(--accent-tint)] px-1.5 py-0.5 rounded-[6px] uppercase tracking-wider whitespace-nowrap">
             {isMultiStorey ? `${multiStorey?.total_storeys}F CAD` : 'CAD 2D'}
           </span>
         </div>
@@ -658,7 +659,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
               onClick={() => setMode('cad')}
               className={`h-6 px-2 sm:px-2.5 rounded-[6px] sm:rounded-[7px] text-[10px] sm:text-[11px] font-semibold flex items-center transition-colors duration-150 ease-out cursor-pointer active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
                 mode === 'cad'
-                  ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
+                  ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] bw-segmented-active-shadow'
                   : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
               }`}
             >
@@ -669,7 +670,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
               onClick={() => setMode('paper')}
               className={`h-6 px-2 sm:px-2.5 rounded-[6px] sm:rounded-[7px] text-[10px] sm:text-[11px] font-semibold flex items-center transition-colors duration-150 ease-out cursor-pointer active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
                 mode === 'paper'
-                  ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
+                  ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] bw-segmented-active-shadow'
                   : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
               }`}
             >
@@ -694,14 +695,14 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                 activeFloorIndex === 0
                   ? 'opacity-50 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)]'
                   : showGhostOverlay
-                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.12),0_1px_3px_rgba(245,158,11,0.15)]'
+                  ? 'bg-amber-500/15 text-[var(--semantic-amber-ink)] border border-amber-500/30 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.12),0_1px_3px_rgba(245,158,11,0.15)]'
                   : 'bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--fill-hover)]'
               }`}
             >
               <Icon
                 name="layers"
                 size={12}
-                className={showGhostOverlay && safeFloorIndex > 0 ? 'text-amber-500 animate-pulse' : ''}
+                className={showGhostOverlay && safeFloorIndex > 0 ? 'text-[var(--semantic-amber-ink)] animate-pulse' : ''}
               />
               <span className="hidden sm:inline">{safeFloorIndex === 0 ? 'F0 Anchor' : showGhostOverlay ? 'Ghost Core: ON' : 'Ghost Core: OFF'}</span>
               <span className="inline sm:hidden">{safeFloorIndex === 0 ? 'Anchor' : showGhostOverlay ? 'Ghost: ON' : 'Ghost: OFF'}</span>
@@ -784,7 +785,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
             onClick={() => setIsModalOpen(true)}
             title="Open Fullscreen Blueprint Modal"
             aria-label="Open Fullscreen Blueprint"
-            className="bw-touch-target w-6 h-6 sm:w-8 sm:h-8 rounded-[7px] sm:rounded-[9px] bg-[var(--accent-tint)] text-[var(--accent)] hover:brightness-105 active:scale-[0.92] flex items-center justify-center transition-colors duration-150 ease-out cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
+            className="bw-touch-target w-6 h-6 sm:w-8 sm:h-8 rounded-[7px] sm:rounded-[9px] bg-[var(--accent-tint)] text-[var(--accent-ink)] hover:brightness-105 active:scale-[0.92] flex items-center justify-center transition-colors duration-150 ease-out cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50"
           >
             <Icon name="maximize" size={13} />
           </button>
@@ -844,7 +845,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
         {/* Expand Sheet cue: always visible — a hover-only affordance would
             never be discovered on touch, and a persistent cue helps everywhere. */}
         <div className="absolute bottom-2.5 right-2.5 px-2.5 py-1 rounded-full vibrancy-pill text-[11px] font-medium text-[var(--text-1)] border border-[var(--panel-border-color)] flex items-center gap-1 shadow-sm pointer-events-none">
-          <Icon name="maximize" size={12} className="text-[var(--accent)]" />
+          <Icon name="maximize" size={12} className="text-[var(--accent-ink)]" />
           <span>Expand Sheet</span>
         </div>
       </div>
@@ -899,12 +900,13 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
             }`}>
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <div className="flex items-center gap-2">
-                  <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${
+                  <span className={`inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${
                     effectiveSitePlan.parking.coexistence_status === 'COEXISTENT'
                       ? 'bg-emerald-500/25 text-emerald-800 dark:text-emerald-200'
                       : 'bg-amber-500/25 text-amber-800 dark:text-amber-200'
                   }`}>
                     Parking ({effectiveSitePlan.parking.provided_ecs}/{effectiveSitePlan.parking.required_ecs} ECS)
+                    {ECS_DISCLOSURE}
                   </span>
                   <span className="font-medium text-[var(--text-1)]">
                     {effectiveSitePlan.parking.bays.length} Bays (2.5m x 5.0m) + Drive Aisle ({effectiveSitePlan.parking.drive_aisle_width_m}m)
@@ -915,8 +917,8 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                 </span>
               </div>
               {effectiveSitePlan.parking.deficit_warning && (
-                <div className="text-[11px] font-medium text-amber-700 dark:text-amber-300 flex items-start gap-1.5 bg-amber-500/10 p-2 rounded border border-amber-500/20">
-                  <Icon name="alert-triangle" size={13} className="shrink-0 text-amber-600 mt-0.5" />
+                <div className="text-[11px] font-medium text-[var(--semantic-amber-ink)] flex items-start gap-1.5 bg-amber-500/10 p-2 rounded border border-amber-500/20">
+                  <Icon name="alert-triangle" size={13} className="shrink-0 text-[var(--semantic-amber-ink)] mt-0.5" />
                   <div>
                     <p className="font-semibold">{effectiveSitePlan.parking.deficit_warning}</p>
                     {effectiveSitePlan.parking.coexistence_options && effectiveSitePlan.parking.coexistence_options.length > 0 && (
@@ -949,8 +951,8 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                 </span>
               )}
               {effectiveSitePlan.waste_warning_triggered && (
-                <span className="text-[11px] font-medium text-amber-700 dark:text-amber-300 pl-1 flex items-center gap-1 mt-0.5">
-                  <Icon name="alert-triangle" size={12} className="shrink-0 text-amber-600" />
+                <span className="text-[11px] font-medium text-[var(--semantic-amber-ink)] pl-1 flex items-center gap-1 mt-0.5">
+                  <Icon name="alert-triangle" size={12} className="shrink-0 text-[var(--semantic-amber-ink)]" />
                   Best orthogonal footprint wastes {effectiveSitePlan.waste_pct?.toFixed(1)}% of buildable area (&gt;25%). Plot rotation alternatives evaluated; functional wedge absorption active.
                 </span>
               )}
@@ -972,7 +974,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                   <span className="text-[11px] font-mono font-semibold opacity-75">{wz.wedge_id}</span>
                   <span className="text-[12px] font-medium">{wz.name}</span>
                   <span className="text-[11px] font-mono opacity-80">{wz.area_sqm.toFixed(1)}m²</span>
-                  <span className="text-[9px] px-1 py-0.2 rounded font-bold uppercase tracking-wider bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                  <span className="text-[9px] px-1 py-0.2 rounded font-bold uppercase tracking-wider bg-amber-500/20 text-[var(--semantic-amber-ink)]">
                     {wz.is_enclosed_storage ? 'Enclosed Storage' : 'Non-Carpet'}
                   </span>
                 </div>
@@ -989,14 +991,14 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                   key={key}
                   className={`px-1.5 py-0.5 rounded whitespace-nowrap border ${
                     val
-                      ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                      ? 'bg-emerald-500/10 text-[var(--semantic-green-ink)] border-emerald-500/30'
                       : 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30'
                   }`}
                 >
                   {val ? (
-                    <Icon name="check" size={11} className="inline-block align-[-2px] text-[var(--semantic-green)]" />
+                    <Icon name="check" size={11} className="inline-block align-[-2px] text-[var(--semantic-green-ink)]" />
                   ) : (
-                    <Icon name="x" size={11} className="inline-block align-[-2px] text-[var(--semantic-red)]" />
+                    <Icon name="x" size={11} className="inline-block align-[-2px] text-[var(--semantic-red-ink)]" />
                   )}{' '}
                   {key.replace(/_/g, ' ')}
                 </span>
@@ -1007,13 +1009,13 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
           {/* Annotation Status Taxonomy Legend */}
           <div className="flex flex-wrap items-center gap-2 pt-1.5 border-t border-[var(--hairline)]/50 text-[10px]">
             <span className="font-semibold text-[var(--text-3)] uppercase tracking-wider">Status Taxonomy:</span>
-            <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-mono font-semibold border border-emerald-500/30">
+            <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-[var(--semantic-green-ink)] font-mono font-semibold border border-emerald-500/30">
               VERIFIED: Closed Polygon
             </span>
             <span className="px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-700 dark:text-blue-300 font-mono font-semibold border border-blue-500/30">
               CALCULATED: Formula / Setback
             </span>
-            <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 font-mono font-semibold border border-amber-500/30">
+            <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-[var(--semantic-amber-ink)] font-mono font-semibold border border-amber-500/30">
               ASSUMED: Inferred Boundary
             </span>
             <span className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-700 dark:text-purple-300 font-mono font-semibold border border-purple-500/30">
@@ -1090,7 +1092,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
               <span className="text-[11px] font-mono font-semibold opacity-75">[{wz.wedge_id}]</span>
               <span className="text-[12px] font-medium">{wz.name}</span>
               <span className="text-[11px] font-mono opacity-80">{wz.area_sqm.toFixed(1)}m²</span>
-              <span className="text-[9px] px-1 py-0.2 rounded font-bold uppercase tracking-wider bg-amber-500/20 text-amber-700 dark:text-amber-300">
+              <span className="text-[9px] px-1 py-0.2 rounded font-bold uppercase tracking-wider bg-amber-500/20 text-[var(--semantic-amber-ink)]">
                 {wz.is_enclosed_storage ? 'Enclosed BUA' : 'Non-Carpet Wedge'}
               </span>
             </div>
@@ -1113,7 +1115,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 px-3 sm:px-5 py-2.5 sm:py-3 border-b border-[var(--hairline)]">
                 <div className="flex items-center justify-between sm:justify-start gap-3 min-w-0 w-full sm:w-auto">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-8 h-8 rounded-[10px] bg-[var(--accent-tint)] text-[var(--accent)] flex items-center justify-center shrink-0">
+                    <div className="w-8 h-8 rounded-[10px] bg-[var(--accent-tint)] text-[var(--accent-ink)] flex items-center justify-center shrink-0">
                       <Icon name="blueprint" size={16} />
                     </div>
                     <div className="min-w-0">
@@ -1127,13 +1129,13 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                             title="Parameters changed — regenerate blueprint before exporting."
                             className="font-mono text-[10px] sm:text-[11px] font-semibold text-amber-800 dark:text-amber-200 bg-amber-500/20 border border-amber-500/40 px-1.5 py-0.5 rounded-[6px] whitespace-nowrap flex items-center gap-1 select-none animate-pulse"
                           >
-                            <Icon name="alert-triangle" size={11} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                            <Icon name="alert-triangle" size={11} className="text-[var(--semantic-amber-ink)] shrink-0" />
                             <span>Parameters changed</span>
                           </span>
                         )}
                         <span
                           data-testid="modal-blueprint-freshness-token"
-                          className="font-mono text-[10px] sm:text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-tint)] px-1.5 py-0.5 rounded-[6px] whitespace-nowrap border border-[var(--accent)]/20 max-w-[180px] sm:max-w-xs truncate"
+                          className="font-mono text-[10px] sm:text-[11px] font-semibold text-[var(--accent-ink)] bg-[var(--accent-tint)] px-1.5 py-0.5 rounded-[6px] whitespace-nowrap border border-[var(--accent)]/20 max-w-[180px] sm:max-w-xs truncate"
                         >
                           {freshnessToken}
                         </span>
@@ -1163,7 +1165,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                       onClick={() => setMode('cad')}
                       className={`h-6 px-2.5 sm:px-3 rounded-[6px] sm:rounded-[7px] text-[11px] sm:text-[12px] font-semibold flex items-center transition-colors duration-150 ease-out cursor-pointer active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
                         mode === 'cad'
-                          ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
+                          ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] bw-segmented-active-shadow'
                           : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
                       }`}
                     >
@@ -1174,7 +1176,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                       onClick={() => setMode('paper')}
                       className={`h-6 px-2.5 sm:px-3 rounded-[6px] sm:rounded-[7px] text-[11px] sm:text-[12px] font-semibold flex items-center transition-colors duration-150 ease-out cursor-pointer active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
                         mode === 'paper'
-                          ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] shadow-[var(--segmented-active-shadow)]'
+                          ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] bw-segmented-active-shadow'
                           : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
                       }`}
                     >
@@ -1199,14 +1201,14 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                         safeFloorIndex === 0
                           ? 'opacity-50 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)]'
                           : showGhostOverlay
-                          ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.12),0_1px_3px_rgba(245,158,11,0.15)]'
+                          ? 'bg-amber-500/15 text-[var(--semantic-amber-ink)] border border-amber-500/30 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.12),0_1px_3px_rgba(245,158,11,0.15)]'
                           : 'bg-[var(--fill)] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-[var(--fill-hover)]'
                       }`}
                     >
                       <Icon
                         name="layers"
                         size={12}
-                        className={showGhostOverlay && safeFloorIndex > 0 ? 'text-amber-500 animate-pulse' : ''}
+                        className={showGhostOverlay && safeFloorIndex > 0 ? 'text-[var(--semantic-amber-ink)] animate-pulse' : ''}
                       />
                       <span className="hidden sm:inline">{safeFloorIndex === 0 ? 'F0 Anchor' : showGhostOverlay ? 'Ghost: ON' : 'Ghost: OFF'}</span>
                       <span className="inline sm:hidden">{safeFloorIndex === 0 ? 'Anchor' : showGhostOverlay ? 'Ghost: ON' : 'Ghost: OFF'}</span>
@@ -1406,7 +1408,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                         <span className="text-[11px] font-mono font-semibold opacity-75">[{pIdx + 1}]</span>
                         <span className="text-[12px] font-medium">{chipLabel}</span>
                         {p.area_sqm !== undefined && (
-                          <span className="text-[11px] font-mono opacity-80">{p.area_sqm.toFixed(2)}m²</span>
+                          <span className="text-[11px] font-mono opacity-80">{p.area_sqm.toFixed(1)}m²</span>
                         )}
                         <span className="text-[11px] text-[var(--text-3)] font-normal">({chipZone})</span>
                         {p.is_core && (

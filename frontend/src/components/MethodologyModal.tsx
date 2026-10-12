@@ -30,7 +30,7 @@ export const MethodologyModal: React.FC<MethodologyModalProps> = ({ isOpen, onCl
         {/* Modal Header */}
         <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-[var(--hairline)] gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-7 h-7 rounded-[8px] bg-[var(--accent-tint)] text-[var(--accent)] flex items-center justify-center shrink-0">
+            <div className="w-7 h-7 rounded-[8px] bg-[var(--accent-tint)] text-[var(--accent-ink)] flex items-center justify-center shrink-0">
               <Icon name="info" size={15} />
             </div>
             <h3 className="text-[14px] sm:text-[15px] font-semibold text-[var(--text-1)] tracking-tight truncate">

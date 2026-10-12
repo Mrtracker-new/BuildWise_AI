@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { HazardProfile } from '../services/types';
 import { Icon } from './Icon';
+import { AMSL_DISCLOSURE, Z_FACTOR_DISCLOSURE } from './report/termDisclosures';
 
 interface HazardProfileCardProps {
   hazard: HazardProfile;
@@ -62,16 +63,18 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
   };
 
   const getSeverityPill = (level: 'low' | 'moderate' | 'high' | 'critical' | 'not-assessed', customLabel?: string) => {
+    // Pill text uses the -ink hues: the bright semantic tokens are fills and
+    // measured below AA as small text on their own 12% tints.
     let bg = 'rgba(52, 199, 89, 0.12)';
-    let text = 'var(--semantic-green)';
+    let text = 'var(--semantic-green-ink)';
     let label = customLabel || `${level} risk`;
 
     if (level === 'high' || level === 'critical') {
       bg = 'rgba(255, 59, 48, 0.12)';
-      text = 'var(--semantic-red)';
+      text = 'var(--semantic-red-ink)';
     } else if (level === 'moderate') {
       bg = 'rgba(255, 159, 10, 0.12)';
-      text = 'var(--semantic-amber)';
+      text = 'var(--semantic-amber-ink)';
     } else if (level === 'not-assessed') {
       // Neutral gray, dashed treatment: must never read as green "clear"
       bg = 'var(--fill)';
@@ -89,6 +92,25 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
       >
         <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: text }} />
         <span>{label}</span>
+      </span>
+    );
+  };
+
+  /** Data-confidence chip: how much of this reading is live telemetry. */
+  const getConfidenceChip = (conf: 'high' | 'moderate' | 'low') => {
+    const map = {
+      high: { label: 'Verified', cls: 'bg-[var(--semantic-green)]/10 text-[var(--semantic-green-ink)] border border-[var(--semantic-green)]/30', title: 'Measured from live external telemetry this analysis.' },
+      moderate: { label: 'Calculated', cls: 'bg-[var(--accent-tint)] text-[var(--accent-ink)] border border-[var(--accent)]/30', title: 'Derived from partial or reanalysed telemetry with known inputs.' },
+      low: { label: 'Assumed', cls: 'bg-[var(--semantic-amber)]/10 text-[var(--semantic-amber-ink)] border border-[var(--semantic-amber)]/30', title: 'Fallback baseline model in effect — not a live reading.' },
+    } as const;
+    const cfg = map[conf] ?? map.low;
+    return (
+      <span
+        data-confidence={conf}
+        title={cfg.title}
+        className={`hidden sm:inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-wide shrink-0 ${cfg.cls}`}
+      >
+        {cfg.label}
       </span>
     );
   };
@@ -115,7 +137,7 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
 
       <div className={isGrid ? 'grid grid-cols-1 xl:grid-cols-3 lg:grid-cols-3 gap-4 items-start' : 'space-y-3'}>
         {/* 1. Seismic Vulnerability Card */}
-        <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-3.5 transition-all">
+        <div className="bw-card rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-3.5">
         <button
           type="button"
           onClick={() => toggleExpand('seismic')}
@@ -136,12 +158,12 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
                     : 'rgba(52, 199, 89, 0.12)',
                 color:
                   seismicSev.level === 'high'
-                    ? 'var(--semantic-red)'
+                    ? 'var(--semantic-red-ink)'
                     : seismicSev.level === 'moderate'
-                    ? 'var(--semantic-amber)'
+                    ? 'var(--semantic-amber-ink)'
                     : seismicSev.level === 'not-assessed'
                     ? 'var(--text-2)'
-                    : 'var(--semantic-green)',
+                    : 'var(--semantic-green-ink)',
               }}
             >
               <Icon name="activity" size={16} />
@@ -153,6 +175,7 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
 
           <div className="flex items-center gap-2 shrink-0">
             {getSeverityPill(seismicSev.level, seismicSev.label)}
+            {getConfidenceChip(seismic.confidence)}
             <Icon
               name="chevron-down"
               size={14}
@@ -191,7 +214,10 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
                 </span>
               </div>
               <div className="h-10 flex items-center justify-between px-0.5">
-                <span className="text-[13px] font-normal text-[var(--text-2)]">Design zone factor</span>
+                <span className="inline-flex items-center gap-1 text-[13px] font-normal text-[var(--text-2)]">
+                  Design zone factor
+                  {Z_FACTOR_DISCLOSURE}
+                </span>
                 <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
                   {seismic.zone_factor !== null && seismic.zone_factor !== undefined
                     ? `Z = ${seismic.zone_factor.toFixed(2)}`
@@ -199,6 +225,21 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
                 </span>
               </div>
             </div>
+            {seismic.recent_major_events && seismic.recent_major_events.length > 0 && (
+              <div className="pt-2 space-y-1">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] block">
+                  Recent significant events
+                </span>
+                {seismic.recent_major_events.slice(0, 4).map((ev, idx) => (
+                  <div key={`${ev.date_iso}-${idx}`} className="flex items-center justify-between gap-2 text-[11px]">
+                    <span className="text-[var(--text-2)] truncate" title={ev.place}>{ev.place}</span>
+                    <span className="font-mono text-[var(--text-3)] whitespace-nowrap ui-font-tabular">
+                      M{ev.magnitude.toFixed(1)} · {ev.distance_km.toFixed(0)} km · {ev.date_iso.slice(0, 10)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="text-[12px] text-[var(--text-3)] pt-2 border-t border-[var(--hairline)]">
               Source: {seismic.standard}{seismic.district ? ` • ${seismic.district}` : ''}
             </div>
@@ -207,7 +248,7 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
       </div>
 
       {/* 2. Hydrological Flood Stress Card */}
-      <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-3.5 transition-all">
+      <div className="bw-card rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-3.5">
         <button
           type="button"
           onClick={() => toggleExpand('flood')}
@@ -241,6 +282,7 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
 
           <div className="flex items-center gap-2 shrink-0">
             {getSeverityPill(flood.pressure_level, `${flood.pressure_level} pressure`)}
+            {getConfidenceChip(flood.confidence)}
             <Icon
               name="chevron-down"
               size={14}
@@ -267,7 +309,10 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
                 </span>
               </div>
               <div className="h-10 flex items-center justify-between px-0.5">
-                <span className="text-[13px] font-normal text-[var(--text-2)]">Site elevation (AMSL)</span>
+                <span className="inline-flex items-center gap-1 text-[13px] font-normal text-[var(--text-2)]">
+                  Site elevation (AMSL)
+                  {AMSL_DISCLOSURE}
+                </span>
                 <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
                   {flood.elevation_amsl_m !== null && flood.elevation_amsl_m !== undefined
                     ? `${flood.elevation_amsl_m.toFixed(0)}m`
@@ -295,7 +340,7 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
       </div>
 
       {/* 3. Storm & Wind Exposure Card */}
-      <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-3.5 transition-all">
+      <div className="bw-card rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-3.5">
         <button
           type="button"
           onClick={() => toggleExpand('storm')}
@@ -329,6 +374,7 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
 
           <div className="flex items-center gap-2 shrink-0">
             {getSeverityPill(storm.exposure_level, `${storm.exposure_level} exposure`)}
+            {getConfidenceChip(storm.confidence)}
             <Icon
               name="chevron-down"
               size={14}
@@ -385,7 +431,7 @@ export const HazardProfileCard: React.FC<HazardProfileCardProps> = ({ hazard, la
 
       {allWarnings.length > 0 && (
         <div className="p-3 bg-[var(--fill)] rounded-[12px] text-[12px] text-[var(--text-2)] space-y-1">
-          <div className="flex items-center gap-1.5 text-[var(--semantic-amber)] font-medium">
+          <div className="flex items-center gap-1.5 text-[var(--semantic-amber-ink)] font-medium">
             <Icon name="alert-triangle" size={13} />
             <span>Hazard Telemetry Notes</span>
           </div>

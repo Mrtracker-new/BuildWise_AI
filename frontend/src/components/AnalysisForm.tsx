@@ -191,14 +191,14 @@ const SliderField: React.FC<SliderFieldProps> = ({
           </div>
         </div>
 
-        <div className="flex justify-between items-center text-[11px] text-[var(--text-3)] font-medium pt-2">
+        <div className="flex justify-between items-center text-[10.5px] text-[var(--text-3)] font-medium pt-2">
           <span className="w-1/3 text-left truncate">{scaleLabels[0]}</span>
           <span className="w-1/3 text-center truncate">{scaleLabels[1]}</span>
           <span className="w-1/3 text-right truncate">{scaleLabels[2]}</span>
         </div>
 
         {invalid && invalidMessage && (
-          <p role="alert" className="text-[12px] text-[var(--semantic-red)] font-medium mt-1">
+          <p role="alert" className="text-[12px] text-[var(--semantic-red-ink)] font-medium mt-1">
             {invalidMessage}
           </p>
         )}
@@ -608,7 +608,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
                     onClick={() => onChange({ quality_grade: grade.id })}
                     className={`py-1.5 px-1 rounded-[8px] text-center transition-colors duration-150 ease-apple select-none cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 ${
                       isActive
-                        ? 'bg-[var(--segmented-active-bg)] shadow-[var(--segmented-active-shadow)]'
+                        ? 'bg-[var(--segmented-active-bg)] bw-segmented-active-shadow'
                         : 'hover:bg-[var(--fill-hover)]'
                     }`}
                   >
@@ -657,7 +657,11 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
         }
       >
         <div className="space-y-3 pt-1">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 min-w-0">
+          {/* Container query, not a viewport one: both selects live in the
+              340px control panel, where a 640px viewport breakpoint still
+              forced two columns and clipped the values ("Residential (Ap…",
+              155px of text in a 105px cell). */}
+          <div className="grid grid-cols-1 @md:grid-cols-2 gap-2.5 min-w-0">
             <div className="min-w-0">
               <label
                 htmlFor="typology-select"
@@ -765,7 +769,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
             <span
               data-testid="brief-counter"
               className={`text-[10px] tabular-nums shrink-0 ${
-                briefLength >= 220 ? 'text-[var(--semantic-amber)] font-semibold' : 'text-[var(--text-3)]'
+                briefLength >= 220 ? 'text-[var(--semantic-amber-ink)] font-semibold' : 'text-[var(--text-3)]'
               }`}
             >
               {briefLength}/240
@@ -814,7 +818,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
                 </>
               ) : (
                 <>
-                  <Icon name="check" size={12} className="shrink-0 text-[var(--accent)]" />
+                  <Icon name="check" size={12} className="shrink-0 text-[var(--accent-ink)]" />
                   <span className="truncate tabular-nums">
                     Parsed: {parseSummary}
                     {constraints?.extraction_source === 'groq_llm' || constraints?.extraction_source === 'gemini_llm'
@@ -892,8 +896,8 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
               size={12}
               className={`mt-[1px] shrink-0 ${
                 activeProvider.state === 'live'
-                  ? 'text-[var(--semantic-green)]'
-                  : 'text-[var(--semantic-amber)]'
+                  ? 'text-[var(--semantic-green-ink)]'
+                  : 'text-[var(--semantic-amber-ink)]'
               }`}
             />
             <span className="min-w-0">{providerStateCaption[activeProvider.state]}</span>

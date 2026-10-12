@@ -1,6 +1,7 @@
 import React from 'react';
 import type { OrientationData } from '../services/types';
 import { Icon } from './Icon';
+import { BIOCLIMATIC_AXIS_DISCLOSURE } from './report/termDisclosures';
 
 interface OrientationCompassProps {
   orientation: OrientationData;
@@ -13,6 +14,7 @@ export const OrientationCompass: React.FC<OrientationCompassProps> = ({ orientat
     prevailing_wind_direction_degrees,
     cross_ventilation_rating,
     passive_design_rationale,
+    solar_exposure_summary,
   } = orientation;
 
   // Geometry for SVG compass (viewBox 0 0 200 200, center at 100, 100, radius 68)
@@ -42,8 +44,9 @@ export const OrientationCompass: React.FC<OrientationCompassProps> = ({ orientat
             Passive Solar & Wind Orientation
           </h3>
         </div>
-        <span className="text-[12px] font-normal text-[var(--text-3)] shrink-0">
+        <span className="inline-flex items-center gap-1 text-[12px] font-normal text-[var(--text-3)] shrink-0">
           Bioclimatic layout
+          {BIOCLIMATIC_AXIS_DISCLOSURE}
         </span>
       </div>
 
@@ -133,11 +136,20 @@ export const OrientationCompass: React.FC<OrientationCompassProps> = ({ orientat
           </div>
           <div className="h-10 flex items-center justify-between px-0.5">
             <span className="text-[13px] font-normal text-[var(--text-2)]">Cross-ventilation potential</span>
-            <span className="text-[13px] font-semibold text-[var(--semantic-green)] whitespace-nowrap">
+            <span className="text-[13px] font-semibold text-[var(--semantic-green-ink)] whitespace-nowrap">
               {cross_ventilation_rating} ({prevailing_wind_direction_degrees.toFixed(0)}°)
             </span>
           </div>
         </div>
+
+        {solar_exposure_summary && (
+          <div className="pt-1 space-y-0.5">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-3)] block">
+              Solar exposure &amp; daylight
+            </span>
+            <p className="text-[12px] text-[var(--text-2)] leading-normal">{solar_exposure_summary}</p>
+          </div>
+        )}
 
         <p className="text-[12px] text-[var(--text-2)] leading-normal pt-1">
           {passive_design_rationale}
