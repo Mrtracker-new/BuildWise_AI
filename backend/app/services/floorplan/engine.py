@@ -5052,11 +5052,35 @@ class SoleGeometryEngine:
                 )
             )
 
+        # Coverage is measured against the SAME plot area as the FAR check above:
+        # the canonical polygon area when a traced boundary was supplied (the
+        # 60m clamp on plot_width_m/plot_depth_m must never be the denominator),
+        # otherwise the rectangular plot. A footprint that genuinely overhangs the
+        # boundary is reported as capped at 100% plus an explicit warning - never
+        # silently, and never as a metrics validation crash.
+        envelope_area = float(env["area_sqm"])
+        _plot_area = (
+            self.site_plan.plot_polygon.area_sqm if self.site_plan else (self.plot_w * self.plot_d)
+        )
+        coverage_pct = round((envelope_area / max(_plot_area, 0.1)) * 100.0, 1)
+        if coverage_pct > 100.0:
+            over_plot_warning = (
+                f"Footprint over plot boundary: the ground plate ({envelope_area:.1f} m\u00b2) covers "
+                f"{coverage_pct:.1f}% of the plot area ({_plot_area:.1f} m\u00b2). Reported plot "
+                "coverage is capped at 100% \u2014 verify the boundary or the buildable envelope."
+            )
+            # The response carries building.warnings (the engine's own list is a
+            # construction-time copy), so the honest disclosure must land there.
+            for _sink in (building.warnings, self.warnings):
+                if over_plot_warning not in _sink:
+                    _sink.append(over_plot_warning)
+            coverage_pct = 100.0
+
         metrics = FloorPlanMetrics(
             vastu_compliance_pct=f0.vastu_compliance_pct,
             plumbing_adjacency_score=100.0,
             space_utilization_pct=100.0,
-            plot_coverage_pct=round((env["area_sqm"] / max(self.plot_w * self.plot_d, 0.1)) * 100.0, 1),
+            plot_coverage_pct=coverage_pct,
             total_built_up_sqm=f0.built_up_area_sqm,
             circulation_efficiency_pct=100.0,
             circulation_status=f0.circulation_status,

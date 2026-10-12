@@ -433,12 +433,16 @@ def _ellipsize_str(s: str, max_len: int) -> str:
     if budget <= 0:
         return s[:max(0, max_len - 1)] + (".." if max_len >= 2 else "")
     head = s[:budget]
-    if " " not in s[budget:]:
-        # Cut landed at a word boundary already.
-        return s[:budget].rstrip() + ".."
+    if budget >= len(s) or s[budget] == " ":
+        # The budget lands exactly ON a word boundary - nothing is cut open.
+        return head.rstrip() + ".."
     if " " in head:
+        # The budget lands INSIDE the final word: drop that partial word
+        # entirely. (Checking only for a space after the cut was the KB bug: a
+        # trailing token with no space left produced "...Epoxy G..".)
         return head[: head.rfind(" ")].rstrip() + " .."
-    # Single overlong token: hard-cut is the only option, keep the marker.
+    # Single overlong token: there is no boundary to fall back to, so a
+    # hard-cut is the only option - the marker keeps it honest.
     return head.rstrip() + ".."
 
 
