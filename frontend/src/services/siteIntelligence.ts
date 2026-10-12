@@ -40,9 +40,9 @@ export const ANNOTATION_STATUSES: readonly AnnotationStatus[] = [
 /** HUD/sheet pill styling per status; ASSUMED must never read as CALCULATED. */
 export const ANNOTATION_BADGE: Record<AnnotationStatus, { label: string; className: string }> = {
   CALCULATED: { label: 'CALCULATED', className: 'bg-[var(--fill)] text-[var(--text-2)]' },
-  ASSUMED: { label: 'ASSUMED', className: 'bg-[var(--semantic-amber)]/15 text-[var(--semantic-amber)]' },
-  RECOMMENDED: { label: 'RECOMMENDED', className: 'bg-[var(--accent-tint)] text-[var(--accent)]' },
-  VERIFIED: { label: 'VERIFIED', className: 'bg-[var(--semantic-green)]/15 text-[var(--semantic-green)]' },
+  ASSUMED: { label: 'ASSUMED', className: 'bg-[var(--semantic-amber)]/15 text-[var(--semantic-amber-ink)]' },
+  RECOMMENDED: { label: 'RECOMMENDED', className: 'bg-[var(--accent-tint)] text-[var(--accent-ink)]' },
+  VERIFIED: { label: 'VERIFIED', className: 'bg-[var(--semantic-green)]/15 text-[var(--semantic-green-ink)]' },
 };
 
 export interface SiteAnnotation {

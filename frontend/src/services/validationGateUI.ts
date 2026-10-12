@@ -33,8 +33,8 @@ export const GATE_LAYER_IDS: string[] = Array.from({ length: 14 }, (_, i) => `L$
 
 /** Status chip classes shared by every QA surface (design-token adjacent). */
 export const QA_CHIP_CLASSES: Record<string, string> = {
-  PASS: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
-  WARN: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
+  PASS: 'bg-emerald-500/15 text-[var(--semantic-green-ink)]',
+  WARN: 'bg-amber-500/15 text-[var(--semantic-amber-ink)]',
   FAIL: 'bg-rose-500/15 text-rose-700 dark:text-rose-300',
   'N/A': 'bg-slate-500/15 text-slate-600 dark:text-slate-300',
 };

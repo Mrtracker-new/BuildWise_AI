@@ -1,3 +1,11 @@
+/**
+ * Storage-key namespaces used by this app (no migration required — every key
+ * is live; documented here so future authors extend rather than fork):
+ *   bw.*            localStorage/sessionStorage UI state (bw.report.sections.v1,
+ *                   bw.coach.<id>, bw.assisted.continue)
+ *   buildwise.*     localStorage feature prefs (buildwise.units)
+ *   bw_geocode_v1:* localStorage geocode response cache (versioned prefix)
+ */
 export interface AnalysisRequest {
   latitude: number;
   longitude: number;
@@ -161,7 +169,6 @@ export interface RankedEntrance {
   direction: string;
   score: number;
   vastu_rationale: string;
-  practical_rationale: string;
   is_approach_side: boolean;
 }
 
@@ -177,7 +184,6 @@ export interface RoomGridZone {
 
 export interface SlopeReading {
   drainage_direction: string;
-  azimuth_degrees: number;
   auspiciousness: 'favourable' | 'neutral' | 'requires_remedy';
   rationale: string;
   remedy_notes?: string | null;
@@ -217,7 +223,6 @@ export interface RecommendationItem {
   id?: string;
   title?: string;
   description?: string;
-  source_standard?: string;
 }
 
 export interface AnalysisResponse {
