@@ -333,6 +333,9 @@ export interface SegmentedControlProps<T extends string = string> {
   indicator?: boolean;
 }
 
+/** Measured box of one segmented option, relative to the control's padding box. */
+type PillBox = { left: number; top: number; width: number; height: number };
+
 /**
  * iOS-style segmented control. One primitive serves every segmented surface:
  * value pickers (role=radiogroup) and tab bars (role=tablist), with roving
@@ -365,42 +368,109 @@ export function SegmentedControl<T extends string = string>({
   // so under reduced motion the pill snaps in the same frame as the selection.
   const reducedMotion = useReducedMotion();
 
-  // Sliding accent pill: measure the selected option and animate the pill to it.
-  const [pill, setPill] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
-  const measurePill = useCallback(() => {
-    if (!indicator) return;
-    const root = rootRef.current;
-    if (!root) return;
-    const el = root.querySelector<HTMLElement>(`[data-seg-id="${value}"]`);
-    if (!el) return;
-    const next = { left: el.offsetLeft, top: el.offsetTop, width: el.offsetWidth, height: el.offsetHeight };
-    setPill((prev) =>
-      prev && prev.left === next.left && prev.top === next.top && prev.width === next.width && prev.height === next.height
-        ? prev
-        : next
-    );
-  }, [indicator, value]);
+  // Sliding accent pill: place the selected option's indicator from CACHED
+  // geometry, and refresh that cache after paint.
+  //
+  // Why: reading `offsetLeft/offsetWidth` right after the commit that changed the
+  // selection forces a synchronous layout flush of the whole host sheet — on the
+  // report tab bar that is an 1 818-node sheet, and the flush measured 32–115 ms
+  // of self time INSIDE the tab-switch click handler (Long Task + INP every
+  // switch). The geometry itself is stable, so the control now:
+  //   1. applies the cached box for the new value — zero layout reads in the
+  //      commit that follows a selection change,
+  //   2. refreshes the cache in a batched post-paint pass, one read covering ALL
+  //      options (never one read per option), and
+  //   3. re-reads on the events that can actually change geometry: container
+  //      resize, web-font swap, and a change to the option set.
+  // The cost of a flush is not removed, it is moved off the input path — which is
+  // what the interaction latency measures.
+  const [pill, setPill] = useState<PillBox | null>(null);
+  const pillCacheRef = useRef<Map<string, PillBox>>(new Map());
+  const pillRafRef = useRef(0);
+  const valueRef = useRef(value);
 
+  const applyPill = useCallback((box: PillBox | null) => {
+    if (!box) return;
+    setPill((prev) =>
+      prev && prev.left === box.left && prev.top === box.top && prev.width === box.width && prev.height === box.height
+        ? prev
+        : box
+    );
+  }, []);
+
+  /** ONE batched read covering every option (a single layout pass). */
+  const readPillBoxes = useCallback((): Map<string, PillBox> | null => {
+    const root = rootRef.current;
+    if (!root) return null;
+    const boxes = new Map<string, PillBox>();
+    for (const el of root.querySelectorAll<HTMLElement>('[data-seg-id]')) {
+      const id = el.dataset.segId;
+      if (id) {
+        boxes.set(id, { left: el.offsetLeft, top: el.offsetTop, width: el.offsetWidth, height: el.offsetHeight });
+      }
+    }
+    return boxes.size > 0 ? boxes : null;
+  }, []);
+
+  /** Re-measure AFTER paint (layout is clean by then) and re-apply the pill. */
+  const refreshPill = useCallback(() => {
+    if (!indicator) return;
+    if (pillRafRef.current) cancelAnimationFrame(pillRafRef.current);
+    pillRafRef.current = requestAnimationFrame(() => {
+      // Second frame: the commit has been laid out and painted.
+      pillRafRef.current = requestAnimationFrame(() => {
+        pillRafRef.current = 0;
+        const boxes = readPillBoxes();
+        if (!boxes) return;
+        pillCacheRef.current = boxes;
+        applyPill(boxes.get(valueRef.current) ?? null);
+      });
+    });
+  }, [indicator, readPillBoxes, applyPill]);
+
+  // Selection changed (or the option set did): cancel any pending refresh, place
+  // the pill from cache — no layout read here — then schedule a post-paint pass.
   useLayoutEffect(() => {
-    measurePill();
-  }, [measurePill, options.length]);
+    if (!indicator) return;
+    valueRef.current = value;
+    applyPill(pillCacheRef.current.get(value) ?? null);
+    refreshPill();
+    return () => {
+      if (pillRafRef.current) {
+        cancelAnimationFrame(pillRafRef.current);
+        pillRafRef.current = 0;
+      }
+    };
+  }, [indicator, value, options.length, applyPill, refreshPill]);
 
   useEffect(() => {
     if (!indicator) return;
-    const root = rootRef.current;
-    if (!root) return;
-    const onResize = () => measurePill();
-    window.addEventListener('resize', onResize);
+    const onGeometryChange = () => refreshPill();
+    window.addEventListener('resize', onGeometryChange);
     let ro: ResizeObserver | undefined;
     if (typeof ResizeObserver !== 'undefined') {
-      ro = new ResizeObserver(onResize);
-      ro.observe(root);
+      ro = new ResizeObserver(onGeometryChange);
+      if (rootRef.current) ro.observe(rootRef.current);
+    }
+    // Web-font swap changes label metrics, so the cached boxes can go stale
+    // without any resize event.
+    let cancelled = false;
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined;
+    if (fonts && typeof fonts.ready?.then === 'function') {
+      fonts.ready
+        .then(() => {
+          if (!cancelled) refreshPill();
+        })
+        .catch(() => {
+          /* font loading is not observable — the resize/RO paths still cover it */
+        });
     }
     return () => {
-      window.removeEventListener('resize', onResize);
+      cancelled = true;
+      window.removeEventListener('resize', onGeometryChange);
       ro?.disconnect();
     };
-  }, [indicator, measurePill]);
+  }, [indicator, refreshPill]);
 
   const moveFocus = (dir: 1 | -1) => {
     const enabled = options.filter((o) => !o.disabled);

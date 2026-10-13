@@ -27,6 +27,15 @@
   --text-2: #6A6A6F;
   --text-3: #5F5F64;
   --accent: #0071E3;
+  /* Hover tone for accent FILLS. This is a token rather than a `hover:brightness-*`
+     filter for two reasons: a brightness filter is a per-element paint (and, under
+     a transitioning `all`, a paint PER FRAME), while a background swap is an
+     ordinary color change the compositor already handles; and two components were
+     already referencing `var(--accent-hover)` with nothing defining it, so their
+     hover state silently did nothing. Value: the accent scaled to 0.98 — the tone
+     the retired filter produced, kept exact so no surface shifts.
+     Hover DARKENS on the accent (Apple HIG), press uses --accent-press below. */
+  --accent-hover: #006FDE;
   --accent-tint: rgba(0, 113, 227, 0.12);
   --accent-press: #0062C4;
   --semantic-green: #34C759;
@@ -85,6 +94,8 @@
   --text-2: #A1A1A6;
   --text-3: #86868B;
   --accent: #0A84FF;
+  /* 0.98 of --accent, same rule as the light theme (see the light block). */
+  --accent-hover: #0A81FA;
   --accent-tint: rgba(10, 132, 255, 0.15);
   --accent-press: #0071E3;
   --semantic-green: #34C759;
@@ -326,11 +337,32 @@
    the same element (equal specificity, later in the sheet), so a surface
    asked for bg-[var(--accent)] silently painted --panel instead — e.g. the
    white-on-white "close the ring" pill, which was unreadable. */
+/* ========================================================================= */
+/* GLASS POLICY (B10) — one cap, no stacking, and an opt-out                 */
+/* ========================================================================= */
+/* Measured in Phase A: the report's glass cost nothing (0 fps difference with
+   it on or off), so this is not a performance rule — it is a consistency rule
+   so the material cannot grow three different blur radii again.
+
+   1. ONE radius, declared once. `--glass-blur` is the only blur value in the
+      system; `blur(40px)` on the HUD was 1.67× the panels and read as a
+      different material.
+   2. Never two backdrops at once: while the report sheet is open it is the only
+      glass on screen — the panels and HUD behind it drop their backdrop-filter
+      and paint their existing (already translucent) background colour.
+   3. `prefers-reduced-transparency` is honoured: glass becomes opaque.
+   4. Blur is not transitively animated: it is expensive to interpolate, and the
+      panel's own colour/border/shadow transition is enough. */
+:root {
+  --glass-blur: 24px;
+  --glass-saturate: 180%;
+}
+
 @layer components {
   .vibrancy-panel {
     background-color: var(--panel);
-    backdrop-filter: blur(24px) saturate(180%);
-    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     border: var(--panel-border);
     box-shadow: var(--shadow);
     transition: background-color 250ms cubic-bezier(0.25, 0.1, 0.25, 1),
@@ -340,19 +372,41 @@
 
   .vibrancy-pill {
     background-color: var(--panel);
-    backdrop-filter: blur(24px) saturate(180%);
-    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     border: var(--panel-border);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 16px rgba(0, 0, 0, 0.08);
   }
 
-  /* iOS HUD Vibrancy Surface */
+  /* iOS HUD Vibrancy Surface — same material as the panels, not a heavier one */
   .vibrancy-hud {
     background-color: var(--panel);
-    backdrop-filter: blur(40px) saturate(180%);
-    -webkit-backdrop-filter: blur(40px) saturate(180%);
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     border: var(--panel-border);
     box-shadow: var(--shadow);
+  }
+}
+
+/* (2) The open report sheet is the only backdrop on screen. `:has()` keeps this
+   declarative — no state has to be threaded through the components for a purely
+   visual rule. */
+.app-shell:has(.report-sheet-surface) .vibrancy-panel,
+.app-shell:has(.report-sheet-surface) .vibrancy-pill,
+.app-shell:has(.report-sheet-surface) .vibrancy-hud {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* (3) Opt-out. Every glass surface already paints a translucent background
+   colour, so dropping the filter leaves a legible solid panel. */
+@media (prefers-reduced-transparency: reduce) {
+  .vibrancy-panel,
+  .vibrancy-pill,
+  .vibrancy-hud,
+  .apple-map-popup .maplibregl-popup-content {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }
 
@@ -562,8 +616,8 @@
 /* Apple Maps Vibrancy Popup Tooltips */
 .apple-map-popup .maplibregl-popup-content {
   background: var(--panel) !important;
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   border: var(--panel-border);
   box-shadow: var(--shadow);
   border-radius: 10px;
@@ -625,6 +679,104 @@
 /* Skeleton placeholder for async report cards (the Skeleton primitive):
    tokenized shimmer. The global prefers-reduced-motion rule freezes it to a
    static tint, so nothing animates when the user asks for reduced motion. */
+/*
+ * Placeholder map sheet (MapPlaceholder).
+ *
+ * Drawn in CSS rather than SVG, for a measured reason: the SVG version was
+ * cover-scaled into a tall phone box (a 400x260 viewBox over 412x823 is a 3.16x
+ * blow-up), so its 1px strokes rendered as ~3px bands and the whole motif was
+ * cropped to a sliver — the "random blue squiggles" a phone reader saw. CSS
+ * gradients are exactly 1px at any viewport, and there is nothing to crop.
+ *
+ * Three layers, all in --hairline so both themes are correct by construction:
+ * an irregular block rhythm, and the corner shading (light gathered at the centre)
+ * that keeps the page from reading as flat paper. Every layer is faint by design —
+ * this is the ground the plate sits on, not a texture to look at. The diagonals
+ * that used to cross it are gone: once the artwork became a plate in the app's own
+ * card grammar there was nothing left for them to continue, and at that weight
+ * they read as scratches rather than as roads.
+ */
+/* Irregular periods on purpose: an even graticule is graph paper, cities are not
+   laid out on one. 68 x 88 reads as blocks, and the eye stops counting lines. */
+.bw-placeholder-sheet {
+  background-image:
+    linear-gradient(to right, var(--hairline) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--hairline) 1px, transparent 1px);
+  background-size: 68px 88px;
+  opacity: 0.35;
+}
+
+.bw-placeholder-vignette {
+  background: radial-gradient(
+    132% 96% at 50% 44%,
+    rgba(255, 255, 255, 0) 42%,
+    var(--hairline) 100%
+  );
+}
+
+/*
+ * Focus wash: light gathered on the artwork, so the reader's eye lands on the
+ * site the placeholder is describing instead of on an even field of grid. One
+ * accent tint at 12% fading to nothing — no second hue, no blur (a filter here
+ * would be a per-frame paint over a full-viewport surface).
+ */
+.bw-placeholder-wash {
+  background: radial-gradient(
+    62% 44% at 50% 42%,
+    var(--accent-tint) 0%,
+    rgba(255, 255, 255, 0) 72%
+  );
+}
+
+/*
+ * Placeholder map scene (MapPlaceholder).
+ *
+ * The scene is inline SVG; these are the cartographic colours it is drawn with,
+ * scoped to the artwork itself so the app palette is untouched. A LAND colour,
+ * three features drawn over it — water (bank line over water band), greenery, and
+ * built fabric — plus the road casing/fill pair and the parcel hairline.
+ *
+ * The land is its own tone rather than the page's, for a reason that is visible
+ * in the first screenshot: a basemap is read entirely by the contrast between its
+ * land and its roads, and on the page's own #F5F5F7 white roads measure almost
+ * nothing. One step of land under white roads buys the whole surface its
+ * legibility; the tile is then held in the app's card grammar (radius, hairline,
+ * shadow) so it reads as a map the app is previewing, not as a hole in the page.
+ *
+ * WATER IS NOT THE ACCENT HUE, and that is the one colour rule this scene has.
+ * The first pass drew the river in --accent, which made it 26% of the plate in
+ * the same blue as the site — the probe read the two as one mass, and so does the
+ * eye: the site stopped looking like the subject. It is a calmer steel blue now,
+ * so the only saturated accent on the plate is the plot the screen is about.
+ *
+ * The dark block is the same plan rendered the way a dark basemap does it: darker
+ * land, dark grey roads with a light casing, deeper water, and built fabric dim
+ * enough to stay under the roads.
+ */
+.bw-placeholder-map {
+  --map-land: #E8EBEF;
+  --map-road: #FFFFFF;
+  --map-road-casing: rgba(0, 0, 0, 0.16);
+  --map-building: rgba(74, 78, 86, 0.28);
+  --map-parcel: rgba(0, 0, 0, 0.16);
+  --map-water: rgba(106, 154, 191, 0.55);
+  --map-water-line: rgba(74, 126, 166, 0.6);
+  --map-green: rgba(52, 199, 89, 0.30);
+  --map-green-line: rgba(24, 145, 62, 0.45);
+}
+
+[data-theme="dark"] .bw-placeholder-map {
+  --map-land: #17191E;
+  --map-road: rgba(88, 90, 96, 0.95);
+  --map-road-casing: rgba(255, 255, 255, 0.10);
+  --map-building: rgba(255, 255, 255, 0.13);
+  --map-parcel: rgba(255, 255, 255, 0.16);
+  --map-water: rgba(56, 104, 143, 0.7);
+  --map-water-line: rgba(124, 178, 216, 0.55);
+  --map-green: rgba(52, 199, 89, 0.32);
+  --map-green-line: rgba(90, 220, 130, 0.5);
+}
+
 .report-skeleton {
   background: linear-gradient(
     90deg,
@@ -646,21 +798,67 @@
 }
 
 /* ========================================================================= */
+/* REPORT CONTAINMENT — skip layout and paint for off-screen report content  */
+/* ========================================================================= */
+
+/* A report tab is 1 500–6 000 px of card stack, of which one or two screens are
+   ever on screen. `content-visibility: auto` lets the engine skip layout, style
+   and paint for the sections that are off screen, which is most of the tab — the
+   work is done as a section approaches the viewport instead of up front.
+
+   `contain-intrinsic-size: auto <h>` is what keeps that honest: the `auto`
+   keyword makes the browser REMEMBER the last rendered size of a section, so the
+   placeholder is only used for a section that has never been rendered and the
+   pane's scroll height stops being a guess after first paint. The seed height is
+   deliberately generous (a typical report section is 500–900 px tall): a seed
+   that is too small grows the scroll height as sections render, and content above
+   the viewport growing is exactly how a scroll container manufactures CLS. */
+.report-sheet-content [data-report-section] {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 600px;
+}
+
+/* ========================================================================= */
 /* CARD GRAMMAR — hover elevation, pressed state, staggered entrance         */
 /* ========================================================================= */
 
 /* Hover elevation + pressed feedback. Paint-safe props only (transform /
-   shadow) so a hover never triggers layout. 200ms ease-out; pressed snaps to
-   100ms. Motion is frozen by the global prefers-reduced-motion rule. */
+   opacity) so a hover never triggers layout. 200ms ease-out; pressed snaps to
+   100ms. Motion is frozen by the global prefers-reduced-motion rule.
+
+   The lift shadow is PRE-RENDERED into a pseudo-element whose OPACITY animates,
+   rather than transitioning `box-shadow` on the card itself: a shadow
+   transition repaints the card's entire box on every frame of the 200 ms, while
+   opacity is composited. The pseudo sits at z-index -1, i.e. behind the card's
+   own background — the same place a real box-shadow paints. (`position:
+   relative` on the card is new; none of the report's card contents position
+   anything against an outer container, so no containing block moves.) */
 .bw-card {
-  transition:
-    transform var(--motion-duration-slow) var(--motion-ease-out),
-    box-shadow var(--motion-duration-slow) var(--motion-ease-out);
+  position: relative;
+  transition: transform var(--motion-duration-slow) var(--motion-ease-out);
+  /* Cards are the report's unit of work: containing layout inside one means a
+     card re-rendering cannot invalidate the layout of its neighbours, and paint
+     containment clips it to its own box (every overlay in the report is portaled
+     to <body>, so nothing that legitimately escapes a card is clipped). */
+  contain: layout paint;
+}
+.bw-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  box-shadow: var(--shadow-lift);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-duration-slow) var(--motion-ease-out);
 }
 @media (hover: hover) {
   .bw-card:hover {
     transform: translateY(-2px);
-    box-shadow: var(--shadow-lift);
+  }
+  .bw-card:hover::after {
+    opacity: 1;
   }
 }
 .bw-card:active {
@@ -733,6 +931,22 @@
     padding: 0 !important;
   }
 
+  /* The printable sheet still lives inside the app shell, which is
+     `h-screen w-screen overflow-hidden`. In a print layout `100vh` is exactly one
+     page tall, so that box clipped the entire dossier to a single sheet and every
+     `break-before: page` after the first was lost (measured: 4 sections rendered,
+     1 page emitted). #root and the shell must stop constraining the document. */
+  #root,
+  .app-shell {
+    position: static !important;
+    height: auto !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    width: auto !important;
+    max-width: none !important;
+    overflow: visible !important;
+  }
+
   /* Sheet becomes a static full-width clean document */
   .report-sheet-surface {
     position: static !important;
@@ -757,6 +971,12 @@
     max-width: 100% !important;
     padding: 16px 0 !important;
     margin: 0 !important;
+  }
+
+  /* The hover lift is a composited pseudo-element shadow — no hover exists on
+     paper, and an ink-heavy shadow would only blur the print. */
+  .bw-card::after {
+    box-shadow: none !important;
   }
 
   /* Hide single-tab screen container, show stacked print container */
