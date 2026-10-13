@@ -31,12 +31,67 @@
       content="AI-powered site feasibility, risk analysis, cost estimation, and generative architectural planning."
     />
     <meta name="twitter:image" content="/brand/BuildWise_AI_with_title.png" />
-    <!-- Hero photograph: preloaded high (LCP element of the landing).
+    <!-- Hero photograph: preloaded high — but only on the LANDING route, where it
+         is the LCP element. On /app it is never displayed, and a 565 KB image at
+         fetchpriority="high" competes with the app's own chunks for bandwidth: at
+         the mobile preset that one request accounted for most of the simulated
+         transfer budget and pushed the app's first-view paint past 5 s. The
+         inline script runs while the head is still parsing, so the fetch starts
+         as early as the static link it replaces; the landing's preload order is
+         unchanged.
          Source: Unsplash photo 1470071459604-3b5ec3a7fe05 (Unsplash License, free to use). -->
-    <link rel="preload" as="image" href="/hero-scenic.jpg" fetchpriority="high" />
+    <script>
+      (function () {
+        if (location.pathname.indexOf('/app') === 0) return;
+        var hero = document.createElement('link');
+        hero.rel = 'preload';
+        hero.as = 'image';
+        hero.href = '/hero-scenic.jpg';
+        hero.setAttribute('fetchpriority', 'high');
+        document.head.appendChild(hero);
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@600;700&display=swap" rel="stylesheet">
+    <!-- Map data origins. The basemap is the app's largest dependency and its
+         style, tiles and sprites all come from OpenFreeMap, so that one gets a
+         full preconnect (DNS + TCP + TLS) started while the entry chunk is still
+         parsing. The imagery/terrain hosts are only used when those modes are
+         switched on, so they get a cheaper DNS-only hint — a preconnect for each
+         would open connections most visits never use.
+
+         The API origin is deliberately NOT listed: it is deployment-specific
+         (VITE_API_URL), so a hard-coded preconnect here would warm the wrong host
+         in every environment but localhost. -->
+    <link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin>
+    <link rel="dns-prefetch" href="https://tiles.openfreemap.org">
+    <link rel="dns-prefetch" href="https://server.arcgisonline.com">
+    <link rel="dns-prefetch" href="https://a.tile.opentopomap.org">
+    <link rel="dns-prefetch" href="https://s3.amazonaws.com">
+    <!-- Fonts. The stylesheet is fetched in parallel but NOT on the render-blocking
+         path: a cross-origin stylesheet in the head holds the first paint until it
+         arrives, and at the mobile preset that was ~890 ms of measured render
+         blocking ("render-blocking-resources", the only entry left after this
+         change). media="print" + onload applies it the moment it lands, one step
+         after the shell paints. A/B on this rig (both builds, same machine, same
+         minute): mobile FCP 2 648 -> 1 677 ms and SI 2 045 -> 1 870 ms, desktop
+         FCP 529 -> 409 ms with no attributable TBT cost (the desktop TBT move in
+         this window is the rig: dist-b4 measures 87-88 TODAY against lh4's 90).
+         display=swap is in the URL, the origins are preconnected above, and every
+         stack has a local fallback; noscript keeps JS-off readers on the plain
+         stylesheet. -->
+    <link
+      rel="stylesheet"
+      media="print"
+      onload="this.media='all'"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@600;700&display=swap"
+    />
+    <noscript>
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@600;700&display=swap"
+      />
+    </noscript>
   </head>
   <body class="bg-slate-50 text-slate-800">
     <div id="root"></div>

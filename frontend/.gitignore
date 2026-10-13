@@ -10,6 +10,8 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+# Production builds emitted by the perf rig (minified + symbol-attribution)
+dist-*
 *.local
 .env
 .env.*
