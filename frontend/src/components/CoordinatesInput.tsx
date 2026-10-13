@@ -299,14 +299,14 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
                       handleSelectSuggestion(s);
                     }}
                     onMouseEnter={() => setActiveSuggestionIndex(idx)}
-                    className={`group cursor-pointer rounded-[10px] p-2 flex items-center gap-2.5 transition-all duration-150 ${
+                    className={`group cursor-pointer rounded-[10px] p-2 flex items-center gap-2.5 transition-ui duration-150 ${
                       isActive
                         ? 'bg-[var(--accent-tint)]'
                         : 'hover:bg-[var(--fill)]'
                     }`}
                   >
                     <div
-                      className={`w-7 h-7 rounded-[8px] flex items-center justify-center shrink-0 transition-all duration-150 ${
+                      className={`w-7 h-7 rounded-[8px] flex items-center justify-center shrink-0 transition-ui duration-150 ${
                         isActive
                           ? 'bg-[var(--accent)] text-white shadow-sm scale-105'
                           : 'bg-[var(--fill)] text-[var(--text-2)] group-hover:text-[var(--accent-ink)] group-hover:bg-[var(--accent-tint)]'
@@ -334,7 +334,7 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
                       <Icon
                         name="arrow-up-right"
                         size={13}
-                        className={`transition-all duration-150 ${
+                        className={`transition-ui duration-150 ${
                           isActive
                             ? 'text-[var(--accent-ink)] opacity-100 translate-x-0.5 -translate-y-0.5'
                             : 'text-[var(--text-3)] opacity-0 group-hover:opacity-100'
@@ -440,7 +440,7 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
                 ? `geocode-suggestion-${activeSuggestionIndex}`
                 : undefined
             }
-            className="w-full bg-[var(--fill)] border border-transparent focus:border-[var(--accent)]/30 rounded-[10px] pl-9 pr-9 py-2 text-[13px] font-medium text-[var(--text-1)] outline-none focus:ring-[3px] focus:ring-[var(--accent)]/15 transition-all placeholder:text-[var(--text-3)] [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
+            className="w-full bg-[var(--fill)] border border-transparent focus:border-[var(--accent)]/30 rounded-[10px] pl-9 pr-9 py-2 text-[13px] font-medium text-[var(--text-1)] outline-none focus:ring-[3px] focus:ring-[var(--accent)]/15 transition-ui placeholder:text-[var(--text-3)] [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
           />
           {isSearching && (
             <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
@@ -451,7 +451,7 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
             <button
               type="button"
               onClick={handleClearSearch}
-              className="!absolute right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded-full bg-[var(--text-3)]/15 hover:bg-[var(--text-3)]/30 text-[var(--text-2)] hover:text-[var(--text-1)] transition-all active:scale-90 bw-touch-target"
+              className="!absolute right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded-full bg-[var(--text-3)]/15 hover:bg-[var(--text-3)]/30 text-[var(--text-2)] hover:text-[var(--text-1)] transition-ui active:scale-90 bw-touch-target"
               aria-label="Clear search"
               title="Clear search"
             >
@@ -492,7 +492,7 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
               value={latInput}
               onChange={(e) => setLatInput(e.target.value)}
               placeholder="e.g. 12.9716"
-              className="w-full bg-[var(--fill)] border-0 rounded-[10px] px-3 py-2 text-[13px] font-medium text-[var(--text-1)] outline-none focus:ring-[3px] focus:ring-[var(--accent)]/25 transition-all placeholder:text-[var(--text-3)]"
+              className="w-full bg-[var(--fill)] border-0 rounded-[10px] px-3 py-2 text-[13px] font-medium text-[var(--text-1)] outline-none focus:ring-[3px] focus:ring-[var(--accent)]/25 transition-ui placeholder:text-[var(--text-3)]"
             />
           </div>
           <div className="min-w-0">
@@ -508,7 +508,7 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
               value={lonInput}
               onChange={(e) => setLonInput(e.target.value)}
               placeholder="e.g. 77.5946"
-              className="w-full bg-[var(--fill)] border-0 rounded-[10px] px-3 py-2 text-[13px] font-medium text-[var(--text-1)] outline-none focus:ring-[3px] focus:ring-[var(--accent)]/25 transition-all placeholder:text-[var(--text-3)]"
+              className="w-full bg-[var(--fill)] border-0 rounded-[10px] px-3 py-2 text-[13px] font-medium text-[var(--text-1)] outline-none focus:ring-[3px] focus:ring-[var(--accent)]/25 transition-ui placeholder:text-[var(--text-3)]"
             />
           </div>
         </div>
@@ -521,7 +521,7 @@ function parseLocationName(displayName: string): { title: string; subtitle: stri
 
         <button
           type="submit"
-          className="w-full h-10 bg-[var(--accent)] text-white text-[13px] font-semibold rounded-[12px] transition-all duration-200 hover:brightness-[0.98] active:scale-[0.98] flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+          className="w-full h-10 bg-[var(--accent)] text-white text-[13px] font-semibold rounded-[12px] transition-[transform,opacity,background-color,border-color,color,box-shadow] duration-200 hover:bg-[var(--accent-hover)] active:scale-[0.98] flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
         >
           <Icon name="map-pin" size={14} className="shrink-0" />
           <span>Update Pin</span>

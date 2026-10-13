@@ -221,7 +221,7 @@ export const MethodologyModal: React.FC<MethodologyModalProps> = ({ isOpen, onCl
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white rounded-[12px] text-[13px] font-semibold transition-colors cursor-pointer active:brightness-95 shadow-sm"
+            className="px-4 py-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white rounded-[12px] text-[13px] font-semibold transition-colors cursor-pointer active:bg-[var(--accent-press)] shadow-sm"
           >
             Close Reference
           </button>

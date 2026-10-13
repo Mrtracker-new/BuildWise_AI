@@ -73,7 +73,7 @@ export const ConstraintChips: React.FC<ConstraintChipsProps> = ({
   }
 
   return (
-    <div className="rounded-[10px] bg-[var(--fill)]/50 border border-[var(--separator)] p-2.5 space-y-2 text-[12px] transition-all">
+    <div className="rounded-[10px] bg-[var(--fill)]/50 border border-[var(--separator)] p-2.5 space-y-2 text-[12px] transition-ui">
       {/* Header with Source Badge */}
       <div className="flex items-center justify-between gap-1.5 flex-wrap">
         <div className="flex items-center gap-1.5">
@@ -234,7 +234,7 @@ export const ConstraintChips: React.FC<ConstraintChipsProps> = ({
                 key={item.id}
                 type="button"
                 onClick={() => handleToggleSpace(item.id)}
-                className={`px-2 py-0.5 rounded-[4px] text-[11px] font-medium transition-all cursor-pointer ${
+                className={`px-2 py-0.5 rounded-[4px] text-[11px] font-medium transition-ui cursor-pointer ${
                   isSelected
                     ? 'bg-[var(--accent)] text-white shadow-2xs'
                     : 'bg-[var(--card-bg)] text-[var(--text-2)] hover:text-[var(--text-1)] border border-[var(--separator)]'

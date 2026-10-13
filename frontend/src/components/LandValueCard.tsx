@@ -2,6 +2,7 @@ import React, { useState, useEffect, useId } from 'react';
 import type { LandValueEstimate } from '../services/types';
 import { Icon } from './Icon';
 import { Skeleton } from './report/Skeleton';
+import { formatIN } from '../services/numberFormat';
 
 interface LandValueCardProps {
   landValue: LandValueEstimate;
@@ -74,7 +75,7 @@ export const LandValueCard: React.FC<LandValueCardProps> = ({
     } else if (val >= 100000) {
       return `₹${(val / 100000).toFixed(2)} Lakh`;
     }
-    return `₹${val.toLocaleString('en-IN')}`;
+    return `₹${formatIN(val)}`;
   };
 
   const sourceLabel =
@@ -124,7 +125,7 @@ export const LandValueCard: React.FC<LandValueCardProps> = ({
           <span className="text-[13px] font-normal text-[var(--text-2)]">Indicative land rate</span>
           {isRateKnown ? (
             <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
-              ₹{(effectiveRate as number).toLocaleString('en-IN')}/sq ft
+              ₹{formatIN(effectiveRate as number)}/sq ft
             </span>
           ) : (
             <span
@@ -155,7 +156,7 @@ export const LandValueCard: React.FC<LandValueCardProps> = ({
           <div className="h-10 flex items-center justify-between px-0.5">
             <span className="text-[13px] font-normal text-[var(--text-2)]">Published table rate</span>
             <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
-              ₹{landValue.base_table_rate_per_sqft.toLocaleString('en-IN')}/sq ft
+              ₹{formatIN(landValue.base_table_rate_per_sqft)}/sq ft
             </span>
           </div>
         )}

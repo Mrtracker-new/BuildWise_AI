@@ -42,20 +42,30 @@ export const AssistedBar: React.FC<AssistedBarProps> = ({
           data-testid="assisted-notice"
           role="status"
           aria-live="polite"
-          className="pointer-events-auto vibrancy-panel rounded-[14px] border border-[var(--panel-border-color)] shadow-lg pl-2.5 sm:pl-3 pr-1.5 py-1.5 flex items-center gap-2 min-w-0"
+          className="pointer-events-auto vibrancy-panel rounded-[14px] border border-[var(--panel-border-color)] shadow-lg pl-2.5 pr-2 py-2 flex items-center gap-2.5 min-w-0"
         >
-          <Icon name="info" size={15} className="text-[var(--accent-ink)] shrink-0" aria-hidden="true" />
-          <p className="min-w-0 text-[11px] sm:text-[12px] leading-[1.45] text-[var(--text-1)]">
-            <span className="font-semibold">Assisted mode.</span>{' '}
-            <span className="text-[var(--text-2)]">
+          {/* The notice is a tip, so it is set like one: a glyph plate, a label
+              and a sentence — rather than one run-on line with a 44px button
+              beside it, which read as unfinished chrome on a phone. */}
+          <span
+            aria-hidden="true"
+            className="w-7 h-7 rounded-[9px] bg-[var(--accent-tint)] text-[var(--accent-ink)] flex items-center justify-center shrink-0"
+          >
+            <Icon name="info" size={14} />
+          </span>
+          <div className="min-w-0 space-y-0.5">
+            <p className="text-[11.5px] font-semibold leading-[1.25] text-[var(--text-1)]">
+              Assisted mode
+            </p>
+            <p className="text-[11.5px] leading-[1.4] text-[var(--text-2)]">
               A desktop is recommended for precise boundary tracing. All tools remain available.
-            </span>
-          </p>
+            </p>
+          </div>
           <button
             type="button"
             data-testid="assisted-continue"
             onClick={onContinue}
-            className="relative shrink-0 h-11 min-h-[44px] px-3 rounded-[9px] bg-[var(--fill)] text-[12.5px] font-semibold text-[var(--text-1)] hover:bg-[var(--fill-hover)] active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] transition-transform cursor-pointer select-none"
+            className="bw-touch-target relative shrink-0 h-9 px-3 rounded-[10px] bg-[var(--fill)] text-[12.5px] font-semibold text-[var(--text-1)] hover:bg-[var(--fill-hover)] active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] transition-transform cursor-pointer select-none"
           >
             Continue
           </button>

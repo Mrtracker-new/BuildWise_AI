@@ -86,7 +86,7 @@ export const SiteMoveDialog: React.FC<SiteMoveDialogProps> = ({
             type="button"
             data-testid="site-move-apply"
             onClick={onMove}
-            className="w-full h-10 rounded-[12px] bg-[var(--accent)] text-white text-[13px] font-semibold flex items-center justify-center gap-2 shadow-sm hover:brightness-[0.98] active:brightness-95 transition-ui focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+            className="w-full h-10 rounded-[12px] bg-[var(--accent)] text-white text-[13px] font-semibold flex items-center justify-center gap-2 shadow-sm hover:bg-[var(--accent-hover)] active:bg-[var(--accent-press)] transition-ui focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
           >
             <Icon name="map-pin" size={15} className="shrink-0" />
             <span>Take the plot to the new site</span>

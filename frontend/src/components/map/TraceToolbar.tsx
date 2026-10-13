@@ -171,7 +171,7 @@ export const TraceToolbar: React.FC<TraceToolbarProps> = ({
               aria-pressed={t.active ? true : undefined}
               className={`group flex items-center gap-1 h-8 px-2 rounded-[10px] text-[11px] sm:text-[12px] font-medium select-none justify-center transition-[color,background-color,box-shadow] duration-150 ease-apple focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
                 t.variant === 'accent'
-                  ? 'bg-[var(--accent)] text-white shadow-sm hover:brightness-[0.98] active:brightness-95 disabled:opacity-40 disabled:cursor-not-allowed'
+                  ? 'bg-[var(--accent)] text-white shadow-sm hover:bg-[var(--accent-hover)] active:bg-[var(--accent-press)] disabled:hover:bg-[var(--accent)] disabled:opacity-40 disabled:cursor-not-allowed'
                   :                t.active
                   ? 'bg-[var(--accent-tint)] text-[var(--accent-ink)]'
                   : 'text-[var(--text-1)] hover:bg-[var(--fill)] active:bg-[var(--fill-hover)] disabled:opacity-40 disabled:cursor-not-allowed'

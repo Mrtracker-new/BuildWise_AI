@@ -956,7 +956,7 @@ const CtaButton: React.FC<{
       isLoading
         ? 'bg-[var(--fill)] text-[var(--text-3)] cursor-not-allowed opacity-90'
         : enabled
-        ? 'bg-[var(--accent)] text-white hover:brightness-[0.98] active:brightness-95 cursor-pointer'
+        ? 'bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] active:bg-[var(--accent-press)] cursor-pointer'
         : 'bg-[var(--fill)] text-[var(--text-3)] cursor-not-allowed'
     }`}
   >

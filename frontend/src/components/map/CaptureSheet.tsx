@@ -1622,7 +1622,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                   onClick={() => onStepChange('trace')}
                   disabled={!pin}
                   title={pin ? undefined : 'Place the pin on the map first'}
-                  className="text-[12px] font-semibold px-3.5 py-1.5 min-h-[34px] rounded-[8px] bg-[var(--accent)] text-white hover:brightness-105 active:scale-95 transition-colors shadow-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:active:scale-100"
+                  className="text-[12px] font-semibold px-3.5 py-1.5 min-h-[34px] rounded-[8px] bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] disabled:hover:bg-[var(--accent)] active:scale-95 transition-colors shadow-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:active:scale-100"
                 >
                   Trace boundary
                 </button>
@@ -1759,7 +1759,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                   onClick={finishTrace}
                   disabled={!canClose}
                   title={canClose ? "Close the boundary (Enter)" : "Add at least 3 vertices to close the boundary"}
-                  className="shrink-0 h-8 min-h-[32px] px-3.5 rounded-[8px] bg-[var(--accent)] text-white text-[12px] font-semibold whitespace-nowrap hover:brightness-105 active:scale-95 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm cursor-pointer flex items-center gap-1.5"
+                  className="shrink-0 h-8 min-h-[32px] px-3.5 rounded-[8px] bg-[var(--accent)] text-white text-[12px] font-semibold whitespace-nowrap hover:bg-[var(--accent-hover)] disabled:hover:bg-[var(--accent)] active:scale-95 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm cursor-pointer flex items-center gap-1.5"
                 >
                   <Icon name="check" size={13} className="shrink-0" />
                   <span>Close shape</span>
@@ -1904,7 +1904,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                   type="button"
                   onClick={() => onStepChange('review')}
                   disabled={frontageEdge === null && suggestion === null}
-                  className="text-[12px] font-semibold px-3.5 py-1.5 min-h-[32px] rounded-[8px] bg-[var(--accent)] text-white hover:brightness-105 active:scale-95 transition-colors disabled:opacity-40 shadow-sm cursor-pointer disabled:cursor-not-allowed"
+                  className="text-[12px] font-semibold px-3.5 py-1.5 min-h-[32px] rounded-[8px] bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] disabled:hover:bg-[var(--accent)] active:scale-95 transition-colors disabled:opacity-40 shadow-sm cursor-pointer disabled:cursor-not-allowed"
                 >
                   Review
                 </button>
@@ -1940,7 +1940,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
                   type="button"
                   onClick={commit}
                   disabled={!canCommit}
-                  className="text-[12px] font-semibold px-3.5 py-1.5 min-h-[34px] rounded-[8px] bg-[var(--accent)] text-white hover:brightness-105 active:scale-95 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm cursor-pointer"
+                  className="text-[12px] font-semibold px-3.5 py-1.5 min-h-[34px] rounded-[8px] bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] disabled:hover:bg-[var(--accent)] active:scale-95 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm cursor-pointer"
                 >
                   Use this boundary
                 </button>

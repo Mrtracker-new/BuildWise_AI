@@ -226,6 +226,49 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   const floorPlan = activeFloorPlan !== undefined ? activeFloorPlan : localFloorPlan;
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  /**
+   * Chunked arrival: the plan commits, the SVG body follows in its own slice.
+   * -------------------------------------------------------------------------
+   * A finished generation used to arrive in ONE task: the solver's response
+   * state, the whole Cost & Plan subtree and the blueprint viewer's first render
+   * (sanitize + ghost/inject pass over a multi-hundred-node SVG, then 
+   * `dangerouslySetInnerHTML`) all landed together — three long tasks from one
+   * click. Splitting them is not a spinner: the plan's own content (status,
+   * notices, sheet metrics) commits immediately, and only the SVG body waits for
+   * an idle slice.
+   *
+   * The placeholder is 360px — the viewer's own `h-[360px] min-h-[320px]` box —
+   * so the body it stands in for cannot move when it swaps in. A shorter
+   * placeholder would trade the long task for a layout shift, which is the one
+   * thing this program measures harder than task length.
+   */
+  // The gate is a KEY, not a boolean: a plan is "ready" only when the slice that
+  // mounted its body has run FOR THAT generation, so a fresh plan is not ready by
+  // default and no effect has to reset the flag (which would be a state write in
+  // an effect, and a second render on arrival).
+  const [readyPlanKey, setReadyPlanKey] = useState<string | null>(null);
+  const planKey = floorPlan ? floorPlan.generation_id || String(floorPlan.generated_at) : null;
+  const viewerReady = planKey !== null && readyPlanKey === planKey;
+  useEffect(() => {
+    if (!planKey) return;
+    let cancelled = false;
+    const mount = () => {
+      if (cancelled) return;
+      // A transition, so a real interaction (a floor switch, a tab click) that
+      // arrives in this slice still wins over mounting the SVG.
+      React.startTransition(() => setReadyPlanKey(planKey));
+    };
+    const hasIdle = typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function';
+    const handle = hasIdle
+      ? window.requestIdleCallback(mount, { timeout: 400 })
+      : window.setTimeout(mount, 40);
+    return () => {
+      cancelled = true;
+      if (hasIdle) window.cancelIdleCallback(handle);
+      else clearTimeout(handle);
+    };
+  }, [planKey]);
+
   // Synchronize when parent activeFloorPlan changes
   useEffect(() => {
     if (activeFloorPlan !== undefined) {
@@ -682,7 +725,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                 key={room.id}
                 type="button"
                 onClick={() => toggleRoom(room.id)}
-                className={`p-2 rounded-[8px] text-left text-[12px] flex items-center justify-between gap-1.5 transition-all cursor-pointer ${
+                className={`p-2 rounded-[8px] text-left text-[12px] flex items-center justify-between gap-1.5 transition-ui cursor-pointer ${
                   isChecked
                     ? isVerticalCore
                       ? 'bg-purple-500/15 text-purple-700 dark:text-purple-300 font-semibold ring-1 ring-purple-500/30'
@@ -994,7 +1037,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         type="button"
         onClick={handleGenerate}
         disabled={isGenerating}
-        className="w-full h-9 px-4 rounded-full bg-[var(--accent)] hover:brightness-[0.98] active:brightness-95 disabled:bg-[var(--fill)] disabled:text-[var(--text-3)] text-white text-[13px] font-semibold flex items-center justify-center gap-2 transition-all select-none shadow-sm cursor-pointer disabled:cursor-not-allowed"
+        className="w-full h-9 px-4 rounded-full bg-[var(--accent)] hover:bg-[var(--accent-hover)] active:bg-[var(--accent-press)] disabled:bg-[var(--fill)] disabled:text-[var(--text-3)] text-white text-[13px] font-semibold flex items-center justify-center gap-2 transition-ui select-none shadow-sm cursor-pointer disabled:cursor-not-allowed"
       >
         {isGenerating ? (
           <>
@@ -1452,20 +1495,30 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
             );
           })()}
 
-          {/* Blueprint SVG Viewer with Stale Plan Guard & Site Plan Tab */}
-          <BlueprintViewer
-            svgString={floorPlan.svg_blueprint}
-            svgPaperString={floorPlan.svg_blueprint_paper}
-            placements={floorPlan.placements}
-            plotWidthM={plotWidth}
-            plotDepthM={plotDepth}
-            multiStorey={floorPlan.multi_storey}
-            sitePlan={floorPlan.site_plan || floorPlan.multi_storey?.site_plan}
-            generationTimestamp={floorPlan.generated_at}
-            generationId={floorPlan.generation_id}
-            storeys={activeFloors}
-            isStale={isPlanStale}
-          />
+          {/* Blueprint SVG Viewer with Stale Plan Guard & Site Plan Tab.
+              Mounted one idle slice after the plan lands (see `viewerReady`),
+              behind a same-height placeholder so the arrival is chunked without
+              moving anything. */}
+          {viewerReady ? (
+            <BlueprintViewer
+              svgString={floorPlan.svg_blueprint}
+              svgPaperString={floorPlan.svg_blueprint_paper}
+              placements={floorPlan.placements}
+              plotWidthM={plotWidth}
+              plotDepthM={plotDepth}
+              multiStorey={floorPlan.multi_storey}
+              sitePlan={floorPlan.site_plan || floorPlan.multi_storey?.site_plan}
+              generationTimestamp={floorPlan.generated_at}
+              generationId={floorPlan.generation_id}
+              storeys={activeFloors}
+              isStale={isPlanStale}
+            />
+          ) : (
+            <Skeleton
+              className="h-[360px] w-full rounded-[16px]"
+              label="Rendering architectural blueprint"
+            />
+          )}
         </div>
       )}
     </div>

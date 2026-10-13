@@ -140,7 +140,7 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
             type="button"
             onClick={() => onScan()}
             disabled={!hasCoordinates}
-            className="inline-flex items-center gap-1.5 px-3.5 h-8 bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-40 text-white rounded-full text-[12px] font-medium transition-all cursor-pointer disabled:cursor-not-allowed shadow-sm"
+            className="inline-flex items-center gap-1.5 px-3.5 h-8 bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:opacity-40 text-white rounded-full text-[12px] font-medium transition-ui cursor-pointer disabled:cursor-not-allowed shadow-sm"
           >
             <Icon name="satellite" size={13} />
             <span>Scan satellite canopy</span>
@@ -203,7 +203,7 @@ export const SiteVisionCard: React.FC<SiteVisionCardProps> = ({
                     strokeDashoffset={strokeDashoffset}
                     strokeLinecap="round"
                     fill="transparent"
-                    className="transition-all duration-700 ease-out"
+                    className="transition-[stroke-dashoffset] duration-700 ease-out"
                   />
                 </svg>
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-center">

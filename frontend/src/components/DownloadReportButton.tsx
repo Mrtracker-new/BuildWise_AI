@@ -41,10 +41,10 @@ export const DownloadReportButton: React.FC<DownloadReportButtonProps> = ({
           onClick={handleDownload}
           disabled={isDownloading}
           title="Download complete PDF report"
-          className={`h-8 px-3 rounded-[10px] text-[12px] font-medium flex items-center gap-1.5 transition-all select-none shadow-sm ${
+          className={`h-8 px-3 rounded-[10px] text-[12px] font-medium flex items-center gap-1.5 transition-ui select-none shadow-sm ${
             isDownloading
               ? 'bg-[var(--fill)] text-[var(--text-3)] cursor-not-allowed'
-              : 'bg-[var(--accent)] text-white hover:brightness-[0.98] active:brightness-95 cursor-pointer'
+              : 'bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] active:bg-[var(--accent-press)] cursor-pointer'
           }`}
         >
           {isDownloading ? (
@@ -74,10 +74,10 @@ export const DownloadReportButton: React.FC<DownloadReportButtonProps> = ({
         type="button"
         onClick={handleDownload}
         disabled={isDownloading}
-        className={`w-full h-10 px-4 rounded-[12px] font-semibold text-[13px] flex items-center justify-center gap-2 transition-all duration-200 select-none shadow-sm ${
+        className={`w-full h-10 px-4 rounded-[12px] font-semibold text-[13px] flex items-center justify-center gap-2 transition-[transform,opacity,background-color,border-color,color,box-shadow] duration-200 select-none shadow-sm ${
           isDownloading
             ? 'bg-[var(--fill)] text-[var(--text-3)] cursor-not-allowed'
-            : 'bg-[var(--accent)] text-white hover:brightness-[0.98] active:brightness-95 cursor-pointer'
+            : 'bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] active:bg-[var(--accent-press)] cursor-pointer'
         }`}
       >
         {isDownloading ? (

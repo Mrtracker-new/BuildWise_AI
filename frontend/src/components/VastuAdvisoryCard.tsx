@@ -107,7 +107,7 @@ export const VastuAdvisoryCard: React.FC<VastuAdvisoryCardProps> = ({ advisory }
                 key={quad}
                 type="button"
                 onClick={() => zone && setSelectedZone(zone)}
-                className={`p-2 rounded-[8px] text-left transition-all min-h-[60px] flex flex-col justify-between select-none cursor-pointer ${
+                className={`p-2 rounded-[8px] text-left transition-ui min-h-[60px] flex flex-col justify-between select-none cursor-pointer ${
                   isSelected
                     ? 'bg-[var(--accent)] text-white shadow-sm'
                     : 'bg-[var(--card-bg-subtle)] hover:bg-[var(--fill)] border border-[var(--hairline)] text-[var(--text-1)]'

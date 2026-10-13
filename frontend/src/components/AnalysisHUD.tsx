@@ -89,7 +89,9 @@ export const AnalysisHUD: React.FC<AnalysisHUDProps> = ({
         <div className="w-full h-1 bg-[var(--fill)] rounded-full overflow-hidden">
           <div
             className={`h-full bg-[var(--accent)] rounded-full ${
-              prefersReducedMotion ? '' : 'transition-all duration-300 ease-out'
+              prefersReducedMotion
+                ? ''
+                : 'transition-[transform,opacity,background-color,border-color,color,box-shadow] duration-300 ease-out'
             }`}
             style={{ width: `${progressPct}%` }}
           />
