@@ -10,7 +10,7 @@
 
 One pin on a map yields a full civil-engineering feasibility report — MCDA land suitability, IS 1893 seismic & flood stress, CPWD cost benchmarks, Vastu orientation, and a generative architectural blueprint — in seconds.
 
-<img src="docs/assets/hero.png" alt="BuildWise AI Platform Hero" width="900" style="border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);" />
+<img src="assets/brand/BuildWise_AI_intro_Gif.gif" alt="BuildWise AI Intro" width="500" style="border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.15); max-width: 100%;" />
 
 </div>
 

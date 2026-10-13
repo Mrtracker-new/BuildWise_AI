@@ -14,6 +14,7 @@ This directory contains the canonical master brand identity assets for the **Bui
 | **`BuildWise_logo_with_white_Background.png`** | 1536 × 1024 | PNG (RGB) | Master brandmark logo on clean white background. |
 | **`BuildWise_logo_square.png`** | 512 × 512 | PNG (RGBA) | Centered 1:1 square crop with padding. Used in `AppHeader.tsx`, app navigation, and PWA icons. |
 | **`BuildWise_logo_square_white.png`** | 512 × 512 | PNG (RGBA) | Inverted white monochrome square mark, optimized for dark-mode UI elements and dark browser tabs. |
+| **`BuildWise_AI_intro_Gif.gif`** | 400 × 225 | GIF (Animated) | Animated brandmark intro animation used as the hero asset in root `README.md`. |
 
 ---
 
