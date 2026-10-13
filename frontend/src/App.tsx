@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
 import type {
   AnalysisParams,
   AnalysisRequest,
@@ -10,29 +10,77 @@ import type {
 import { submitSiteVision } from './services/api';
 import { generateFeasibilityReport, fetchBackendStatus } from './services/aiService';
 import { AppHeader } from './components/AppHeader';
-import { MapCanvas } from './components/MapCanvas';
 import { CoordinatesInput } from './components/CoordinatesInput';
 import { AnalysisForm } from './components/AnalysisForm';
-import { ReportHeroHeader } from './components/report/ReportHeroHeader';
-import { ProvenanceFactorCard } from './components/report/ProvenanceFactorCard';
-import { ReportSheet, type ResultsTab } from './components/ReportSheet';
+import type { ResultsTab } from './components/ReportSheet';
 import { TelemetryStrip, ErrorBanner } from './components/StatusBanner';
 import { EmptyState } from './components/EmptyState';
-import { SiteMoveDialog } from './components/SiteMoveDialog';
-import { AnalysisHUD } from './components/AnalysisHUD';
 import { DesignProvider, ToastViewport, ShortcutsSheet, useShortcuts, Drawer, useTier, useViewportClass, useCompactAuthoring, useDesign, mapControlsRight } from './design';
 import { UnitsProvider } from './components/report/units';
 import { AssistedBar } from './components/AssistedBar';
+import { MapPlaceholder } from './components/MapPlaceholder';
+import { useMapLoadIntent } from './services/mapLoadIntent';
 import { isAssistedNoticeSessionDismissed, dismissAssistedNoticeForSession } from './services/sessionPrefs';
-import { CaptureSheet, type CaptureStep } from './components/map/CaptureSheet';
+import type { CaptureStep } from './components/map/CaptureSheet';
 import { BoundaryChip } from './components/map/BoundaryChip';
 import { SitePreviewHUD } from './components/map/SitePreviewHUD';
 import { useSitePreview } from './hooks/useSitePreview';
 import type { SharedBoundaryState } from './services/siteBoundary';
 import { boundaryToSummaryPayload } from './services/siteIntelligence';
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import { MethodologyModal } from './components/MethodologyModal';
 import { Icon } from './components/Icon';
+
+/**
+ * Code-split the route chunk so the shell's first commit needs as little of it
+ * as possible. Everything below is deferred because it cannot be on screen
+ * before the reader asks for it:
+ *
+ *  - `MapCanvas` is the only runtime importer of MapLibre (~217 KB gz of JS plus
+ *    its ~11 KB gz stylesheet). Static-importing it put the whole GL engine on the
+ *    shell's critical path. It is lazy — AND, below `lg` or on a touch-first
+ *    device below `xl`, it is not even requested until the reader shows intent
+ *    inside the map region (see services/mapLoadIntent.ts and
+ *    MapPlaceholder.tsx). That 3 524 ms of simulated-mobile bootup was the whole
+ *    of the mobile critical path; desktop keeps the eager fetch in parallel with
+ *    the shell's paint.
+ *  - `ReportSheet` (and the report card graph behind it) only exists after an
+ *    analysis completes, so a cold /app never has to parse it. The import is
+ *    warmed when generation starts (see `runAnalysis`) to hide the fetch.
+ *  - `CaptureSheet` — the trace wizard and its tools (draw adapter, presets,
+ *    HUD) were ~1/3 of the route chunk. Mounted from the first open; the engine
+ *    it draws on is deferred the same way, so both arrive on the reader's own
+ *    gestures.
+ *  - `ResultsSummary` — the sidebar's scored summary (hero, factors, CTA).
+ *    Warmed when an analysis starts and mounted behind a same-height
+ *    placeholder, so it is normally already resolved when results land.
+ *  - `MethodologyModal`, `SiteMoveDialog`, `AnalysisHUD` — dialogs and the
+ *    progress HUD, each mounted from the first moment it is asked for.
+ *
+ * Together these were ~half of the 250 KB route chunk whose bootup Lighthouse
+ * attributed ~1.0–1.3 s of simulated script to — the residue under the mobile
+ * LCP render delay.
+ */
+const MapCanvas = React.lazy(() =>
+  import('./components/MapCanvas').then((m) => ({ default: m.MapCanvas })),
+);
+const ReportSheet = React.lazy(() =>
+  import('./components/ReportSheet').then((m) => ({ default: m.ReportSheet })),
+);
+const CaptureSheet = React.lazy(() =>
+  import('./components/map/CaptureSheet').then((m) => ({ default: m.CaptureSheet })),
+);
+const ResultsSummary = React.lazy(() =>
+  import('./components/report/ResultsSummary').then((m) => ({ default: m.ResultsSummary })),
+);
+const MethodologyModal = React.lazy(() =>
+  import('./components/MethodologyModal').then((m) => ({ default: m.MethodologyModal })),
+);
+const SiteMoveDialog = React.lazy(() =>
+  import('./components/SiteMoveDialog').then((m) => ({ default: m.SiteMoveDialog })),
+);
+const AnalysisHUD = React.lazy(() =>
+  import('./components/AnalysisHUD').then((m) => ({ default: m.AnalysisHUD })),
+);
 
 const PIPELINE_STAGES = [
   'Geocoding site address...',
@@ -54,6 +102,36 @@ export interface SiteLocation {
 const DEFAULT_SITE: SiteLocation = { latitude: 12.9716, longitude: 77.5946 };
 
 /**
+ * Placeholder shown while the MapLibre chunk downloads and executes. It is a
+ * fixed, full-bleed panel in the same page colour as the map's own background, so
+ * the swap cannot shift any layout (the map section is `fixed inset-0` either
+ * way) and the HUD, capture wizard and report sheet keep their real geometry.
+ */
+const MapCanvasFallback: React.FC = () => (
+  <div
+    className="absolute inset-0 w-full h-full bg-[var(--bg-page)]"
+    aria-hidden="true"
+  />
+);
+
+/**
+ * Same-height placeholder for the deferred results summary.
+ *
+ * The heights mirror the three blocks it stands in for — the compact hero card,
+ * the top-3 factor card and the CTA — so the sidebar's own box does not change
+ * size between the commit that shows this and the commit that replaces it (CLS
+ * is measured across this mount). In practice the chunk is warmed when the
+ * analysis starts, so the placeholder is only ever seen on a cold, slow fetch.
+ */
+const ResultsSummaryFallback: React.FC = () => (
+  <div data-results-placeholder="summary" aria-busy="true" className="w-full min-w-0 space-y-3.5">
+    <div className="report-skeleton h-[132px] rounded-[16px]" />
+    <div className="report-skeleton h-[300px] rounded-[14px]" />
+    <div className="report-skeleton h-10 rounded-[12px]" />
+  </div>
+);
+
+/**
  * Parse a shared-site deep link written by handleCopyLink (`/app?lat=&lon=`).
  * Returns coordinates only when BOTH params are present, numeric, and in range —
  * a malformed or partial link falls back to the default site, never a broken map.
@@ -69,6 +147,26 @@ function parseSiteDeepLink(search: string): SiteLocation | null {
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
   if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
   return { latitude: lat, longitude: lon };
+}
+
+/**
+ * Mount-once latch for a deferred surface: true from the first time the surface
+ * is asked for, and true forever after (one commit later — the surface's chunk
+ * starts loading from that commit).
+ *
+ * A latch rather than a plain conditional mount because these components keep
+ * their own close paths in effects — the capture wizard releases its map
+ * sources when it closes, the dialogs take and return focus, the modal owns the
+ * body scroll lock. Unmounting on close would skip all of that; latching the
+ * mount leaves each component's open/closed contract exactly as it was, and only
+ * the *first* arrival of its chunk is new.
+ */
+function useEverMounted(wanted: boolean): boolean {
+  const [ever, setEver] = React.useState<boolean>(false);
+  React.useEffect(() => {
+    if (wanted && !ever) setEver(true);
+  }, [wanted, ever]);
+  return ever;
 }
 
 const AppShell: React.FC = () => {
@@ -139,6 +237,14 @@ const AppShell: React.FC = () => {
   // Responsive foundation: live capability tier + viewport class.
   const tier = useTier();
   const viewportClass = useViewportClass();
+  /**
+   * The map engine is fetched eagerly on a desktop and on first intent
+   * everywhere else. `mapSectionRef` is the region an intent must land in; the
+   * decision itself is taken once, at mount, from the boot viewport.
+   */
+  const mapSectionRef = useRef<HTMLElement | null>(null);
+  const mapIntent = useMapLoadIntent(mapSectionRef);
+  const mapEngineReady = mapIntent.deferred ? mapIntent.engaged : true;
   // ASSISTED mode: narrow viewport (<768px) OR coarse primary pointer.
   // All capabilities stay available; precision authoring is assisted, not exact.
   const compactAuthoring = useCompactAuthoring();
@@ -653,6 +759,14 @@ const AppShell: React.FC = () => {
     setFallbackToast(null);
     setIsWarningDismissed(false);
 
+    // The report sheet opens as soon as this analysis resolves. Its chunk is
+    // large and, until now, unused: warm it here so the fetch overlaps the
+    // request instead of landing on the report's first render.
+    void import('./components/ReportSheet');
+    // Same for the sidebar's scored summary: it appears the instant this
+    // analysis resolves, so fetch it while the request is in flight.
+    void import('./components/report/ResultsSummary');
+
     // Open results on desktop drawer and mobile
     setIsDrawerOpen(true);
     setIsMobileResultsOpen(true);
@@ -849,6 +963,17 @@ const AppShell: React.FC = () => {
       }
     : null;
 
+  /**
+   * Deferred surfaces, mounted from the first time each is asked for: the
+   * capture wizard, the methodology dialog and the site-move dialog all keep
+   * close-path work in effects, so they stay mounted once opened rather than
+   * unmounting on close. (The results summary and the progress HUD are safe to
+   * mount per-use — neither holds anything on the way out.)
+   */
+  const captureMounted = useEverMounted(captureOpen);
+  const methodologyMounted = useEverMounted(isMethodologyOpen);
+  const siteMoveMounted = useEverMounted(pendingSiteMove !== null);
+
   // Reusable Results Content Renderer (Summary Preview Only)
   const renderResultsContent = () => {
     if (isLoading) {
@@ -892,49 +1017,18 @@ const AppShell: React.FC = () => {
             </button>
           </div>
 
-          {/* Score Hero Card (Clicking hero triggers open report) */}
-          <ReportHeroHeader
-            data={analysisData}
-            variant="compact"
-            onClickHero={handleOpenReport}
-          />
-
-          {/* Top 3 Factor Breakdown Rows — same factor card as the report, so
-              status badges and provenance are present in the sidebar too. */}
-          <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 sm:p-[18px] space-y-3.5 w-full min-w-0">
-            <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-2 min-w-0">
-              <div className="flex items-center gap-2 min-w-0">
-                <Icon name="layers" size={15} className="text-[var(--text-2)] shrink-0" />
-                <h3 className="text-[14px] font-semibold text-[var(--text-1)] tracking-tight">
-                  Multi-Criteria Factor Breakdown
-                </h3>
-              </div>
-              <span className="text-[12px] font-normal text-[var(--text-3)] shrink-0">
-                MCDA model (Top 3)
-              </span>
-            </div>
-            <div className="divide-y divide-[var(--hairline)]">
-              {analysisData.factors.slice(0, 3).map((factor) => (
-                <ProvenanceFactorCard
-                  key={factor.factor_id}
-                  factor={factor}
-                  dataSources={analysisData.data_sources}
-                  variant="compact"
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* ONE Primary CTA: "Open Full Report" */}
-          <button
-            ref={openReportCtaRef}
-            type="button"
-            onClick={handleOpenReport}
-            className="w-full h-10 rounded-[12px] bg-[var(--accent)] hover:brightness-[0.98] active:brightness-95 text-white text-[13px] font-semibold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer select-none"
-          >
-            <span>Open Full Report</span>
-            <Icon name="arrow-up-right" size={16} />
-          </button>
+          {/* The scored summary (hero + factors + CTA) is its own chunk: it can
+              never be on screen before an analysis exists, so a cold /app must
+              not parse it. Its import is warmed when the analysis starts, so in
+              practice it is already resolved here and the placeholder never
+              shows — it exists for the cold, slow fetch. */}
+          <Suspense fallback={<ResultsSummaryFallback />}>
+            <ResultsSummary
+              data={analysisData}
+              onOpenReport={handleOpenReport}
+              ctaRef={openReportCtaRef}
+            />
+          </Suspense>
         </div>
       );
     }
@@ -948,7 +1042,10 @@ const AppShell: React.FC = () => {
 
   return (
     <div
-      className="h-screen w-screen relative overflow-hidden select-text text-[var(--text-1)] antialiased font-sans"
+      /* `app-shell` is the print reset hook: this box is `h-screen … overflow-hidden`,
+         which in a print layout is one page tall and clips the printable dossier
+         (see the @media print block in index.css). */
+      className="app-shell h-screen w-screen relative overflow-hidden select-text text-[var(--text-1)] antialiased font-sans"
       style={{ '--map-controls-right': mapControlsRight(isDrawerOpen, viewportClass) } as React.CSSProperties}
     >
       {/* ========================================================================= */}
@@ -956,9 +1053,11 @@ const AppShell: React.FC = () => {
       {/* ========================================================================= */}
       <section
         id="center-map-section"
+        ref={mapSectionRef}
         className="fixed inset-0 w-full h-full overflow-hidden z-0 pointer-events-auto"
       >
-        <MapCanvas
+        <Suspense fallback={<MapCanvasFallback />}>
+        {mapEngineReady ? <MapCanvas
           latitude={siteLocation?.latitude ?? null}
           longitude={siteLocation?.longitude ?? null}
           orientationDegrees={analysisData?.orientation.optimal_axis_degrees}
@@ -980,29 +1079,39 @@ const AppShell: React.FC = () => {
             mapInstanceRef.current = map;
           }}
           className="w-full h-full"
-        />
+        /> : <MapPlaceholder />}
+        </Suspense>
 
-        {/* Map-first capture wizard + boundary chip (hosted inside the map section) */}
-        <CaptureSheet
-          open={captureOpen}
-          step={captureStep}
-          onStepChange={setCaptureStep}
-          boundary={boundary}
-          /* The wizard anchors its boundary at the pin, so it is only ever
-             offered a LOCATED pin: after the coordinates are cleared, request
-             still holds the old numbers, and anchoring a plot there would
-             capture a site that neither the map nor the coordinate card shows.
-             No pin means the wizard asks for one instead. */
-          pin={
-            siteLocation
-              ? { lat: siteLocation.latitude, lon: siteLocation.longitude }
-              : null
-          }
-          onPinChange={handleLocationSelect}
-          onCommit={handleBoundaryCommit}
-          onCancel={() => setCaptureOpen(false)}
-          getMap={() => mapInstanceRef.current}
-        />
+        {/* Map-first capture wizard + boundary chip (hosted inside the map
+            section). The wizard is deferred like the engine it draws on: its
+            trace tools, draw adapter and presets were ~1/3 of the route chunk
+            and cannot be on screen before the reader asks for it. Once asked
+            for it stays mounted (the wizard does close-path work in effects —
+            releasing the capture sources — which unmounting would skip). */}
+        {captureMounted && (
+          <Suspense fallback={null}>
+            <CaptureSheet
+              open={captureOpen}
+              step={captureStep}
+              onStepChange={setCaptureStep}
+              boundary={boundary}
+              /* The wizard anchors its boundary at the pin, so it is only ever
+                 offered a LOCATED pin: after the coordinates are cleared, request
+                 still holds the old numbers, and anchoring a plot there would
+                 capture a site that neither the map nor the coordinate card shows.
+                 No pin means the wizard asks for one instead. */
+              pin={
+                siteLocation
+                  ? { lat: siteLocation.latitude, lon: siteLocation.longitude }
+                  : null
+              }
+              onPinChange={handleLocationSelect}
+              onCommit={handleBoundaryCommit}
+              onCancel={() => setCaptureOpen(false)}
+              getMap={() => mapInstanceRef.current}
+            />
+          </Suspense>
+        )}
         {/* Chip hidden while the capture sheet is open: the sheet carries the
             same live metrics (area / perimeter / vertices / frontage) and an
             overlapping chip would collide with the sheet on compact screens
@@ -1207,7 +1316,7 @@ const AppShell: React.FC = () => {
           role="region"
           aria-label="Analysis Results"
           onTransitionEnd={triggerMapResize}
-          className={`fixed right-3 top-[76px] w-[360px] max-w-[calc(100vw-24px)] h-fit max-h-[calc(100vh-88px)] rounded-[20px] vibrancy-panel z-[1000] overflow-y-auto bw-scroll-pane overflow-x-clip scrollbar-apple p-4 space-y-4 border border-[var(--panel-border-color)] shadow-xl @container transition-all duration-300 ease-in-out ${
+          className={`fixed right-3 top-[76px] w-[360px] max-w-[calc(100vw-24px)] h-fit max-h-[calc(100vh-88px)] rounded-[20px] vibrancy-panel z-[1000] overflow-y-auto bw-scroll-pane overflow-x-clip scrollbar-apple p-4 space-y-4 border border-[var(--panel-border-color)] shadow-xl @container transition-[transform,opacity,background-color,border-color,color,box-shadow] duration-300 ease-in-out ${
             isDrawerOpen
               ? 'translate-x-0 opacity-100 pointer-events-auto'
               : 'translate-x-full opacity-0 pointer-events-none'
@@ -1258,27 +1367,33 @@ const AppShell: React.FC = () => {
       {/* Floating Centered iOS Analysis HUD (Over Map Area) */}
       {isLoading && (
         <div
-          className={`fixed inset-0 z-[1050] pointer-events-none flex items-center justify-center transition-all duration-300 ${
+          className={`fixed inset-0 z-[1050] pointer-events-none flex items-center justify-center transition-[transform,opacity,background-color,border-color,color,box-shadow] duration-300 ${
             isDrawerOpen ? 'lg:pl-[364px] lg:pr-[384px]' : 'lg:pl-[364px] lg:pr-0'
           }`}
         >
-          <AnalysisHUD
-            stageText={hudFallbackMessage || PIPELINE_STAGES[currentStageIndex]}
-            stageIndex={currentStageIndex}
-            totalStages={PIPELINE_STAGES.length}
-            fallbackMessage={hudFallbackMessage}
-            onCancel={handleCancelAnalysis}
-          />
+          <Suspense fallback={null}>
+            <AnalysisHUD
+              stageText={hudFallbackMessage || PIPELINE_STAGES[currentStageIndex]}
+              stageIndex={currentStageIndex}
+              totalStages={PIPELINE_STAGES.length}
+              fallbackMessage={hudFallbackMessage}
+              onCancel={handleCancelAnalysis}
+            />
+          </Suspense>
         </div>
       )}
 
-      <SiteMoveDialog
-        open={pendingSiteMove !== null}
-        target={pendingSiteMove}
-        onMove={handleSiteMoveApply}
-        onRecapture={handleSiteMoveRecapture}
-        onCancel={handleSiteMoveCancel}
-      />
+      {siteMoveMounted && (
+        <Suspense fallback={null}>
+          <SiteMoveDialog
+            open={pendingSiteMove !== null}
+            target={pendingSiteMove}
+            onMove={handleSiteMoveApply}
+            onRecapture={handleSiteMoveRecapture}
+            onCancel={handleSiteMoveCancel}
+          />
+        </Suspense>
+      )}
 
       {/* Site moved: the captured plot travelled with the pin */}
       {siteMovedNotice && (
@@ -1305,14 +1420,20 @@ const AppShell: React.FC = () => {
         </div>
       )}
 
-      {/* Engineering Methodology Reference Dialog (z-[2000]) */}
-      <MethodologyModal
-        isOpen={isMethodologyOpen}
-        onClose={() => setIsMethodologyOpen(false)}
-      />
+      {/* Engineering Methodology Reference Dialog (z-[2000]) — deferred until
+          it is first opened; it is a document of its own. */}
+      {methodologyMounted && (
+        <Suspense fallback={null}>
+          <MethodologyModal
+            isOpen={isMethodologyOpen}
+            onClose={() => setIsMethodologyOpen(false)}
+          />
+        </Suspense>
+      )}
 
       {/* Full-Screen Report Sheet (z-[2000]) */}
       {analysisData && (
+        <Suspense fallback={null}>
         <ReportSheet
           isOpen={isReportOpen}
           onClose={handleCloseReport}
@@ -1324,7 +1445,16 @@ const AppShell: React.FC = () => {
           onRunSiteVision={handleRunSiteVision}
           hasLocation={siteLocation !== null}
           floorPlanData={floorPlanData}
-          onFloorPlanGenerated={(plan) => setFloorPlanData(plan)}
+          /*
+           * THE ARRIVAL IS A TRANSITION. A generated plan lands in a sheet that
+           * is already open and mounted, so this one state write re-renders the
+           * whole dossier; rendered synchronously it was the 80.2 ms
+           * `MessagePort` task that put this surface over the 25 ms script
+           * budget at 4× CPU. As a transition React renders it concurrently and
+           * yields between units of work, so no single task carries the arrival
+           * (the certificate takes its own idle slice — ArrivalSlice).
+           */
+          onFloorPlanGenerated={(plan) => React.startTransition(() => setFloorPlanData(plan))}
           overrideLandRate={overrideLandRate}
           overridePlotArea={overridePlotArea}
           onOverrideChange={(rate, area) => {
@@ -1335,6 +1465,7 @@ const AppShell: React.FC = () => {
           activeTab={activeResultsTab}
           onTabChange={setActiveResultsTab}
         />
+        </Suspense>
       )}
 
       {/* Design system: keyboard shortcuts sheet + toast viewport */}

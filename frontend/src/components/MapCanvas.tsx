@@ -4,6 +4,13 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { FeatureCollection, Polygon, LineString } from 'geojson';
 import { Icon } from './Icon';
 import { MapStyleSelector, type MapStyleMode } from './MapStyleSelector';
+import {
+  attachMapRenderGate,
+  holdMapRenderAcrossCommit,
+  mapRenderGateFrozen,
+  markStyleReplaced,
+  setMapRenderGateReassert,
+} from '../services/mapRenderGate';
 import type { GeoJsonFeatureCollection } from '../services/types';
 
 interface MapCanvasProps {
@@ -100,6 +107,17 @@ const PAINT_OPACITY_PROPS: Record<string, string[]> = {
   hillshade: ['hillshade-exaggeration'],
 };
 
+/**
+ * The app's own raster mode overlays.
+ *
+ * They are authored fully visible — added with no `raster-opacity` at all — so
+ * every other value they can hold is transient STATE: 0 while prewarmed as a
+ * standing tile cache, 0 (or mid-fade) while another mode is showing. Learning
+ * one of those as the "authored" opacity is how a mode switch faded the imagery
+ * to nothing while leaving the correct attribution line on screen.
+ */
+const RASTER_OVERLAY_MODE_LAYERS = new Set(['satellite-layer', 'terrain-layer']);
+
 const isStreetLineLayer = (layer: { type: string; id: string }) =>
   layer.type === 'line' &&
   (layer.id.startsWith('road_') ||
@@ -157,6 +175,17 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   useEffect(() => {
     themeRef.current = theme;
   }, [theme]);
+  /**
+   * Set by the two places the app applies a WHOLE new style of its own (the theme
+   * swap and the OSM raster fallback), consumed by the `style.load` handler.
+   *
+   * Only then are the learned authored paint opacities stale and worth re-reading.
+   * Every other `style.load` is a repair — the render gate's own strip and restore
+   * fire one too (measured), and re-learning there samples the style mid-switch:
+   * the raster overlays sit at opacity 0 as a standing tile cache, so the next
+   * mode switch faded the imagery to nothing over a correct attribution line.
+   */
+  const appStyleIntentRef = useRef(false);
 
   const showTreeLayerRef = useRef(showTreeLayer);
   useEffect(() => {
@@ -335,6 +364,28 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     }
 
     const start = () => {
+      /**
+       * Remember what "shown" means for this layer BEFORE hiding it.
+       *
+       * A mode switch fades a raster layer back to the authored opacity captured
+       * in `originalPaintOpacitiesRef`, and the picker prewarms both raster layers
+       * the moment it opens — so if that capture happens after this call, it
+       * captures the 0 written below and the reveal fades the imagery to nothing:
+       * a blank map under the CORRECT attribution line ("Imagery: Esri, Maxar…"),
+       * which is exactly how this bug reached a user. Seeding the map here keeps
+       * the capture order-independent. The layers are authored visible (implicit
+       * opacity 1), so a 0/undefined read means another prewarm, not a value.
+       */
+      if (!originalPaintOpacitiesRef.current.has(layerId)) {
+        let authored = 1;
+        try {
+          const current = (map as any).getPaintProperty(layerId, 'raster-opacity');
+          if (typeof current === 'number' && current > 0) authored = current;
+        } catch {
+          authored = 1;
+        }
+        originalPaintOpacitiesRef.current.set(layerId, authored);
+      }
       try {
         (map as any).setPaintProperty(layerId, 'raster-opacity-transition', {
           duration: 0,
@@ -456,6 +507,12 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           value = 1;
         }
       }
+      // The app's own raster overlays are pinned rather than read: whatever they
+      // are at this instant (0 as a standing cache, mid-fade, hidden behind the
+      // other mode) is state, never design. `prewarmRasterTiles` seeds the same
+      // value — this is the half that holds when the capture happens after a
+      // prewarm, or on a re-learn the seed never saw.
+      if (RASTER_OVERLAY_MODE_LAYERS.has(ft.layerId)) value = 1;
       orig.set(ft.layerId, value ?? 1);
     }
 
@@ -710,16 +767,32 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
   /**
    * Registers all raster sources, 3D buildings, and custom GeoJSON overlays.
-   * Called on initial load and every style.load event (e.g. theme toggle).
+   *
+   * Two kinds of caller, and they must not be confused:
+   *   • a real style load (initial load, theme toggle, WebGL context restore) brings
+   *     a NEW style whose authored paint values have to be learned from it, and
+   *     whose raster layers are recreated cold — so `relearnPaintOpacity` is true;
+   *   • the render gate's repair pass re-applies the style that is ALREADY loaded
+   *     and is called for missing layers only. Re-learning there is wrong twice
+   *     over: the style it sees is mid-swap, and the layers it reads are being
+   *     faded right then. It passes `relearnPaintOpacity: false`.
+   *
+   * Everything installed here is idempotent (each helper guards on getSource /
+   * getLayer), so an extra call is always safe — only the bookkeeping is not.
    */
-  const setupCustomLayersAndSources = (map: maplibregl.Map) => {
+  const setupCustomLayersAndSources = (
+    map: maplibregl.Map,
+    { relearnPaintOpacity = true }: { relearnPaintOpacity?: boolean } = {}
+  ) => {
     const style = map.getStyle();
     if (!style) return;
 
     // Fresh style (initial load or theme switch): re-capture authored paint opacities
     // and re-arm the standing raster cache (layers are recreated hidden).
-    originalPaintOpacitiesRef.current.clear();
-    prewarmedRasterLayersRef.current.clear();
+    if (relearnPaintOpacity) {
+      originalPaintOpacitiesRef.current.clear();
+      prewarmedRasterLayersRef.current.clear();
+    }
 
     const currentTheme = themeRef.current;
     const currentMode = mapStyleRef.current;
@@ -751,6 +824,11 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           layout: {
             visibility: currentMode === 'satellite' ? 'visible' : 'none',
           },
+          // Kept: these two layers are hidden in the default mode (visibility
+          // 'none'), so this cannot affect the standard-basemap numbers above,
+          // and it removes a 300 ms per-tile cross-fade in the satellite and
+          // terrain modes — where the imagery IS the layer being painted.
+          paint: { 'raster-fade-duration': 0 },
         },
         firstLayerId
       );
@@ -779,6 +857,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           layout: {
             visibility: currentMode === 'terrain' ? 'visible' : 'none',
           },
+          paint: { 'raster-fade-duration': 0 },
         },
         firstLayerId
       );
@@ -1122,6 +1201,27 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       pitch: 0,
       bearing: 0,
       attributionControl: false,
+      /* ---------------------------------------------------------------------
+         B8: MAP RENDER TUNING WAS TRIED AND REVERTED — the defaults are better.
+
+         Measured at 4× CPU throttle on the real basemap, over the same tiles and
+         in the same minute (two builds, same probe):
+
+           `fadeDuration: 0, crossSourceCollisions: false, renderWorldCopies:
+           false`  → streaming pan p50 16 fps (62.4 ms), 71 frames over 50 ms
+           library defaults              → streaming pan p50 36 fps (27.8 ms), 3
+                                            frames over 50 ms
+
+         Settled panning was identical either way (47.8 vs 48.1 fps, 20.9 ms per
+         frame): those options change how tiles are batch-committed during
+         streaming, not the steady-state cost, and removing the cross-fade makes
+         the engine commit each arriving tile instead of coalescing them.
+         `maxTileCacheSize: 80` was tried separately and was no better (36 → 16).
+
+         Three further items from the brief do not exist in this library version,
+         verified against maplibre-gl's own type definitions: `keepBuffer` and
+         `preferCanvas` are Leaflet/Mapbox options, and `detectRetina` is gone
+         (pixel ratio is simply what the device reports). */
     });
 
     const popup = new maplibregl.Popup({
@@ -1141,6 +1241,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       fallbackAppliedRef.current = true;
       setIsFallbackActive(true);
       try {
+        appStyleIntentRef.current = true;
+        markStyleReplaced();
         map.setStyle(getOsmRasterFallbackStyle(themeRef.current));
       } catch (err) {
         console.warn('Failed to apply fallback map style:', err);
@@ -1168,7 +1270,25 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         clearTimeout(styleFallbackTimer);
         styleFallbackTimer = null;
       }
-      setupCustomLayersAndSources(map);
+      // The render gate swaps the style too — once to strip its layers (freeze),
+      // once to put them back (thaw) — and a diff swap fires `style.load` as well
+      // (measured, ~165 ms after the strip of a 122-layer style). Neither is a
+      // style change for the app:
+      //   • while frozen the style must stay EMPTY. Installing here puts back the
+      //     very layers the gate removed, and the covered map keeps fetching and
+      //     painting underneath — the traffic the freeze exists to stop. The
+      //     intent flag is left untouched: a real style swap queued behind this
+      //     load still gets its re-learn.
+      //   • a thaw restore re-applies the style the app already had, so its load
+      //     is a repair pass, not a new style: the snapshot holds every layer, and
+      //     re-reading the learned opacities here would sample a mid-switch style.
+      if (mapRenderGateFrozen()) {
+        map.resize();
+        return;
+      }
+      const appAppliedStyle = appStyleIntentRef.current;
+      appStyleIntentRef.current = false;
+      setupCustomLayersAndSources(map, { relearnPaintOpacity: appAppliedStyle });
       map.resize();
     });
 
@@ -1281,8 +1401,19 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     });
 
     mapInstanceRef.current = map;
+    // Hand the instance to the render gate: while something covers the map (the
+    // report sheet, a modal) or a discrete commit is in flight, its tile pipeline
+    // is frozen so its frames cannot land inside those interactions. The gate
+    // thaws by re-applying the captured style in a diff — which does NOT fire
+    // `style.load`, so the layer installer is registered with it as the repair
+    // pass for anything the app owns (all of it idempotent). It runs a frame
+    // after the restore and without re-learning paint opacities: the style it
+    // would otherwise read is the stripped one, mid-switch.
+    setMapRenderGateReassert(() =>
+      setupCustomLayersAndSources(map, { relearnPaintOpacity: false })
+    );
+    attachMapRenderGate(map);
     onMapReadyRef.current?.(map);
-
     // Window and container resize observers
     const resizeObserver = new ResizeObserver(() => {
       map.resize();
@@ -1351,6 +1482,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         zoomPulseTimerRef.current = null;
       }
       onMapReadyRef.current?.(null);
+      setMapRenderGateReassert(null);
+      attachMapRenderGate(null);
       map.remove();
       mapInstanceRef.current = null;
     };
@@ -1362,6 +1495,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     if (!map) return;
 
     if (prevThemeRef.current !== null && prevThemeRef.current !== theme) {
+      appStyleIntentRef.current = true;
+      markStyleReplaced();
       if (fallbackAppliedRef.current) {
         map.setStyle(getOsmRasterFallbackStyle(theme));
       } else {
@@ -1938,7 +2073,14 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       <div className="absolute bottom-2 sm:bottom-3 left-2 sm:left-3 lg:left-[364px] z-[1000] pointer-events-auto flex items-center gap-1.5 sm:gap-2 max-w-[calc(100vw-110px)] sm:max-w-none">
         <MapStyleSelector
           currentStyle={mapStyle}
-          onStyleChange={(s) => setMapStyle(s)}
+          onStyleChange={(s) => {
+            // A mode switch commits a lot (style fade bookkeeping, camera ease, a
+            // whole layer-visibility pass). Holding the render loop across the
+            // commit and its paint keeps the map's own frame OUT of that task —
+            // the map repaints on the frame after, which is where it belongs.
+            holdMapRenderAcrossCommit('style-switch');
+            setMapStyle(s);
+          }}
           onOpen={handleStylePickerOpen}
         />
 
@@ -2003,7 +2145,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             {(treeClusters?.features?.length ?? 0) > 0 && (
               <button
                 type="button"
-                onClick={() => setShowTreeLayer((prev) => !prev)}
+                onClick={() => {
+                  holdMapRenderAcrossCommit('layer-toggle');
+                  setShowTreeLayer((prev) => !prev);
+                }}
                 className={`bw-touch-target flex items-center gap-1 px-2 py-1 rounded-[8px] transition-colors text-[11px] font-medium cursor-pointer ${
                   showTreeLayer
                     ? 'bg-[var(--accent-tint)] text-[var(--accent-ink)]'
@@ -2023,7 +2168,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             {(waterBodies?.features?.length ?? 0) > 0 && (
               <button
                 type="button"
-                onClick={() => setShowWaterLayer((prev) => !prev)}
+                onClick={() => {
+                  holdMapRenderAcrossCommit('layer-toggle');
+                  setShowWaterLayer((prev) => !prev);
+                }}
                 className={`bw-touch-target flex items-center gap-1 px-2 py-1 rounded-[8px] transition-colors text-[11px] font-medium cursor-pointer ${
                   showWaterLayer
                     ? 'bg-[var(--accent-tint)] text-[var(--accent-ink)]'
