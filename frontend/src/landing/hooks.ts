@@ -4,6 +4,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { useInView, useReducedMotion } from 'framer-motion';
+import { intlNumberFormat } from '../services/numberFormat';
 
 /** Fires once when the element scrolls into view (threshold ~0.35). */
 export function useInViewOnce<T extends Element>(): [React.RefObject<T | null>, boolean] {
@@ -57,5 +58,5 @@ export function useCountUp(target: number, start: boolean, duration = 1400, deci
 
 /** Indian-format integer grouping (2,450). */
 export function formatIN(value: number): string {
-  return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(value);
+  return intlNumberFormat('en-IN', { maximumFractionDigits: 0 }).format(value);
 }
