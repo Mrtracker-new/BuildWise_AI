@@ -759,6 +759,85 @@ async function main() {
     // 8. zero browser errors
     check(consoleErrors.length === 0, 'zero console errors', consoleErrors.slice(0, 3).join(' | '));
     check(pageErrors.length === 0, 'zero page errors', pageErrors.slice(0, 3).join(' | '));
+
+    // 9. Mobile intent path (W6). On a phone-sized, touch-first viewport the map
+    //    ENGINE is not fetched until the reader touches the map region — and the
+    //    touch that brings it up is the ordinary pointerdown listener, not a
+    //    test flag (there is none). The reserved box must be identical before and
+    //    after the engine mounts, because clsTrusted is measured across it.
+    console.log('- mobile intent path (412x823, touch)');
+    const mobilePage = await browser.newPage();
+    const mobileConsole = [];
+    const mobilePageErrors = [];
+    const mobileEngineRequests = [];
+    mobilePage.on('console', (m) => {
+      if (m.type() === 'error') mobileConsole.push(m.text().slice(0, 200));
+    });
+    mobilePage.on('pageerror', (e) => mobilePageErrors.push(String((e && e.message) || e)));
+    mobilePage.on('request', (r) => {
+      // Built chunk (production) or the dev server's ESM module for the same
+      // source — the deferral is about the MODULE, not about its file name.
+      if (/MapCanvas-[^/]*\.js$/.test(r.url()) || /\/src\/components\/MapCanvas\.tsx/.test(r.url())) {
+        mobileEngineRequests.push(r.url());
+      }
+    });
+    await mobilePage.setViewport({ width: 412, height: 823, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+    await mobilePage.goto(URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    await mobilePage.waitForSelector('[data-testid="map-placeholder"]', { timeout: 15000 });
+    await sleep(1200);
+    const mobileBefore = await mobilePage.evaluate(() => {
+      const section = document.getElementById('center-map-section');
+      const r = section ? section.getBoundingClientRect() : null;
+      return {
+        placeholder: Boolean(document.querySelector('[data-testid="map-placeholder"]')),
+        reserved: (document.querySelector('[data-testid="map-placeholder"]') || {}).dataset?.mapReserved || null,
+        map: Boolean(window.__maplibreMap),
+        box: r ? [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] : null,
+      };
+    });
+    check(
+      mobileBefore.placeholder && !mobileBefore.map && mobileEngineRequests.length === 0,
+      'mobile: first view is the placeholder, engine not requested',
+      `map=${mobileBefore.map} engineRequests=${mobileEngineRequests.length} reserved=${mobileBefore.reserved}`,
+    );
+
+    // The REAL intent path: a trusted touch inside the map region. Nothing else.
+    await mobilePage.touchscreen.tap(206, 430);
+    await mobilePage.waitForFunction(() => Boolean(window.__maplibreMap), { timeout: 30000 });
+    await sleep(1500);
+    const mobileAfter = await mobilePage.evaluate(() => {
+      const m = window.__maplibreMap;
+      const section = document.getElementById('center-map-section');
+      const r = section ? section.getBoundingClientRect() : null;
+      return {
+        canvas: Boolean(document.querySelector('.maplibregl-canvas')),
+        styleLoaded: m.isStyleLoaded(),
+        layers: (m.getStyle().layers || []).length,
+        placeholder: Boolean(document.querySelector('[data-testid="map-placeholder"]')),
+        box: r ? [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] : null,
+      };
+    });
+    check(
+      mobileEngineRequests.length > 0 && mobileAfter.canvas && !mobileAfter.placeholder,
+      'mobile: a trusted tap loads the engine and swaps the placeholder out',
+      `engineRequests=${mobileEngineRequests.length} canvas=${mobileAfter.canvas} placeholder=${mobileAfter.placeholder}`,
+    );
+    check(
+      mobileAfter.styleLoaded === true && mobileAfter.layers > 0,
+      'mobile: the map that came up is a real style',
+      `styleLoaded=${mobileAfter.styleLoaded} layers=${mobileAfter.layers}`,
+    );
+    check(
+      JSON.stringify(mobileBefore.box) === JSON.stringify(mobileAfter.box),
+      'mobile: the reserved map box does not move through the mount',
+      `${JSON.stringify(mobileBefore.box)} -> ${JSON.stringify(mobileAfter.box)}`,
+    );
+    check(
+      mobileConsole.length === 0 && mobilePageErrors.length === 0,
+      'mobile: zero console and page errors on the intent path',
+      mobileConsole.concat(mobilePageErrors).slice(0, 3).join(' | '),
+    );
+    await mobilePage.close();
   } catch (err) {
     check(false, 'E2E aborted', String(err && err.message || err));
     try {
