@@ -67,3 +67,9 @@ probe_*.cjs
 backend/clip_probe.json
 backend/site_probe.json
 
+
+# Perf artifacts
+.perf/
+frontend/.perf/
+# The UI audit rewrites this report on every run.
+frontend/scripts/audit_report.json
