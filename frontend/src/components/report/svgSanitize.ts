@@ -22,11 +22,78 @@ const GHOST_CSS_HIDDEN =
   '.ghost-core-overlay { display: none !important; opacity: 0 !important; visibility: hidden !important; }';
 
 /**
+ * Flip the ghost overlay on a sheet that is ALREADY injected, in place.
+ *
+ * The sanitized document carries both facts the contract is about — the rule
+ * inside its injected `<style>` and the `data-ghost-overlay` attribute on the
+ * `<svg>` — so a toggle never needs to re-parse or re-insert the sheet. Rewriting
+ * those two nodes is two DOM writes; the React re-render that a state change
+ * causes passes the SAME html string to `dangerouslySetInnerHTML`, which React
+ * skips, so the patch stands. The sanitizer contract is unchanged: a fresh sheet,
+ * and the print copy, are still produced by `sanitizeBlueprintSvg`.
+ *
+ * Returns false when the sheet is not in the DOM (nothing to flip), which lets
+ * the caller fall back to re-injecting.
+ */
+export function patchGhostOverlayDom(root: ParentNode | null, ghostVisible: boolean): boolean {
+  if (!root) return false;
+  const svg = root.querySelector('svg');
+  if (!svg) return false;
+  const style = root.querySelector('style');
+  if (!style) return false;
+  const current = style.textContent || '';
+  const from = ghostVisible ? GHOST_CSS_HIDDEN : GHOST_CSS_VISIBLE;
+  const to = ghostVisible ? GHOST_CSS_VISIBLE : GHOST_CSS_HIDDEN;
+  // Verify BEFORE writing either node: a partial patch (attribute flipped, rule
+  // unchanged) would leave the overlay desynced from its own provenance flag,
+  // which is the one thing the ghost contract forbids.
+  if (!current.includes(from)) return false;
+  style.textContent = current.replace(from, to);
+  svg.setAttribute('data-ghost-overlay', ghostVisible ? 'true' : 'false');
+  return true;
+}
+
+/**
+ * Last sanitize result per ghost state, keyed by the SOURCE SVG IDENTITY.
+ *
+ * This function is pure, but its callers could only remember one result, so
+ * every press of the ghost toggle re-parsed and re-injected a multi-hundred-node
+ * sheet — the largest long task measured on that surface (191 ms at 4× CPU
+ * throttle, ~48 ms at 1×) for an output it had already computed. Two sheets can
+ * alternate forever (ghost on / ghost off), so two entries is exactly the bound.
+ *
+ * Identity, not a content hash: any different sheet — a regeneration, another
+ * floor, a theme swap — misses the cache outright and REPLACES the map, so a
+ * stale sheet can never be served. The cache is module-level because the function
+ * is shared by every viewer instance and the key is the input itself.
+ */
+const sanitizeMemo: { svg: string | null; byGhost: Map<boolean, string> } = {
+  svg: null,
+  byGhost: new Map(),
+};
+
+/**
  * Strips scripts and inline handlers from a server-authored blueprint sheet,
  * then injects the fit + ghost-overlay styling and the `data-ghost-overlay`
  * provenance flag that mirrors `ghostVisible`.
  */
 export function sanitizeBlueprintSvg(
+  activeSvg: string | null | undefined,
+  ghostVisible: boolean
+): string {
+  if (activeSvg && activeSvg === sanitizeMemo.svg) {
+    const hit = sanitizeMemo.byGhost.get(ghostVisible);
+    if (hit !== undefined) return hit;
+  } else if (sanitizeMemo.svg !== activeSvg) {
+    sanitizeMemo.svg = activeSvg ?? null;
+    sanitizeMemo.byGhost = new Map();
+  }
+  const result = sanitizeBlueprintSvgUncached(activeSvg, ghostVisible);
+  if (activeSvg) sanitizeMemo.byGhost.set(ghostVisible, result);
+  return result;
+}
+
+function sanitizeBlueprintSvgUncached(
   activeSvg: string | null | undefined,
   ghostVisible: boolean
 ): string {

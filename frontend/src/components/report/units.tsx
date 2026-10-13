@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { formatIN } from '../../services/numberFormat';
 
 /**
  * Global measurement-unit preference for the report (metres vs feet,
@@ -65,7 +66,7 @@ export const UnitsProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const { decimals = 1, withUnit = true } = opts ?? {};
       if (units.area === 'sqft') {
         const sqft = sqMeters * M2_TO_SQFT;
-        return `${Math.round(sqft).toLocaleString('en-IN')}${withUnit ? ' sq ft' : ''}`;
+        return `${formatIN(Math.round(sqft))}${withUnit ? ' sq ft' : ''}`;
       }
       return `${sqMeters.toFixed(decimals)}${withUnit ? ' m²' : ''}`;
     };

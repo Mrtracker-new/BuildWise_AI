@@ -87,7 +87,7 @@ export const CostBreakdownTable: React.FC<CostBreakdownTableProps> = ({
             <div className="space-y-1">
               <div className="w-full bg-[var(--fill)] rounded-full h-1 overflow-hidden">
                 <div
-                  className="bg-[var(--accent)] h-full rounded-full transition-all duration-500"
+                  className="bg-[var(--accent)] h-full rounded-full transition-[width] duration-500"
                   style={{ width: `${Math.min(100, Math.max(0, item.percentage))}%` }}
                 />
               </div>

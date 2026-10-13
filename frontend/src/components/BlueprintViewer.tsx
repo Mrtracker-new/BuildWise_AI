@@ -5,7 +5,7 @@ import { downloadFloorplanDossier } from '../services/api';
 import { Icon } from './Icon';
 import { useDesign } from '../design';
 import { frontageChipText, polygonChipText } from '../services/sheetTruth';
-import { isGhostOverlayVisible, sanitizeBlueprintSvg } from './report/svgSanitize';
+import { isGhostOverlayVisible, patchGhostOverlayDom, sanitizeBlueprintSvg } from './report/svgSanitize';
 import { ECS_DISCLOSURE } from './report/termDisclosures';
 
 interface BlueprintViewerProps {
@@ -246,9 +246,9 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   ].join(' | ');
   const freshnessToken = `${effectiveGenId} | ${dimsLabel} | ${storeysLabel} | ${sheetTruthTail}`;
 
-  const _ghostKey = showGhostOverlay && safeFloorIndex > 0 ? 'ghost' : 'noghost';
-  const containerKey = `blueprint-svg-${effectiveGenId}-${safeFloorIndex}-${mode}-${_ghostKey}`;
-  const modalContainerKey = `modal-blueprint-svg-${effectiveGenId}-${safeFloorIndex}-${mode}-${_ghostKey}`;
+  // (The per-container keys that used to force a REMOUNT on every ghost toggle
+  // are gone with the re-inject: a ghost flip is now an in-place DOM patch, and a
+  // sheet switch is chunked, so neither wants React to tear the subtree down.)
 
   // Sanitize raw SVG and inject paint-order halo style + dynamic ghost overlay styling.
   // The ghost gate itself lives in report/svgSanitize.ts (isGhostOverlayVisible)
@@ -256,10 +256,91 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   // the overlay is injected ONLY when the toggle is on AND an upper floor is
   // active. `data-ghost-overlay` mirrors the same boolean in both directions.
   const ghostVisible = isGhostOverlayVisible(showGhostOverlay, safeFloorIndex);
+  // `sanitizeBlueprintSvg` carries its own two-entry memo (keyed by the source
+  // SVG identity), so toggling the ghost overlay between two states it has
+  // already rendered costs a map lookup rather than a full re-parse — that
+  // re-parse was the largest long task on this surface. This memo still exists
+  // for the within-render-reasons: it keeps React from calling into it on every
+  // unrelated re-render.
   const sanitizedSvg = useMemo(
     () => sanitizeBlueprintSvg(activeSvg, ghostVisible),
     [activeSvg, ghostVisible]
   );
+
+  /**
+   * GHOST FLIP IS NOT A RE-INJECT (D-LT).
+   *
+   * The overlay's visibility is already decided by a rule inside the injected
+   * `<style>` and mirrored by the `data-ghost-overlay` attribute, so a toggle is
+   * two DOM writes — see `patchGhostOverlayDom`, which owns the rule text. What
+   * made this surface the largest Long Task on the sheet was re-parsing and
+   * re-inserting a 1 224-node SVG to change one display rule.
+   *
+   * The card and the modal hold separate copies, so both are patched. Note what
+   * is deliberately NOT here: writing the flip back into React state. The state
+   * change that ran this effect already re-rendered, and that render passed the
+   * SAME html string for `injectState.ghost` — which React skips — so the patch
+   * stands; a fallback write would only cost a second render for nothing.
+   */
+  const injectedGhostRef = useRef<boolean>(ghostVisible);
+  useEffect(() => {
+    if (injectedGhostRef.current === ghostVisible) return;
+    patchGhostOverlayDom(cardSheetRef.current, ghostVisible);
+    patchGhostOverlayDom(modalSheetRef.current, ghostVisible);
+    injectedGhostRef.current = ghostVisible;
+  }, [ghostVisible]);
+
+  /**
+   * Sheet-gated inject (the generation chunker's pattern, reused here).
+   *
+   * A floor switch or a mode switch replaces the SHEET: the inject re-parses and
+   * re-inserts a multi-hundred-node SVG (1 224 nodes on a G+1 dossier), which at
+   * 4× CPU throttle was a 130 ms task on a surface that shows nothing else. The
+   * chrome that says which floor you are on still switches in the click frame;
+   * only the sheet's body waits for an idle slice, behind a placeholder inside the
+   * SAME 360 px box the sheet occupies, so nothing below it can move.
+   *
+   * The gate deliberately EXCLUDES the ghost flag: toggling the ghost overlay is a
+   * cosmetic change to the sheet already on screen, and making it flash a
+   * placeholder would be a worse trade than the cost it saves. Ghost flips keep
+   * their instant, keyed re-inject.
+   */
+  const cardSheetRef = useRef<HTMLDivElement | null>(null);
+  const modalSheetRef = useRef<HTMLDivElement | null>(null);
+  const sheetKey = `blueprint-sheet-${effectiveGenId}-${safeFloorIndex}-${mode}`;
+  /**
+   * The ghost state the CURRENTLY INJECTED html was built with. Part of the same
+   * state cell as the sheet, so a sheet switch rebuilds both together.
+   */
+  const [injectState, setInjectState] = useState<{ sheetKey: string; ghost: boolean }>(() => ({
+    sheetKey,
+    ghost: ghostVisible,
+  }));
+  const injectReady = injectState.sheetKey === sheetKey;
+  /** The html React is told to hold: the injected sheet with its own ghost state. */
+  const renderSvg = useMemo(
+    () => sanitizeBlueprintSvg(activeSvg, injectState.ghost),
+    [activeSvg, injectState.ghost]
+  );
+  useEffect(() => {
+    if (injectReady) return;
+    let cancelled = false;
+    const mount = () => {
+      if (cancelled) return;
+      React.startTransition(() => setInjectState({ sheetKey, ghost: ghostVisible }));
+    };
+    const hasIdle = typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function';
+    const handle = hasIdle
+      ? window.requestIdleCallback(mount, { timeout: 300 })
+      : window.setTimeout(mount, 32);
+    return () => {
+      cancelled = true;
+      if (hasIdle) window.cancelIdleCallback(handle);
+      else clearTimeout(handle);
+    };    // `ghostVisible` is read when a sheet is (re)mounted — including it keeps the
+    // mount honest without re-running anything while the sheet is unchanged
+    // (the early return above covers that).
+  }, [sheetKey, injectReady, ghostVisible]);
 
   // Derive per-floor room placements for current floor legend.
   // SINGLE SOURCE: the on-sheet room label and the ROOM SCHEDULE both print the
@@ -835,11 +916,22 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
           onTouchMove={cardGestures.onTouchMove}
           onTouchEnd={cardGestures.onTouchEnd}
         >
-          <div
-            key={containerKey}
-            className="relative flex items-center justify-center w-full h-full drop-shadow-md"
-            dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
-          />
+          {injectReady ? (
+            <div
+              ref={cardSheetRef}
+              className="relative flex items-center justify-center w-full h-full drop-shadow-md"
+              dangerouslySetInnerHTML={{ __html: renderSvg }}
+            />
+          ) : (
+            /* Same box, same footprint: the sheet swaps in without moving it. */
+            <div
+              className="relative flex items-center justify-center w-full h-full"
+              aria-busy="true"
+              aria-label="Loading floor sheet"
+            >
+              <div className="report-skeleton w-[240px] h-[300px] rounded-[10px]" />
+            </div>
+          )}
         </div>
 
         {/* Expand Sheet cue: always visible — a hover-only affordance would
@@ -1295,7 +1387,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                     className={`h-7 sm:h-8 px-2.5 sm:px-3.5 rounded-[8px] sm:rounded-[9px] text-[11px] sm:text-[12px] font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors duration-150 ease-out select-none mr-1 sm:mr-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/60 ${
                       isStale
                         ? 'opacity-40 cursor-not-allowed bg-[var(--fill)] text-[var(--text-3)] border border-[var(--hairline)]'
-                        : 'bg-[var(--accent)] text-white hover:brightness-105 active:bg-[var(--accent-press)] active:scale-[0.97] cursor-pointer shadow-[0_1px_3px_rgba(0,113,227,0.35)]'
+                        : 'bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] active:bg-[var(--accent-press)] active:scale-[0.97] cursor-pointer shadow-[0_1px_3px_rgba(0,113,227,0.35)]'
                     }`}
                   >
                     <Icon name="download" size={13} />
@@ -1340,7 +1432,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                   }}
                 >
                   <div
-                    key={modalContainerKey}
+                    ref={modalSheetRef}
                     className="relative flex items-center justify-center w-full h-full drop-shadow-xl"
                     dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
                   />

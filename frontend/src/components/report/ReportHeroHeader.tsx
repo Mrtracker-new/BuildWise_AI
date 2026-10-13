@@ -5,7 +5,8 @@ import { CopyValueButton } from './CopyValueButton';
 import { useDesign } from '../../design/primitives';
 import { DataHealthStrip } from './DataHealthStrip';
 import { BIOCLIMATIC_AXIS_DISCLOSURE, FAR_DISCLOSURE } from './termDisclosures';
-import { AnimatedNumber } from './AnimatedNumber';
+import { AnimatedNumber } from './AnimatedNumber'
+import { formatIN } from '../../services/numberFormat';
 import { useUnits } from './units';
 
 interface ReportHeroHeaderProps {
@@ -91,7 +92,7 @@ export const ReportHeroHeader: React.FC<ReportHeroHeaderProps> = ({
   const formatInr = (val: number) => {
     if (val >= 10000000) return `₹${(val / 10000000).toFixed(2)} Cr`;
     if (val >= 100000) return `₹${(val / 100000).toFixed(2)} L`;
-    return `₹${val.toLocaleString('en-IN')}`;
+    return `₹${formatIN(val)}`;
   };
 
   // Plot area renders in the active unit preference (sq ft native; m² on toggle).
@@ -99,7 +100,7 @@ export const ReportHeroHeader: React.FC<ReportHeroHeaderProps> = ({
   const plotAreaValue =
     plotAreaSqft > 0
       ? area === 'sqft'
-        ? Math.round(plotAreaSqft).toLocaleString('en-IN')
+        ? formatIN(Math.round(plotAreaSqft))
         : formatArea(plotAreaSqft * 0.092903, { decimals: 1, withUnit: false })
       : '—';
 
@@ -186,7 +187,13 @@ export const ReportHeroHeader: React.FC<ReportHeroHeaderProps> = ({
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-1.5 leading-none">
           <span className="text-[40px] font-bold text-[var(--text-1)] leading-none tabular-nums tracking-tight">
-            <AnimatedNumber value={score} format={(n) => n.toFixed(1)} durationMs={750} testId="hero-score-value" />
+            <AnimatedNumber
+              playKey="report.hero.score"
+              value={score}
+              format={(n) => n.toFixed(1)}
+              durationMs={750}
+              testId="hero-score-value"
+            />
           </span>
           <span className="text-[15px] font-normal text-[var(--text-3)]">/100</span>
         </div>

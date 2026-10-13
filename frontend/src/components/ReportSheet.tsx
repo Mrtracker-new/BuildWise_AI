@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
+import { flushSync } from 'react-dom';
 import type {
   AnalysisResponse,
   SiteVisionResponse,
@@ -11,6 +12,7 @@ import { CollapsibleSection } from './report/CollapsibleSection';
 import { WarningsBanner } from './report/WarningsBanner';
 import { ProvenanceFactorCard } from './report/ProvenanceFactorCard';
 import { CertificatePanel } from './report/CertificatePanel';
+import { ArrivalSlice } from './report/ArrivalSlice';
 import { CostRangeBar } from './report/CostRangeBar';
 import { WindRose } from './report/WindRose';
 import { ProvenanceFooter } from './report/ProvenanceFooter';
@@ -34,10 +36,85 @@ import { SegmentedControl } from '../design';
 import { ReportEmptyState } from './report/ReportEmptyState';
 import { CPWD_DISCLOSURE } from './report/termDisclosures';
 import { TabContextBar } from './report/TabContextBar';
+import { formatIN, formatINR } from '../services/numberFormat';
+import { staggerClassFor } from './report/playOnce';
+import { holdMapRender, releaseMapRender, holdMapRenderAcrossCommit } from '../services/mapRenderGate';
 import { SectionNav } from './report/SectionNav';
 import { AnimatedNumber } from './report/AnimatedNumber';
 
 export type ResultsTab = 'overview' | 'hazards' | 'ecology' | 'cost_plan';
+
+/**
+ * Tracks whether the document is currently being prepared for printing.
+ *
+ * The sheet carries a SECOND copy of the whole dossier — a four-section stacked
+ * tree that exists only so `window.print()` can emit all tabs at once (print
+ * cannot show a tab that is not in the DOM). Kept always-mounted that copy is
+ * ~1 200 nodes, 67 % of the sheet, re-rendered on every tab switch, scroll-state
+ * change and unit toggle. So it is mounted for the duration of a print pass and
+ * unmounted afterwards.
+ *
+ * Two independent signals, because no single one covers every browser:
+ *   - `beforeprint` / `afterprint` — real Ctrl+P / ⌘P and the toolbar Print
+ *     button. `beforeprint` fires while the print render is still pending, so the
+ *     mount is flushed synchronously; anything less and the browser can snapshot
+ *     the document before React commits the print tree.
+ *   - `matchMedia('print')` change — the media-type override path used by
+ *     DevTools "Emulate CSS media type", CDP/Puppeteer `emulateMedia`, and the
+ *     browsers that flip the media type without firing `beforeprint`.
+ * Leaving print mode clears the flag, so the copy never survives the pass.
+ */
+function usePrintMode(): [boolean, () => void] {
+  // Seeded from the media type at first render, so a sheet that mounts while
+  // print media is already active comes up in print mode without an effect-time
+  // state write.
+  const [printing, setPrinting] = useState<boolean>(() =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('print').matches
+      : false
+  );
+
+  /** Turn print mode ON synchronously (the snapshot may already be in flight). */
+  const engage = React.useCallback(() => {
+    try {
+      flushSync(() => setPrinting(true));
+    } catch {
+      // Called while React is already rendering/committing — the plain update is
+      // still correct, it just lands on the next flush.
+      setPrinting(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const onBeforePrint = () => engage();
+    const onAfterPrint = () => setPrinting(false);
+    window.addEventListener('beforeprint', onBeforePrint);
+    window.addEventListener('afterprint', onAfterPrint);
+
+    const mql = typeof window.matchMedia === 'function' ? window.matchMedia('print') : null;
+    const onMediaChange = () => {
+      if (mql?.matches) engage();
+      else setPrinting(false);
+      // (setting false needs no flush: unmounting early is never a correctness risk)
+    };
+    if (mql) {
+      if (typeof mql.addEventListener === 'function') mql.addEventListener('change', onMediaChange);
+      else mql.addListener?.(onMediaChange);
+    }
+
+    return () => {
+      window.removeEventListener('beforeprint', onBeforePrint);
+      window.removeEventListener('afterprint', onAfterPrint);
+      if (mql) {
+        if (typeof mql.removeEventListener === 'function') mql.removeEventListener('change', onMediaChange);
+        else mql.removeListener?.(onMediaChange);
+      }
+    };      }, [engage]);
+
+  return [printing, engage];
+}
 
 export interface ReportSheetProps {
   isOpen: boolean;
@@ -106,6 +183,20 @@ const TAB_SECTION_LINKS: Partial<Record<ResultsTab, { id: string; label: string 
 const scrollKeyFor = (tab: ResultsTab) => `bw.report.scroll.${tab}`;
 
 /**
+ * Minimum spacing between scroll-position writes. The write is synchronous main
+ * thread I/O, so it is deliberately not attempted more than twice a second
+ * however often the scroll position changes.
+ */
+const WRITE_INTERVAL_MS = 400;
+
+/**
+ * Height the certificate placeholder reserves before this session has ever
+ * measured that section (ArrivalSlice caches the real height from the first
+ * arrival on, so every later arrival reserves exactly what it will occupy).
+ */
+const CERTIFICATE_FALLBACK_HEIGHT = 560;
+
+/**
  * CPWD plinth-area-rate tiers (₹/sq ft). Mirrors the engine constant
  * BASE_RATES in backend/app/services/cost_service.py so the grade→cost chip can
  * show every grade's rate and the delta without a round-trip. Keep in sync.
@@ -156,6 +247,85 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
   const [paneScrolled, setPaneScrolled] = useState(false);
   const sheetRef = useRef<HTMLDivElement>(null);
   const contentScrollRef = useRef<HTMLDivElement>(null);
+  /**
+   * The stacked print copy of the dossier is mounted only for the duration of a
+   * print pass — see `usePrintMode`. `printing` is true from `beforeprint` (or a
+   * print media-type override) until `afterprint` (or media exit).
+   */
+  const [printing, engagePrintMode] = usePrintMode();
+
+  /**
+   * THE PLAN ARRIVAL.
+   *
+   * `planKey` names the plan on screen; `planArrivedNow` is true only for the
+   * commit in which a plan the sheet has NOT shown yet lands (the effect records
+   * it immediately after). Sections that appear WITH an arrival use it to take an
+   * idle slice instead of landing inside the arrival commit — see
+   * report/ArrivalSlice.tsx. A tab visit or a reopened sheet renders them at
+   * once: there is no arrival to smooth, and a placeholder there would be noise.
+   */
+  const planKey = floorPlanData
+    ? String(floorPlanData.generation_id || floorPlanData.generated_at)
+    : null;
+  // The plan key this sheet instance was MOUNTED with (state, not a ref: it is
+  // read during render and never written). Anything else that turns up on this
+  // instance is an arrival; a plan the sheet is simply opened onto is not.
+  const [planKeyAtMount] = useState<string | null>(planKey);
+  const planArrivedNow = planKey !== null && planKey !== planKeyAtMount;
+
+  /**
+   * The sheet covers ~96 % of the viewport, map included. Holding the render
+   * gate for as long as it is open means MapLibre stops drawing behind it —
+   * frames the user cannot see were landing inside every other interaction's
+   * long task. Released on close, where the map is resized and repainted once so
+   * it is current on the first frame after the sheet disappears.
+   */
+  useEffect(() => {
+    if (!isOpen) return;
+    holdMapRender('report-sheet');
+    return () => {
+      // Resuming INSIDE the unmount commit would put the map's resize and its
+      // first repaint in the same task that tears the sheet down — the exact
+      // interleaving this gate exists to remove, now on the close path. The
+      // commit hold outlives the teardown by two frames; the map is current on
+      // the frame after that (resize + triggerRepaint happen on release).
+      holdMapRenderAcrossCommit('sheet-close');
+      releaseMapRender('report-sheet');
+    };
+  }, [isOpen]);
+
+  /**
+   * The active tab is split in two:
+   *   - `activeTab` (immediate) drives the CHROME — tab buttons, sub-header,
+   *     unit switch, section tray. It is the discrete event's own work, so the
+   *     highlight and the sliding pill land in the click frame.
+   *   - `panelTab` (deferred) drives the PANEL — mounting a tab's card stack is
+   *     the expensive half, so React renders it as an interruptible transition
+   *     instead of inside the click handler.
+   * The reader sees the pill move instantly and the content follow within a
+   * frame or two; no single task spans both halves.
+   */
+  const panelTab = React.useDeferredValue(activeTab);
+
+  // Entrance staggers, decided once per mount: a tab switch remounts this pane,
+  // and replaying eight staggered card animations (plus their layout work) on
+  // every visit is the switch cost the reader feels but never asks for. Decided
+  // here rather than per wrapper so the keys are greppable in one place.
+  const [staggerOverview] = useState(() => staggerClassFor('report.stagger.overview'));
+  const [staggerHazards] = useState(() => staggerClassFor('report.stagger.hazards'));
+  const [staggerEcology] = useState(() => staggerClassFor('report.stagger.ecology'));
+  const [staggerCostPlan] = useState(() => staggerClassFor('report.stagger.cost_plan'));
+
+  /**
+   * Both Print buttons go through here (the sheet's own Print, and the footer
+   * CTA). `beforeprint` would mount the tree anyway, but mounting it BEFORE
+   * `window.print()` means the dialog never opens on a partially committed
+   * document, and the buttons stay correct in browsers that omit `beforeprint`.
+   */
+  const handlePrint = useCallback(() => {
+    engagePrintMode();
+    window.print();
+  }, [engagePrintMode]);
 
   // Copy Reference ID
   const handleCopyRef = () => {
@@ -181,41 +351,94 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
   );
 
   // Remember the active tab's scroll offset as the user scrolls it.
+  //
+  // The write is debounced to idle rather than issued per frame: sessionStorage
+  // is synchronous I/O and a write per scroll frame measured 67 ms of self time
+  // across one 5 s scroll, all of it on the main thread. The position is flushed
+  // on the ways it can actually be lost — scroll idle, the page being hidden and
+  // the pane/tab going away — so it is still there on the next visit.
   useEffect(() => {
     const el = contentScrollRef.current;
     if (!el || !isOpen) return;
     let raf = 0;
-    const onScroll = () => {
-      if (raf) return;
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        try {
-          sessionStorage.setItem(scrollKeyFor(activeTab), String(el.scrollTop));
-        } catch {
-          /* storage unavailable */
-        }
-        setPaneScrolled(el.scrollTop > 120);
-      });
+    let writeTimer = 0;
+    let lastWrite = 0;
+    const persist = (force = false) => {
+      const now = performance.now();
+      if (!force && now - lastWrite < WRITE_INTERVAL_MS) return;
+      lastWrite = now;
+      try {
+        sessionStorage.setItem(scrollKeyFor(activeTab), String(el.scrollTop));
+      } catch {
+        /* storage unavailable — position is not remembered this session */
+      }
     };
+    /**
+     * At most ONE pending trailing write, created at most once per interval.
+     *
+     * Two failure modes have to be avoided at once: a write per scroll frame
+     * (67 ms of self time for the storage call alone), and a timer armed and
+     * cleared per frame (83 ms). Writes are also rate-limited inside `persist`
+     * because the coalescing signal is not always rare — a programmatic scroll
+     * emits `scrollend` for every step, which stormed 261 storage writes through
+     * this pane. Both the rate limit and the single pending timer keep the cost
+     * flat however chatty the engine is, and the trailing write still lands
+     * within one interval of the last movement.
+     */
+    const schedulePersist = () => {
+      if (writeTimer) return;
+      const wait = Math.max(0, WRITE_INTERVAL_MS - (performance.now() - lastWrite));
+      writeTimer = window.setTimeout(() => {
+        writeTimer = 0;
+        persist();
+      }, wait);
+    };
+    const onScroll = () => {
+      // Cheap UI state (drives the "Top" pill) still needs to be current.
+      if (!raf) {
+        raf = requestAnimationFrame(() => {
+          raf = 0;
+          setPaneScrolled(el.scrollTop > 120);
+        });
+      }
+      schedulePersist();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') persist(true);
+    };
+    const hasScrollEnd = 'onscrollend' in el || 'onscrollend' in window;
     el.addEventListener('scroll', onScroll, { passive: true });
+    if (hasScrollEnd) el.addEventListener('scrollend', schedulePersist);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       el.removeEventListener('scroll', onScroll);
+      if (hasScrollEnd) el.removeEventListener('scrollend', schedulePersist);
+      document.removeEventListener('visibilitychange', onVisibility);
       if (raf) cancelAnimationFrame(raf);
+      if (writeTimer) clearTimeout(writeTimer);
+      // The pane can disappear before any of the above fires (tab switch, close).
+      persist(true);
     };
   }, [isOpen, activeTab]);
 
   // Restore the incoming tab's remembered scroll offset (0 when none saved).
+  //
+  // Keyed on the DEFERRED tab, not the immediate one: the pane's content only
+  // becomes the incoming tab when the transition lands, and applying an offset
+  // before that measures it against the OUTGOING content's height — which clamps
+  // it whenever the incoming tab is shorter (returning to a tab you had scrolled
+  // to the bottom of landed mid-page). One frame later the height is the real one.
   useEffect(() => {
     const el = contentScrollRef.current;
     if (!el || !isOpen) return;
     let target = 0;
     try {
-      target = Number(sessionStorage.getItem(scrollKeyFor(activeTab)) ?? '0') || 0;
+      target = Number(sessionStorage.getItem(scrollKeyFor(panelTab)) ?? '0') || 0;
     } catch {
       target = 0;
     }
     el.scrollTop = target;
-  }, [isOpen, activeTab]);
+  }, [isOpen, panelTab]);
 
   // Smooth anchor scrolling that clears the sticky chrome (sections carry
   // scroll-margin-top). Reduced motion is honoured by the global CSS rule
@@ -276,31 +499,65 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
    * fall back to DOM order — highlighting Land Value while the blueprint filled
    * the screen. At the end of the scroll the last section is the honest answer.
    */
+  /**
+   * Section geometry, measured ONCE per layout change and reused per frame.
+   *
+   * The rule above needs every section's box, but re-deriving it per scroll
+   * frame cost a `querySelectorAll` per frame (~200 ms of self time across one
+   * 5 s scroll) plus a `getBoundingClientRect` per section (~45 ms) — the single
+   * largest cost of the scroll path. Boxes are cached relative to the pane, so a
+   * frame only needs `scrollTop` plus these numbers: no DOM query, no layout
+   * read, no forced flush.
+   */
+  const sectionBoxesRef = useRef<{ id: string; top: number; height: number }[]>([]);
+
+  const measureSectionBoxes = useCallback(() => {
+    const root = contentScrollRef.current;
+    if (!root) return;
+    const boxes: { id: string; top: number; height: number }[] = [];
+    for (const el of root.querySelectorAll<HTMLElement>('[data-report-section]')) {
+      const id = el.getAttribute('data-report-section');
+      if (!id) continue;
+      // `offsetTop` is relative to the nearest positioned ancestor, and several
+      // wrappers sit between a section and the pane, so accumulate up to the pane.
+      let top = 0;
+      let node: HTMLElement | null = el;
+      while (node && node !== root) {
+        top += node.offsetTop;
+        node = node.offsetParent as HTMLElement | null;
+      }
+      if (node === root) boxes.push({ id, top, height: el.offsetHeight });
+    }
+    sectionBoxesRef.current = boxes;
+  }, []);
+
   const refreshActiveSection = useCallback(() => {
     const root = contentScrollRef.current;
     if (!root) return;
-    const pane = root.getBoundingClientRect();
-    const bandTop = pane.top + pane.height * 0.15;
-    const bandBottom = pane.top + pane.height * 0.3;
+    const sections = sectionBoxesRef.current;
+    if (sections.length === 0) return;
+    const viewHeight = root.clientHeight;
+    const bandTop = viewHeight * 0.15;
+    const bandBottom = viewHeight * 0.3;
+    const scrollTop = root.scrollTop;
     let best = '';
     let bestOverlap = 0;
     let passed = '';
     let first = '';
     let last = '';
-    root.querySelectorAll<HTMLElement>('[data-report-section]').forEach((el) => {
-      const id = el.getAttribute('data-report-section');
-      if (!id) return;
-      if (!first) first = id;
-      last = id;
-      const rect = el.getBoundingClientRect();
-      if (rect.top <= bandTop) passed = id;
-      const overlap = Math.min(rect.bottom, bandBottom) - Math.max(rect.top, bandTop);
+    for (const s of sections) {
+      if (!first) first = s.id;
+      last = s.id;
+      const top = s.top - scrollTop;
+      const bottom = top + s.height;
+      if (top <= bandTop) passed = s.id;
+      const overlap = Math.min(bottom, bandBottom) - Math.max(top, bandTop);
       if (overlap > bestOverlap) {
         bestOverlap = overlap;
-        best = id;
+        best = s.id;
       }
-    });
-    const atEnd = root.scrollTop + root.clientHeight >= root.scrollHeight - 4;
+    }
+    const atEnd = scrollTop + viewHeight >= root.scrollHeight - 4;
     setActiveSection((atEnd && last) || best || passed || first);
   }, []);
 
@@ -313,6 +570,8 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
   const sectionLinks = useMemo(() => {
     const links = TAB_SECTION_LINKS[activeTab] ?? [];
     return links.filter((link) => link.id !== 'certificate' || Boolean(floorPlanData?.qa));
+    // Keyed on the IMMEDIATE tab: the tray is chrome, so it must describe the tab
+    // the pill just moved to, not the one the pane is still showing.
   }, [activeTab, floorPlanData?.qa]);
 
   // Initial read for the tab that is about to paint (a layout effect, so the
@@ -320,8 +579,9 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
   // unhighlighted tray).
   useLayoutEffect(() => {
     if (!isOpen) return;
+    measureSectionBoxes();
     refreshActiveSection();
-  }, [isOpen, activeTab, refreshActiveSection]);
+  }, [isOpen, activeTab, measureSectionBoxes, refreshActiveSection]);
 
   // Keep it honest while the pane scrolls and while sections mount or unmount
   // under it (the Certificate appears with a generated blueprint). Both
@@ -338,29 +598,51 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
         refreshActiveSection();
       });
     };
+    let measureRaf = 0;
+    /** Re-measure then repaint the highlight, always a frame later. */
+    const remeasure = () => {
+      if (measureRaf) return;
+      measureRaf = requestAnimationFrame(() => {
+        measureRaf = 0;
+        measureSectionBoxes();
+        refreshActiveSection();
+      });
+    };
+    // A scroll frame decides from cached geometry only — no query, no read.
     root.addEventListener('scroll', schedule, { passive: true });
+    // The observer is a CHANGE SIGNAL, not the decision (a section mounting,
+    // unmounting or entering the padded band): its callback re-measures, because
+    // that is the only time the cached boxes can go stale.
     const observer =
       typeof IntersectionObserver === 'undefined'
         ? null
-        : new IntersectionObserver(schedule, { root, threshold: 0 });
-    const watch = () =>
+        : new IntersectionObserver(remeasure, { root, rootMargin: '15% 0px -30% 0px', threshold: 0 });
+    const watch = () => {
+      measureSectionBoxes();
       root.querySelectorAll('[data-report-section]').forEach((s) => observer?.observe(s));
+    };
     watch();
+    // Mutations are batched into a frame: a MutationObserver callback is a
+    // microtask, so measuring inside it would extend the very task that caused
+    // the mutation (the tab-switch click handler).
     const mutations =
       typeof MutationObserver === 'undefined'
         ? null
         : new MutationObserver(() => {
-            watch();
-            schedule();
+            remeasure();
           });
     mutations?.observe(root, { childList: true, subtree: true });
+    // The reading band is a fraction of the pane, so its own resize matters.
+    window.addEventListener('resize', remeasure);
     return () => {
       root.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', remeasure);
+      if (measureRaf) cancelAnimationFrame(measureRaf);
       observer?.disconnect();
       mutations?.disconnect();
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [isOpen, activeTab, refreshActiveSection]);
+  }, [isOpen, panelTab, refreshActiveSection, measureSectionBoxes]);
 
   // Body scroll lock and focus trap while open
   useEffect(() => {
@@ -425,18 +707,16 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
 
   if (!isOpen) return null;
 
-  // INR Formatting Helper
+  // INR Formatting Helper (compact above a lakh; the exact-rupee branch uses the
+  // shared cached currency formatter — this used to build a new Intl.NumberFormat
+  // per call, which the profile charged 42 ms of self time for on one scroll.)
   const formatInr = (val: number) => {
     if (val >= 10000000) {
       return `₹${(val / 10000000).toFixed(2)} Cr`;
     } else if (val >= 100000) {
       return `₹${(val / 100000).toFixed(2)} Lakh`;
     }
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-      maximumFractionDigits: 0,
-    }).format(val);
+    return formatINR(val);
   };
 
   /** Degradation notices drive the Hazards tab badge and the context strip. */
@@ -555,7 +835,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
             {/* Print button (secondary) */}
             <button
               type="button"
-              onClick={() => window.print()}
+              onClick={handlePrint}
               className="hidden sm:flex h-8 px-3 rounded-[10px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-1)] text-[12px] font-medium items-center gap-1.5 transition-colors cursor-pointer select-none"
               title="Print comprehensive report"
             >
@@ -635,7 +915,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                 aria-selected={activeTab === tab.id}
                 aria-controls="report-tabpanel"
                 onClick={() => handleTabChange(tab.id)}
-                className={`inline-flex items-center gap-1.5 py-1.5 px-3 rounded-[8px] text-[12px] transition-all duration-200 ease-apple whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 ${
+                className={`inline-flex items-center gap-1.5 py-1.5 px-3 rounded-[8px] text-[12px] transition-[transform,opacity,background-color,border-color,color,box-shadow] duration-200 ease-apple whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 ${
                   activeTab === tab.id
                     ? 'bg-[var(--segmented-active-bg)] text-[var(--segmented-active-label)] font-semibold bw-segmented-active-shadow'
                     : 'text-[var(--text-2)] hover:text-[var(--text-1)]'
@@ -674,8 +954,8 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
               className="report-screen-only animate-tab-switch"
             >
               {/* TAB 1: OVERVIEW */}
-              {activeTab === 'overview' && (
-                <div className="space-y-4 bw-stagger">
+              {panelTab === 'overview' && (
+                <div className={`space-y-4 ${staggerOverview}`}>
                   <h2 className="text-[17px] font-bold text-[var(--text-1)] tracking-tight">
                     Site Overview
                   </h2>
@@ -740,7 +1020,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                       <DownloadReportButton payload={reportPayload} variant="compact" />
                       <button
                         type="button"
-                        onClick={() => window.print()}
+                        onClick={handlePrint}
                         className="h-8 px-3 rounded-[10px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-1)] text-[12px] font-medium flex items-center gap-1.5 transition-colors cursor-pointer select-none"
                       >
                         <Icon name="printer" size={14} />
@@ -752,8 +1032,8 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
               )}
 
               {/* TAB 2: HAZARDS */}
-              {activeTab === 'hazards' && (
-                <div className="space-y-4 bw-stagger">
+              {panelTab === 'hazards' && (
+                <div className={`space-y-4 ${staggerHazards}`}>
                   <h2 className="text-[17px] font-bold text-[var(--text-1)] tracking-tight">
                     Hazards &amp; Resilience
                   </h2>
@@ -805,8 +1085,8 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
               )}
 
               {/* TAB 3: ECOLOGY */}
-              {activeTab === 'ecology' && (
-                <div className="space-y-4 bw-stagger">
+              {panelTab === 'ecology' && (
+                <div className={`space-y-4 ${staggerEcology}`}>
                   <h2 className="text-[17px] font-bold text-[var(--text-1)] tracking-tight">
                     Ecology &amp; Orientation
                   </h2>
@@ -854,8 +1134,8 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
               )}
 
               {/* TAB 4: COST & PLAN */}
-              {activeTab === 'cost_plan' && (
-                <div className="space-y-4 bw-stagger">
+              {panelTab === 'cost_plan' && (
+                <div className={`space-y-4 ${staggerCostPlan}`}>
                   <h2 className="text-[17px] font-bold text-[var(--text-1)] tracking-tight">
                     Cost &amp; Planning
                   </h2>
@@ -869,7 +1149,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                     const activeTier = GRADE_RATES_INR_PER_SQFT.find((g) => g.id === activeId);
                     const premiumDelta = activeRate - (GRADE_RATES_INR_PER_SQFT.find((g) => g.id === 'premium')?.rate ?? activeRate);
                     const basicDelta = activeRate - (GRADE_RATES_INR_PER_SQFT.find((g) => g.id === 'basic')?.rate ?? activeRate);
-                    const fmtDelta = (v: number) => `${v >= 0 ? '+' : '−'}₹${Math.abs(v).toLocaleString('en-IN')}`;
+                    const fmtDelta = (v: number) => `${v >= 0 ? '+' : '−'}₹${formatIN(Math.abs(v))}`;
                     return (
                       <div className="bw-card rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-3.5 mb-3.5 space-y-2">
                         <div className="flex items-center justify-between gap-2 min-w-0">
@@ -897,14 +1177,14 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                                     : 'bg-[var(--fill)] text-[var(--text-2)] border-[var(--hairline)]'
                                 }`}
                               >
-                                {g.label} @ ₹{g.rate.toLocaleString('en-IN')}
+                                {g.label} @ ₹{formatIN(g.rate)}
                                 {isActive && <span>• active</span>}
                               </span>
                             );
                           })}
                         </div>
                         <p className="text-[11px] text-[var(--text-2)] leading-snug">
-                          {activeTier?.label ?? 'Selected'} grade applies ₹{activeRate.toLocaleString('en-IN')}/sq ft
+                          {activeTier?.label ?? 'Selected'} grade applies ₹{formatIN(activeRate)}/sq ft
                           {premiumDelta !== 0 && ` (${fmtDelta(premiumDelta)} vs premium, ${fmtDelta(basicDelta)} vs basic)`}.
                         </p>
                       </div>
@@ -918,12 +1198,13 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                         <span className="text-[12px] font-normal text-[var(--text-3)]">
                           Plinth area base rate
                         </span>
-                        <CopyValueButton value={`₹${analysisData.cost_estimate.base_rate_per_sqft.toLocaleString('en-IN')}/sq ft`} label="Plinth area base rate" />
+                        <CopyValueButton value={`₹${formatIN(analysisData.cost_estimate.base_rate_per_sqft)}/sq ft`} label="Plinth area base rate" />
                       </div>
                       <span className="text-[22px] font-semibold text-[var(--text-1)] tabular-nums block leading-tight">
                         <AnimatedNumber
+                          playKey="report.cost.baseRate"
                           value={analysisData.cost_estimate.base_rate_per_sqft}
-                          format={(n) => `₹${Math.round(n).toLocaleString('en-IN')}/sq ft`}
+                          format={(n) => `₹${formatIN(Math.round(n))}/sq ft`}
                         />
                       </span>
                       <span
@@ -943,6 +1224,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                       </div>
                       <span className="text-[22px] font-semibold text-[var(--text-1)] tabular-nums block leading-tight">
                         <AnimatedNumber
+                          playKey="report.cost.terrainMultiplier"
                           value={analysisData.cost_estimate.terrain_multiplier}
                           format={(n) => `${n.toFixed(2)}x`}
                         />
@@ -963,6 +1245,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                       </div>
                       <span className="text-[22px] font-semibold text-[var(--text-1)] tabular-nums block leading-tight">
                         <AnimatedNumber
+                          playKey="report.cost.civilBudget"
                           value={analysisData.cost_estimate.total_estimated_cost_inr}
                           format={formatInr}
                         />
@@ -985,7 +1268,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                       </div>
                       <span className="text-[22px] font-semibold text-[var(--text-1)] tabular-nums block leading-tight">
                         {currentCombinedTotal !== null ? (
-                          <AnimatedNumber value={currentCombinedTotal} format={formatInr} />
+                          <AnimatedNumber playKey="report.cost.combinedTotal" value={currentCombinedTotal} format={formatInr} />
                         ) : (
                           '—'
                         )}
@@ -1041,7 +1324,19 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                         data-report-section="certificate"
                         id="sec-certificate"
                       >
-                        <CertificatePanel qa={floorPlanData.qa} />
+                        {/* The panel renders nothing when the gate has no layers,
+                            and a placeholder for nothing is a spinner that never
+                            resolves. Slice only a section that is really coming. */}
+                        {floorPlanData.qa.validation_gate?.layers?.length ? (
+                          <ArrivalSlice
+                            sliceId="report.certificate"
+                            isArrival={planArrivedNow}
+                            fallbackHeight={CERTIFICATE_FALLBACK_HEIGHT}
+                            label="Validation gate certificate"
+                          >
+                            <CertificatePanel qa={floorPlanData.qa} />
+                          </ArrivalSlice>
+                        ) : null}
                       </div>
                     )}
 
@@ -1101,8 +1396,13 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
             </div>
 
             {/* ================================================================= */}
-            {/* PRINT VIEW: Force-render all 4 sections stacked for window.print() */}
+            {/* PRINT VIEW: all 4 sections stacked for window.print().
+                Mounted ONLY while a print pass is in flight (usePrintMode): a
+                permanently-mounted copy re-renders on every tab switch,
+                scroll-state change and unit toggle, and was 67 % of this
+                sheet's DOM (1 224 of 1 818 nodes). */}
             {/* ================================================================= */}
+            {printing && (
             <div className="report-print-all hidden space-y-10">
               {/* Document Header in Print */}
               <div className="border-b-2 border-black pb-4 mb-6">
@@ -1195,7 +1495,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                   <div className="border border-gray-300 p-3 rounded-lg">
                     <span className="text-xs text-gray-500 block">Base Rate</span>
                     <span className="text-lg font-bold text-black block">
-                      ₹{analysisData.cost_estimate.base_rate_per_sqft.toLocaleString('en-IN')}/sq ft
+                      ₹{formatIN(analysisData.cost_estimate.base_rate_per_sqft)}/sq ft
                     </span>
                   </div>
                   <div className="border border-gray-300 p-3 rounded-lg">
@@ -1229,6 +1529,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                 )}
               </div>
             </div>
+            )}
           </div>
         </main>
       </div>
