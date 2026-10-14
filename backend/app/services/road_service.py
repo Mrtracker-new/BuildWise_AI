@@ -7,8 +7,9 @@ vastu advisory and the public /api/nearest-road proxy consume the same
 implementation.
 
 Policy compliance (mirrors geocode_service):
-- Overpass API: server-side <=1 req/s throttle, identifying User-Agent, 3.5s
-  timeout. Ref: https://operations.osmfoundation.org/policies/overpass/ (be
+- Overpass API: server-side <=1 req/s throttle, identifying User-Agent, and a
+  timeout budget ordered so the SERVER gives up before the client does.
+  Ref: https://operations.osmfoundation.org/policies/overpass/ (be
   nice: cache aggressively; this service answers from cache when possible).
 - Results cached in the 24h hazard cache keyed on a rounded coordinate grid
   (category/precision chosen by the caller).
@@ -17,6 +18,15 @@ Policy compliance (mirrors geocode_service):
   returns is_fallback=True, bearing_degrees=None, approach_side='unknown'
   and provenance annotation 'ASSUMED' with a user-facing warning.
 - Attribution: OpenStreetMap contributors (ODbL), via Overpass API.
+
+Timeout budget (regression pin — see _ATTEMPT_READ_TIMEOUT_S ordering):
+the previous client timeout (3.5 s, equal to the query's own `[timeout:4]`)
+was SHORTER than a normal Overpass answer, so every lookup aborted
+client-side and degraded to ASSUMED even while Overpass was healthy. The
+budget below keeps `QL_TIMEOUT < client read timeout` (the server answers
+with its own 504 instead of the client timing out blind) and caps the whole
+lookup with a wall-clock deadline so a slow upstream cannot stall the
+frontage step indefinitely.
 """
 
 import asyncio
@@ -41,10 +51,42 @@ logger = logging.getLogger(__name__)
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 _OVERPASS_UA = "BuildWise-Civil-Engineering-Engine/1.2"
-_TIMEOUT_SECONDS = 3.5
 _RATE_INTERVAL = 1.0     # minimum seconds between Overpass calls (<=1 req/s)
 _QUERY_RADIUS_M = 500
-_HIGHWAY_PATTERN = "^(primary|secondary|tertiary|residential|service)$"
+
+# Vehicular road classes we score frontage from. Filtered CLIENT-SIDE on
+# purpose: a `[highway~"^(primary|...)$"]` regex filter makes Overpass scan
+# every road in the area instead of using its tag index, which measurably
+# pushes the public instance past its own query budget (measured 2026-10-14:
+# regex filter -> 3/3 responses 504 at 6.3-9.3 s; plain `[highway]` tag filter
+# -> 200 in 3.9-5.1 s returning 362 ways).
+_ROAD_CLASSES = frozenset({"primary", "secondary", "tertiary", "residential", "service"})
+
+# Timeout budget. Invariant: _QL_TIMEOUT_S < _ATTEMPT_READ_TIMEOUT_S, i.e. the
+# server-side query budget expires first and Overpass answers us with an
+# explicit 504 (which we log and retry) instead of the client aborting a query
+# the server is still working on (which surfaces as a message-less
+# httpx.ReadTimeout — the "query failed:" with nothing after it).
+_QL_TIMEOUT_S = 7.0             # [timeout:...] inside the Overpass QL
+_ATTEMPT_READ_TIMEOUT_S = 9.0   # per-attempt client read timeout (backstop)
+_ATTEMPT_CONNECT_TIMEOUT_S = 3.0
+_ATTEMPT_WRITE_TIMEOUT_S = 5.0
+_TOTAL_BUDGET_S = 17.0          # wall-clock ceiling for the whole lookup
+_MAX_ATTEMPTS = 2               # the public instance 504s are usually transient
+# A retry only earns its own server window plus slack; below this the attempt
+# would be cut short by the deadline and the retry would be wasted.
+_MIN_RETRY_BUDGET_S = _QL_TIMEOUT_S + 1.5
+
+# Overpass outages arrive in bursts (the public instance answers 429/504 for
+# minutes at a time). A failed lookup already costs up to _TOTAL_BUDGET_S, and
+# the frontage step would pay that again on every pin/edge change, so a short
+# cooldown answers those calls instantly with the SAME honest ASSUMED fallback
+# they would have reached anyway - and spares the upstream while it recovers.
+_FAILURE_COOLDOWN_S = 30.0
+# Retryable upstream statuses. The public instance answers 429 when we exceed
+# its slot budget and 504 when its own query timeout fires; both clear on a
+# second attempt. Other 4xx mean OUR query is wrong — retrying is pointless.
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
 # Cache categories:
 # - vastu path preserves its historical 0.1-deg (~11 km) grid behaviour;
@@ -63,6 +105,30 @@ PROXY_CACHE_PRECISION = 4
 _overpass_lock = asyncio.Lock()
 _overpass_last_call: float = 0.0
 
+# Monotonic deadline until which we treat Overpass as unhealthy (see
+# _FAILURE_COOLDOWN_S). Cleared by the next successful lookup.
+_upstream_down_until: float = 0.0
+
+
+def _upstream_cooldown_remaining() -> float:
+    return max(_upstream_down_until - time.monotonic(), 0.0)
+
+
+def _mark_upstream_healthy() -> None:
+    global _upstream_down_until
+    _upstream_down_until = 0.0
+
+
+def _mark_upstream_failed() -> None:
+    global _upstream_down_until
+    _upstream_down_until = time.monotonic() + _FAILURE_COOLDOWN_S
+
+
+_UNAVAILABLE_WARNING = (
+    "Road network telemetry unavailable. Confirm the frontage edge manually - "
+    "no bearing has been assumed."
+)
+
 
 async def _overpass_throttle() -> None:
     """
@@ -71,6 +137,9 @@ async def _overpass_throttle() -> None:
     The steady-state wait happens OUTSIDE the lock so
     concurrent callers do not serialize behind a sleep; the lock only guards
     the timestamp stamp itself (with a final re-check for racing callers).
+
+    A retry therefore waits out the remainder of the 1 s slot before it
+    re-posts, which is the policy-correct backoff for this upstream.
     """
     global _overpass_last_call
     now = time.monotonic()
@@ -90,11 +159,50 @@ async def _overpass_throttle() -> None:
 # --------------------------------------------------------------------------- #
 
 def _build_query(lat: float, lon: float) -> str:
+    """Index-driven Overpass QL: tag filter (not regex), geometry inline."""
     return (
-        f"[out:json][timeout:4];"
-        f"way[\"highway\"~\"{_HIGHWAY_PATTERN}\"](around:{_QUERY_RADIUS_M},{lat:.5f},{lon:.5f});"
+        f"[out:json][timeout:{int(_QL_TIMEOUT_S)}];"
+        f"way[\"highway\"](around:{_QUERY_RADIUS_M},{lat:.5f},{lon:.5f});"
         f"out geom;"
     )
+
+
+def _is_road_way(tags: Dict[str, Any]) -> bool:
+    """True when an element carries one of the vehicular classes we score."""
+    highway = tags.get("highway")
+    if not isinstance(highway, str):
+        return False
+    # Compound values ("residential;service") are legal in OSM.
+    return any(part.strip() in _ROAD_CLASSES for part in highway.split(";"))
+
+
+def _describe_failure(exc: BaseException) -> str:
+    """
+    Actionable one-line label for an upstream failure.
+
+    httpx timeout exceptions stringify to '' (ReadTimeout('')), which is why
+    this used to log as a bare "Overpass nearest-road query failed:" with no
+    cause attached. The exception TYPE is the useful half, so it is always
+    included.
+    """
+    detail = str(exc).strip() or "no message"
+    return f"{type(exc).__name__}: {detail}"
+
+
+async def _post_query(query: str, read_timeout: float) -> httpx.Response:
+    """Single Overpass POST with the per-attempt connect/read budget."""
+    timeout = httpx.Timeout(
+        connect=_ATTEMPT_CONNECT_TIMEOUT_S,
+        read=read_timeout,
+        write=_ATTEMPT_WRITE_TIMEOUT_S,
+        pool=_ATTEMPT_CONNECT_TIMEOUT_S,
+    )
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        return await client.post(
+            OVERPASS_URL,
+            data={"data": query},
+            headers={"User-Agent": _OVERPASS_UA},
+        )
 
 
 def _fallback_result(warning: str) -> Dict[str, Any]:
@@ -121,6 +229,8 @@ def _parse_overpass_elements(data: Dict[str, Any], lat: float, lon: float) -> Op
 
     for el in data.get("elements", []):
         tags = el.get("tags", {}) or {}
+        if not _is_road_way(tags):
+            continue
         for pt in el.get("geometry", []) or []:
             pt_lat = pt.get("lat")
             pt_lon = pt.get("lon")
@@ -164,38 +274,110 @@ async def fetch_nearest_road(
     keys: bearing_degrees, approach_side, distance_meters, nearest_point,
     highway_class, road_name, is_fallback, source, annotation, warning.
     Never raises; unreachable upstream degrades to the ASSUMED fallback.
+
+    The lookup is bounded by _TOTAL_BUDGET_S: up to _MAX_ATTEMPTS POSTs (a
+    transient Overpass 429/504 is retried once, spaced by the 1 req/s
+    throttle) and the per-attempt read timeout is trimmed to whatever budget
+    is left, so the frontage step degrades predictably instead of hanging.
     """
     cached = hazard_cache.get(lat, lon, cache_category, precision=cache_precision)
     if cached is not None:
         return dict(cached), True, None
 
-    query = _build_query(lat, lon)
-    try:
-        await _overpass_throttle()
-        async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
-            resp = await client.post(
-                OVERPASS_URL,
-                data={"data": query},
-                headers={"User-Agent": _OVERPASS_UA},
-            )
-            if resp.status_code == 200:
-                parsed = _parse_overpass_elements(resp.json(), lat, lon)
-                if parsed is not None:
-                    hazard_cache.set(lat, lon, cache_category, parsed, precision=cache_precision)
-                    return parsed, False, None
-                # Reachable but no highway in radius: honest empty answer.
-                warning = (
-                    f"No mapped road within {_QUERY_RADIUS_M} m in OpenStreetMap. "
-                    "Confirm the frontage edge manually."
-                )
-                fallback = _fallback_result(warning)
-                hazard_cache.set(lat, lon, cache_category, fallback, precision=cache_precision)
-                return fallback, False, warning
-    except Exception as exc:  # noqa: BLE001 - degrade, never raise
-        logger.warning("Overpass nearest-road query failed: %s", exc)
+    # Upstream known-bad right now: answer instantly and honestly rather than
+    # spending the whole budget to reach the identical fallback.
+    cooldown_left = _upstream_cooldown_remaining()
+    if cooldown_left > 0:
+        logger.info(
+            "Overpass nearest-road lookup skipped: upstream cooldown active (%.0fs left)",
+            cooldown_left,
+        )
+        return _fallback_result(_UNAVAILABLE_WARNING), False, _UNAVAILABLE_WARNING
 
-    warning = (
-        "Road network telemetry unavailable. Confirm the frontage edge manually - "
-        "no bearing has been assumed."
-    )
-    return _fallback_result(warning), False, warning
+    query = _build_query(lat, lon)
+    deadline = time.monotonic() + _TOTAL_BUDGET_S
+    attempts = 0
+    failure: Optional[str] = None
+    # True only for failures that say "the upstream is unwell" (transport error,
+    # 429/5xx, unparseable body). A 4xx means OUR query is wrong, so it must
+    # not open the outage cooldown and mask the next (correct) lookup.
+    outage = False
+
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        remaining = deadline - time.monotonic()
+        if attempt > 1 and remaining < _MIN_RETRY_BUDGET_S:
+            logger.warning(
+                "Overpass nearest-road retry skipped: %.1fs of budget left (< %.1fs)",
+                max(remaining, 0.0), _MIN_RETRY_BUDGET_S,
+            )
+            break
+        if remaining <= 0:
+            break
+
+        try:
+            await _overpass_throttle()
+            started = time.monotonic()
+            # Trim the read timeout to the remaining budget (never below 1 s so
+            # httpx still gets a usable timeout object). _MIN_RETRY_BUDGET_S
+            # guarantees this stays above the server-side window.
+            read_timeout = min(_ATTEMPT_READ_TIMEOUT_S, max(deadline - started, 1.0))
+            resp = await _post_query(query, read_timeout)
+        except Exception as exc:  # noqa: BLE001 - degrade, never raise
+            attempts += 1
+            outage = True
+            failure = _describe_failure(exc)
+            logger.warning(
+                "Overpass nearest-road query failed (attempt %d/%d, %.1fs): %s",
+                attempt, _MAX_ATTEMPTS, time.monotonic() - started, failure,
+            )
+            continue
+
+        attempts += 1
+        elapsed = time.monotonic() - started
+
+        if resp.status_code == 200:
+            try:
+                parsed = _parse_overpass_elements(resp.json(), lat, lon)
+            except Exception as exc:  # noqa: BLE001 - malformed upstream body
+                outage = True
+                failure = f"unparseable response ({_describe_failure(exc)})"
+                logger.warning(
+                    "Overpass nearest-road query failed (attempt %d/%d, %.1fs): %s",
+                    attempt, _MAX_ATTEMPTS, elapsed, failure,
+                )
+                continue
+
+            if parsed is not None:
+                hazard_cache.set(lat, lon, cache_category, parsed, precision=cache_precision)
+                _mark_upstream_healthy()
+                return parsed, False, None
+
+            # Reachable but no highway in radius: honest empty answer.
+            warning = (
+                f"No mapped road within {_QUERY_RADIUS_M} m in OpenStreetMap. "
+                "Confirm the frontage edge manually."
+            )
+            fallback = _fallback_result(warning)
+            hazard_cache.set(lat, lon, cache_category, fallback, precision=cache_precision)
+            _mark_upstream_healthy()
+            return fallback, False, warning
+
+        failure = f"HTTP {resp.status_code}"
+        logger.warning(
+            "Overpass nearest-road query failed (attempt %d/%d, %.1fs): %s",
+            attempt, _MAX_ATTEMPTS, elapsed, failure,
+        )
+        if resp.status_code not in _RETRYABLE_STATUS:
+            outage = False
+            break  # 4xx (other than 429): the query itself is wrong, not the weather
+
+    if failure:
+        logger.warning(
+            "Overpass nearest-road lookup giving up after %d attempt(s) (last: %s)%s",
+            attempts, failure,
+            f"; upstream cooldown for the next {_FAILURE_COOLDOWN_S:.0f}s" if outage else "",
+        )
+    if outage:
+        _mark_upstream_failed()
+
+    return _fallback_result(_UNAVAILABLE_WARNING), False, _UNAVAILABLE_WARNING

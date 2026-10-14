@@ -11,6 +11,7 @@ Covers:
 """
 import time
 
+import httpx
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -32,9 +33,11 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def _reset_throttle_and_preview_cache():
     road_service._overpass_last_call = 0.0
+    road_service._upstream_down_until = 0.0
     clear_preview_cache()
     yield
     road_service._overpass_last_call = 0.0
+    road_service._upstream_down_until = 0.0
     clear_preview_cache()
 
 
@@ -196,6 +199,125 @@ def test_nearest_road_no_mapped_road_is_honest_empty():
     assert data["provenance"]["annotation"] == "ASSUMED"
 
 
+def test_nearest_road_retries_transient_504():
+    """The public instance answers 504 when its OWN query budget expires; that
+    is transient, so the retry must recover a measured road instead of
+    degrading the frontage to ASSUMED."""
+    with patch(
+        "httpx.AsyncClient.post",
+        side_effect=[
+            _mock_response(None, status=504),
+            _mock_response(_overpass_ok_json()),
+        ],
+    ) as post:
+        resp = client.get("/api/nearest-road", params={"lat": 12.9716, "lon": 77.5946})
+    assert post.call_count == 2
+    data = resp.json()
+    assert data["found"] is True
+    assert data["degraded"] is False
+    assert data["road"]["road_name"] == "MG Road"
+    assert data["provenance"]["annotation"] == "VERIFIED"
+
+
+def test_nearest_road_does_not_retry_query_errors():
+    """A 4xx other than 429 means OUR query is wrong; retrying is pointless."""
+    with patch("httpx.AsyncClient.post", return_value=_mock_response(None, status=400)) as post:
+        resp = client.get("/api/nearest-road", params={"lat": 12.9716, "lon": 77.5946})
+    assert post.call_count == 1
+    data = resp.json()
+    assert data["found"] is False
+    assert data["degraded"] is True
+    assert data["road"]["bearing_degrees"] is None
+    # A query error must NOT open the outage cooldown: the next lookup still
+    # goes upstream (and, when the query is fixed, measures a road).
+    with patch("httpx.AsyncClient.post", return_value=_mock_response(_overpass_ok_json())) as retry_post:
+        after = client.get("/api/nearest-road", params={"lat": 12.9716, "lon": 77.5946})
+    assert retry_post.call_count == 1
+    assert after.json()["found"] is True
+
+
+def test_nearest_road_failure_cooldown_skips_upstream_and_stays_honest():
+    """Burst failures must not make every frontage step pay the full budget:
+    inside the cooldown the answer is instant, still ASSUMED, and the upstream
+    is left alone."""
+    with patch("httpx.AsyncClient.post", side_effect=Exception("Overpass 504")) as post:
+        first = client.get("/api/nearest-road", params={"lat": 12.9716, "lon": 77.5946})
+        assert first.json()["degraded"] is True
+        assert post.call_count >= 1
+        post.reset_mock()
+        t0 = time.monotonic()
+        second = client.get("/api/nearest-road", params={"lat": 12.9832, "lon": 77.6088})
+        elapsed = time.monotonic() - t0
+    assert post.call_count == 0, "a failing upstream must not be hammered inside the cooldown"
+    assert elapsed < 0.5, f"cooldown answer must be immediate (took {elapsed:.2f}s)"
+    data = second.json()
+    assert data["found"] is False
+    assert data["degraded"] is True
+    assert data["road"]["bearing_degrees"] is None
+    assert data["road"]["approach_side"] == "unknown"
+    assert data["provenance"]["annotation"] == "ASSUMED"
+
+
+def test_nearest_road_query_uses_tag_index_not_regex():
+    """Regression pin: the `["highway"~"^(primary|...)$"]` regex makes
+    Overpass scan every road instead of using its tag index, which pushed the
+    public instance past its own query budget (measured 504s at 6-9 s). The
+    class filter belongs on our side."""
+    q = road_service._build_query(12.9716, 77.5946)
+    assert 'way["highway"]' in q
+    assert "~" not in q
+    assert f"around:{road_service._QUERY_RADIUS_M}" in q
+    assert f"[timeout:{int(road_service._QL_TIMEOUT_S)}]" in q
+
+
+def test_timeout_budget_lets_the_server_give_up_first():
+    """Regression pin for the blank-log outage: with a 3.5 s client timeout
+    against a 4 s query budget, the client always aborted a query the server
+    was still answering, so every lookup degraded to ASSUMED."""
+    assert road_service._QL_TIMEOUT_S < road_service._ATTEMPT_READ_TIMEOUT_S
+    assert road_service._TOTAL_BUDGET_S >= road_service._QL_TIMEOUT_S * 2
+    assert road_service._MIN_RETRY_BUDGET_S > road_service._QL_TIMEOUT_S
+
+
+def test_describe_failure_names_message_less_timeouts():
+    """httpx timeouts stringify to '' - the old log read "query failed:" with
+    no cause. The exception TYPE must always be reported."""
+    label = road_service._describe_failure(httpx.ReadTimeout(""))
+    assert "ReadTimeout" in label
+    assert road_service._describe_failure(OSError("getaddrinfo failed")).endswith(
+        "getaddrinfo failed"
+    )
+
+
+def test_road_class_filter_accepts_vehicular_rejects_footways():
+    assert road_service._is_road_way({"highway": "residential"})
+    assert road_service._is_road_way({"highway": "primary"})
+    assert road_service._is_road_way({"highway": "residential;service"})
+    assert not road_service._is_road_way({"highway": "footway"})
+    assert not road_service._is_road_way({"highway": "cycleway"})
+    assert not road_service._is_road_way({})
+
+
+def test_parse_ignores_closer_non_vehicular_ways():
+    """The tag-index query now returns footways/steps too; the nearest ROAD must
+    still win over a closer footpath."""
+    payload = {
+        "elements": [
+            {"tags": {"highway": "footway"}, "geometry": [{"lat": 12.97161, "lon": 77.59461}]},
+            {
+                "tags": {"highway": "residential", "name": "MG Road"},
+                "geometry": [{"lat": 12.9710, "lon": 77.5946}],
+            },
+        ]
+    }
+    parsed = road_service._parse_overpass_elements(payload, 12.9716, 77.5946)
+    assert parsed is not None
+    assert parsed["highway_class"] == "residential"
+    assert parsed["road_name"] == "MG Road"
+    assert parsed["distance_meters"] > 50
+    assert parsed["approach_side"] == "S"
+
+
 @pytest.mark.asyncio
 async def test_overpass_throttle_enforces_one_request_per_second():
     road_service._overpass_last_call = 0.0
@@ -217,6 +339,10 @@ async def test_vastu_delegates_to_shared_road_service():
         assert approach.bearing_degrees is None
         assert approach.approach_side == "unknown"
         assert "Road network telemetry unavailable" in warning
+
+    # The failure above deliberately opens the shared upstream cooldown; model
+    # its expiry so this half still exercises the real success path.
+    road_service._upstream_down_until = 0.0
 
     with patch("httpx.AsyncClient.post", return_value=_mock_response(_overpass_ok_json())):
         approach, warning = await fetch_nearest_road_approach(12.9716, 77.5946)
@@ -408,8 +534,8 @@ def test_preview_irregular_plot_wedges_and_policy():
 #  Shared mock helper                                                          #
 # --------------------------------------------------------------------------- #
 
-def _mock_response(payload):
+def _mock_response(payload, status=200):
     resp = MagicMock()
-    resp.status_code = 200
+    resp.status_code = status
     resp.json.return_value = payload
     return resp
