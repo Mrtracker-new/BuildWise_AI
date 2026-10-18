@@ -31,26 +31,13 @@
       content="AI-powered site feasibility, risk analysis, cost estimation, and generative architectural planning."
     />
     <meta name="twitter:image" content="/brand/BuildWise_AI_with_title.png" />
-    <!-- Hero photograph: preloaded high — but only on the LANDING route, where it
-         is the LCP element. On /app it is never displayed, and a 565 KB image at
-         fetchpriority="high" competes with the app's own chunks for bandwidth: at
-         the mobile preset that one request accounted for most of the simulated
-         transfer budget and pushed the app's first-view paint past 5 s. The
-         inline script runs while the head is still parsing, so the fetch starts
-         as early as the static link it replaces; the landing's preload order is
-         unchanged.
-         Source: Unsplash photo 1470071459604-3b5ec3a7fe05 (Unsplash License, free to use). -->
-    <script>
-      (function () {
-        if (location.pathname.indexOf('/app') === 0) return;
-        var hero = document.createElement('link');
-        hero.rel = 'preload';
-        hero.as = 'image';
-        hero.href = '/hero-scenic.jpg';
-        hero.setAttribute('fetchpriority', 'high');
-        document.head.appendChild(hero);
-      })();
-    </script>
+    <!-- The hero photograph is gone, and so is its preload.
+         578 KB of JPEG was preloaded at fetchpriority="high" on every landing
+         visit because it was the LCP element; Phase A measured the mobile trace
+         at LCP 7.7 s with that image as the largest contentful paint. The hero is
+         now a copy-led first screen with no marketing photograph and no 3D stage,
+         so there is no hero image to preload — and nothing above the fold needs
+         one. -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <!-- Map data origins. The basemap is the app's largest dependency and its
@@ -68,28 +55,43 @@
     <link rel="dns-prefetch" href="https://server.arcgisonline.com">
     <link rel="dns-prefetch" href="https://a.tile.opentopomap.org">
     <link rel="dns-prefetch" href="https://s3.amazonaws.com">
-    <!-- Fonts. The stylesheet is fetched in parallel but NOT on the render-blocking
-         path: a cross-origin stylesheet in the head holds the first paint until it
-         arrives, and at the mobile preset that was ~890 ms of measured render
-         blocking ("render-blocking-resources", the only entry left after this
-         change). media="print" + onload applies it the moment it lands, one step
-         after the shell paints. A/B on this rig (both builds, same machine, same
-         minute): mobile FCP 2 648 -> 1 677 ms and SI 2 045 -> 1 870 ms, desktop
-         FCP 529 -> 409 ms with no attributable TBT cost (the desktop TBT move in
-         this window is the rig: dist-b4 measures 87-88 TODAY against lh4's 90).
-         display=swap is in the URL, the origins are preconnected above, and every
-         stack has a local fallback; noscript keeps JS-off readers on the plain
-         stylesheet. -->
+    <!-- Fonts. Two independent decisions here, and both were measured.
+
+         1. The stylesheet is fetched in parallel but NOT on the render-blocking
+            path: a cross-origin stylesheet in the head holds the first paint
+            until it arrives, and at the mobile preset that was ~890 ms of
+            measured render blocking ("render-blocking-resources", the only entry
+            left after this change). media="print" + onload applies it the moment
+            it lands, one step after the shell paints. A/B on this rig (both
+            builds, same machine, same minute): mobile FCP 2 648 -> 1 677 ms and
+            SI 2 045 -> 1 870 ms, desktop FCP 529 -> 409 ms.
+
+         2. display=optional rather than display=swap. This is a Core Web Vitals
+            decision, not a typographic one, and it was forced by a measurement:
+            with swap, the h1 and the hero subcopy painted in the fallback face and
+            then REPAINTED when Inter finally arrived over the simulated slow 4G
+            connection — and Chrome records that second paint as a new LCP
+            candidate, because it is the same pixel area painted again. Removing
+            the font files entirely from the same build moved mobile LCP 6.3 -> 4.7 s
+            with nothing else changed, which is the size of the font's share.
+            `optional` gives the font a very short window to arrive and otherwise
+            keeps the fallback for the whole page load, so there is no late swap
+            and therefore no late LCP: the text the reader reads is painted on the
+            first frame either way. Repeat visits serve Inter from the HTTP cache,
+            which is where the brand face is meant to live; the preconnects above
+            keep the first visit's request as early as it can be. If the landing
+            ever outgrows this trade, the next step is self-hosting a subset behind
+            `rel=preload` + font-display:optional, not going back to swap. -->
     <link
       rel="stylesheet"
       media="print"
       onload="this.media='all'"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=optional"
     />
     <noscript>
       <link
         rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@600;700&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=optional"
       />
     </noscript>
   </head>
