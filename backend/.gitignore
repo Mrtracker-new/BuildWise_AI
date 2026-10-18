@@ -1,0 +1,4 @@
+
+# Raw engine captures (evidence only; reproducible via scripts/capture_landing_generation.py)
+data/landing-captures/
+.venv-audit/
