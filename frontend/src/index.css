@@ -352,7 +352,17 @@
       and paint their existing (already translucent) background colour.
    3. `prefers-reduced-transparency` is honoured: glass becomes opaque.
    4. Blur is not transitively animated: it is expensive to interpolate, and the
-      panel's own colour/border/shadow transition is enough. */
+      panel's own colour/border/shadow transition is enough.
+   5. THE PREFIXED DECLARATION COMES FIRST, ALWAYS. This is not style — it is the
+      difference between glass that exists and glass that does not. The minifier
+      (lightningcss, through Vite) collapses the `-webkit-backdrop-filter` /
+      `backdrop-filter` pair to ONE declaration, and it keeps the LAST one: with
+      the standard property written first, the built stylesheet ships only
+      `-webkit-backdrop-filter`, which Chrome and Firefox do not support — so
+      every hand-written glass rule in this file was transparent in the shipped
+      artifact while looking correct in the source. `scripts/lint_material.cjs`
+      measures the built stylesheet for exactly this, and
+      `scripts/interaction_probe.cjs` [4] measures it in a real browser. */
 :root {
   --glass-blur: 24px;
   --glass-saturate: 180%;
@@ -361,8 +371,8 @@
 @layer components {
   .vibrancy-panel {
     background-color: var(--panel);
-    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     border: var(--panel-border);
     box-shadow: var(--shadow);
     transition: background-color 250ms cubic-bezier(0.25, 0.1, 0.25, 1),
@@ -372,8 +382,8 @@
 
   .vibrancy-pill {
     background-color: var(--panel);
-    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     border: var(--panel-border);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 16px rgba(0, 0, 0, 0.08);
   }
@@ -381,8 +391,8 @@
   /* iOS HUD Vibrancy Surface — same material as the panels, not a heavier one */
   .vibrancy-hud {
     background-color: var(--panel);
-    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     border: var(--panel-border);
     box-shadow: var(--shadow);
   }
@@ -394,8 +404,8 @@
 .app-shell:has(.report-sheet-surface) .vibrancy-panel,
 .app-shell:has(.report-sheet-surface) .vibrancy-pill,
 .app-shell:has(.report-sheet-surface) .vibrancy-hud {
-  backdrop-filter: none;
   -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 /* (3) Opt-out. Every glass surface already paints a translucent background
@@ -405,8 +415,8 @@
   .vibrancy-pill,
   .vibrancy-hud,
   .apple-map-popup .maplibregl-popup-content {
-    backdrop-filter: none;
     -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 }
 
@@ -616,8 +626,8 @@
 /* Apple Maps Vibrancy Popup Tooltips */
 .apple-map-popup .maplibregl-popup-content {
   background: var(--panel) !important;
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   border: var(--panel-border);
   box-shadow: var(--shadow);
   border-radius: 10px;
@@ -957,8 +967,8 @@
     max-height: none !important;
     overflow: visible !important;
     background: #ffffff !important;
-    backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
     border: none !important;
     border-radius: 0 !important;
     box-shadow: none !important;
@@ -1109,19 +1119,43 @@ html.bw-landing-open.lenis body {
 }
 
 :root {
-  /* Landing palette — cool, architectural, calm */
+  /* Landing palette — cool, architectural, calm.
+     Text inks are AA on the porcelain ground (ink 16.6:1, ink-2 8.5:1,
+     ink-3 5.6:1) so every muted label stays readable on the light surface. */
   --bw-porcelain-1: #eef2f7;
-  --bw-porcelain-2: #dfe7f0;
+  --bw-porcelain-2: #e2e9f2;
+  --bw-white: #ffffff;
   --bw-ink: #0b1220;
-  --bw-slate: #4b5768;
+  --bw-ink-hover: #1b2436;
+  --bw-ink-2: #46536a;
+  --bw-ink-3: #6b7787;
+  --bw-slate: #46536a;
+  --bw-accent: #2f6fed;
   --bw-accent-a: #2f6fed;
   --bw-accent-b: #6aa6ff;
+  --bw-accent-deep: #1b53c4;
+  --bw-accent-tint: rgba(47, 111, 237, 0.10);
   --bw-green: #1fa955;
+  --bw-green-ink: #14663a;
   --bw-amber: #e8960c;
+  --bw-amber-ink: #8a5300;
   --bw-hairline: rgba(255, 255, 255, 0.18);
+  --bw-line: rgba(11, 18, 32, 0.09);
+  --bw-line-soft: rgba(11, 18, 32, 0.055);
   --bw-glass: rgba(255, 255, 255, 0.55);
   --bw-glass-strong: rgba(255, 255, 255, 0.72);
   --bw-ease-apple: cubic-bezier(0.32, 0.72, 0, 1);
+  /* One shadow vocabulary, three elevations: resting card, floating nav,
+     window shell. Every landing surface picks one of these — no one-off
+     shadows (a shadow literal per component is how a page grows five
+     different depths that read as five different materials). */
+  --bw-shadow-1: 0 1px 1px rgba(11, 18, 32, 0.04), 0 1px 3px rgba(11, 18, 32, 0.05);
+  --bw-shadow-2: 0 1px 3px rgba(11, 18, 32, 0.06), 0 10px 24px -12px rgba(11, 18, 32, 0.18);
+  --bw-shadow-3: 0 2px 6px rgba(11, 18, 32, 0.07), 0 24px 56px -16px rgba(11, 18, 32, 0.24);
+  --bw-shadow-window: 0 0 0 1px rgba(11, 18, 32, 0.06), 0 6px 14px -8px rgba(11, 18, 32, 0.14),
+    0 36px 72px -24px rgba(11, 18, 32, 0.26), 0 80px 160px -60px rgba(47, 111, 237, 0.22);
+  --bw-radius-window: 14px;
+  --bw-radius-panel: 11px;
 }
 
 /* Landing focus ring (visible on light porcelain) */
@@ -1131,126 +1165,221 @@ html.bw-landing-open.lenis body {
   border-radius: 10px;
 }
 
-/* Nav link underline grows from center */
+/* Nav link. The hover underline that grew from the centre is gone: the nav now
+   marks POSITION (which section you are in) with a layout-animated pill, and a
+   second underline competing for the same job only made the pill ambiguous.
+   The link keeps its own stacking context so it sits over that pill. */
 .bw-nav-link {
   position: relative;
-}
-.bw-nav-link::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  bottom: -5px;
-  width: 0;
-  height: 2px;
-  border-radius: 2px;
-  background: linear-gradient(90deg, var(--bw-accent-a), var(--bw-accent-b));
-  transform: translateX(-50%);
-  transition: width 280ms var(--bw-ease-apple);
-}
-.bw-nav-link:hover::after,
-.bw-nav-link:focus-visible::after {
-  width: 100%;
+  z-index: 1;
 }
 
-/* Desktop paint defer: below-fold sections skip rendering/layout/paint
-   entirely while offscreen. contain-intrinsic-size keeps the scrollbar
-   stable; the `auto` keyword remembers the real size after first render. */
-.bw-section-defer {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 720px;
-}
+/* Deleted: the landing's `content-visibility: auto` sections. The 720px
+   intrinsic-size seed did not keep the scrollbar stable — it FABRICATED up to
+   720px of height per section until that section first rendered, so the
+   document measured 3 044px on load and 2 514px once the page had been
+   scrolled end to end. The page therefore shrank ~530px underneath the reader,
+   the scrollbar thumb jumped, and anchor jumps (scrollToId) landed in the
+   wrong place. The landing is ~3 screens; eager rendering of its four sections
+   costs a few milliseconds and buys a scroll height that never moves. */
 
-/* Filmic grain (~4% opacity, feTurbulence data URI).
-   Deliberately normal blending, NOT mix-blend-mode: overlay — a blend
-   against the changing backdrop recomposites the whole hero every scroll
-   frame and was the single biggest source of scroll jank. */
-.bw-grain {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.04;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  background-size: 160px 160px;
-}
+/* REMOVED: `.bw-grain`, `@keyframes bwMistDrift` + `.bw-mist-drift`, and
+   `@keyframes bwNeedleWobble` + `.bw-needle-wobble`, together with the
+   reduced-motion block that switched the last two off.
 
-/* Ambient drifting cloud layer behind the hero (60s loop) */
-@keyframes bwCloudDrift {
-  0% {
-    transform: translate3d(-2.5%, 0, 0) scale(1.04);
-  }
-  50% {
-    transform: translate3d(2.5%, -1.2%, 0) scale(1.07);
-  }
-  100% {
-    transform: translate3d(-2.5%, 0, 0) scale(1.04);
-  }
-}
-.bw-cloud-drift {
-  animation: bwCloudDrift 60s ease-in-out infinite;
-  will-change: transform;
-}
+   Each of the three was a rule for a landing element that no longer exists: the
+   grain overlay was mounted by a section that has been deleted, the drifting mist
+   and the compass wobble belonged to the removed massing hero (kept for a time in
+   `frontend/quarantine/landing-3d/`, which has itself been deleted). Nothing in
+   `src/` or `index.html` names them, so a class-name sweep found them as rules that
+   could never match — which is the one kind of CSS that is pure cost: it ships in
+   every build and cannot affect a pixel. */
 
-/* Handwritten note breathe (±1°) */
-@keyframes bwNoteBreathe {
-  0%,
-  100% {
-    transform: rotate(-5deg) translateY(0);
-  }
-  50% {
-    transform: rotate(-4deg) translateY(-5px);
-  }
-}
-.bw-note-breathe {
-  animation: bwNoteBreathe 7s ease-in-out infinite;
-}
-
-
-/* Compass needle wobble (runs once when map enters view) */
-@keyframes bwNeedleWobble {
-  0% {
-    transform: rotate(-38deg);
-  }
-  55% {
-    transform: rotate(9deg);
-  }
-  78% {
-    transform: rotate(-5deg);
-  }
-  100% {
-    transform: rotate(0deg);
-  }
-}
-.bw-needle-wobble {
-  transform-origin: center;
-  animation: bwNeedleWobble 1400ms var(--bw-ease-apple) 900ms both;
-}
-
-/* Landing reduced-motion: kill ambient loops, keep everything static */
-@media (prefers-reduced-motion: reduce) {
-  .bw-cloud-drift,
-  .bw-note-breathe,
-  .bw-needle-wobble {
-    animation: none;
-  }
-}
-
-/* Landing gradient headline text (clipped accent) */
+/* Accent headline text. One near-flat ramp from a deep accent to the accent
+   itself: the old two-hue 10%->55% ramp (and its unused 200% background-size)
+   read as a WordArt gradient at hero scale — at 80px the eye resolves the
+   colour stops, and a headline should read as ink, not as a gradient. */
 .bw-gradient-text {
-  background: linear-gradient(100deg, var(--bw-accent-a) 10%, var(--bw-accent-b) 55%, var(--bw-accent-a) 90%);
-  background-size: 200% 100%;
+  background: linear-gradient(96deg, var(--bw-accent-deep) 4%, var(--bw-accent) 96%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
   -webkit-text-fill-color: transparent;
 }
 
-/* iOS-style landing toggle knob shadow (mirrors the app switches) */
-.bw-switch-knob {
-  box-shadow: 0 2px 5px rgba(11, 18, 32, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+/* ========================================================================= */
+/* FLOATING NAV PILL — CSS-owned state                                       */
+/* ========================================================================= */
+
+/* The pill's states live HERE, keyed off `data-condensed` on the element
+   itself, instead of being computed in React and written back as an inline
+   style on every scroll. The old version drove them through
+   `useMotionValueEvent` + `setState`, i.e. a React render inside a scroll
+   frame; this is a CSS attribute selector, so scrolling costs the page one
+   style recalc of one element.
+
+   HALF THE MATERIAL IS ANTI-ALIASED LIGHT. Three cheap declarations do most of
+   the glass work and none of them are a blur: a vertical white ramp (light
+   falls on the top edge), a 1px inner highlight, and a 1px outer ring so the
+   pill keeps an edge where the page behind it is already near-white. The blur
+   itself uses the APP's radius (--glass-blur / --glass-saturate), so the pill
+   and the product's panels are the same material at the same radius rather
+   than two blur values that drift.
+
+   Both states stay translucent. The condensed state used to snap to opaque
+   white — which is the state the pill is in for ~95% of a scroll, so the
+   glassy nav everyone sees on load was the nav almost nobody scrolled with.
+   Forcing the blur back on for a measured A/B pass (338 frames of wheel
+   scrolling, condensed) moved p99 frame time 7.2ms -> 7.2ms with 0 frames over
+   20ms either way: this pill is ~40k px of backdrop, and blurring it is free. */
+.bw-nav {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.80), rgba(255, 255, 255, 0.62));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75), 0 0 0 1px rgba(11, 18, 32, 0.04),
+    var(--bw-shadow-2);
+  /* FIXED GEOMETRY. The pill used to shed 3px of vertical padding and trim its
+     side padding when condensed, i.e. it SHRANK 6px as you scrolled past 24px
+     and grew back on the way up. On a toolbar that reads as the element
+     wobbling — the one thing a bar this prominent must never do — and because
+     padding is a layout property, the transition relaid the pill out on every
+     frame of those 300ms. Size is now state-independent: only the material
+     changes, and every property left in the transition below is paint-only. */
+  padding: 8px 6px 8px 11px;
+  transition: box-shadow 300ms var(--bw-ease-apple);
+}
+.bw-nav[data-condensed='true'] {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75), 0 0 0 1px rgba(11, 18, 32, 0.05),
+    var(--bw-shadow-3);
 }
 
-/* Print-ready blueprints: crisp rendering of landing SVG mockups */
-.bw-mockup-svg {
-  shape-rendering: geometricPrecision;
+/* Glass has an opt-out, like the app's surfaces: `prefers-reduced-transparency`
+   users get a solid pill rather than a blurred one. */
+@media (prefers-reduced-transparency: reduce) {
+  .bw-nav {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(255, 255, 255, 0.95);
+  }
 }
+
+/* Active-section marker. The pill is a layout-animated element (framer-motion
+   `layoutId`), so it slides between links the way a macOS segmented control
+   does instead of cutting between them. */
+.bw-nav-active {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: 9999px;
+  background: var(--bw-accent-tint);
+}
+
+/* ========================================================================= */
+/* MACOS WINDOW CHROME — the landing's artefact language                     */
+/* ========================================================================= */
+
+/* A real macOS window: 14px radius, a hairline + one wide ambient shadow,
+   a 1px inner top highlight, and a title bar with traffic lights that gain
+   their colour when the pointer is over the window (macOS only tints the
+   lights of the focused window). */
+.bw-window {
+  position: relative;
+  border-radius: var(--bw-radius-window);
+  background: var(--bw-white);
+  box-shadow: var(--bw-shadow-window);
+}
+
+.bw-window-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--bw-line-soft);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(246, 248, 251, 0.94));
+  border-radius: var(--bw-radius-window) var(--bw-radius-window) 0 0;
+}
+
+.bw-traffic {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+/* `> *` rather than `> span`, so the close light can be a real <button> (the
+   red light closes a dialog on macOS, and it should be reachable by keyboard
+   and screen readers rather than being three decorative dots). */
+.bw-traffic > * {
+  display: block;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background: rgba(11, 18, 32, 0.13);
+  box-shadow: inset 0 0 0 0.5px rgba(11, 18, 32, 0.10);
+  transition: background-color 200ms var(--bw-ease-apple);
+}
+/* Pointer devices: the lights tint on window hover. Touch devices never hover,
+   so they get the colour straight away rather than grey dots forever. */
+@media (hover: hover) {
+  .bw-window:hover .bw-traffic > *:nth-child(1) { background: #ff5f57; }
+  .bw-window:hover .bw-traffic > *:nth-child(2) { background: #febc2e; }
+  .bw-window:hover .bw-traffic > *:nth-child(3) { background: #28c840; }
+}
+@media (hover: none) {
+  .bw-traffic > *:nth-child(1) { background: #ff5f57; }
+  .bw-traffic > *:nth-child(2) { background: #febc2e; }
+  .bw-traffic > *:nth-child(3) { background: #28c840; }
+}
+
+/* Unified toolbar chip inside a window bar (segmented, non-interactive in the
+   marketing artefact). */
+.bw-window-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  min-width: 22px;
+  padding: 0 7px;
+  border-radius: 6px;
+  color: var(--bw-ink-2);
+}
+
+/* The landing's hairline card. Resting elevation is --bw-shadow-1; the hover
+   elevation rides on a pseudo-element's OPACITY (composited) rather than a
+   box-shadow transition (which repaints the whole card every frame). */
+.bw-surface {
+  position: relative;
+  border-radius: var(--bw-radius-panel);
+  background: var(--bw-white);
+  border: 1px solid var(--bw-line-soft);
+  box-shadow: var(--bw-shadow-1);
+  transition: transform 200ms var(--bw-ease-out);
+}
+.bw-surface::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  box-shadow: var(--bw-shadow-2);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms var(--bw-ease-out);
+}
+@media (hover: hover) {
+  .bw-surface:hover { transform: translateY(-2px); }
+  .bw-surface:hover::after { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bw-surface,
+  .bw-surface:hover { transform: none; }
+}
+
+/* REMOVED: `.bw-switch-knob` (the knob shadow of a landing toggle that no longer
+   exists — the app's own switches are styled where they live) and `.bw-mockup-svg`
+   ("crisp rendering of landing SVG mockups": the hand-built mock-up of the app was
+   deleted, and it was the only thing that ever wore this class). */
 
