@@ -6,7 +6,7 @@
  * meters. Canonical CCW ordering and statutory validation happen downstream
  * in siteBoundary.ts / backend site_geometry.py — this module only parses.
  */
-import { projectToLocal, unprojectToLngLat, type LocalOrigin } from './projection';
+import { projectToLocal, type LocalOrigin } from './projection';
 
 export type Vertex = { x: number; y: number };
 
@@ -183,25 +183,3 @@ export function dedupeAndUnclose(pts: { x: number; y: number }[]): Vertex[] {
   return out;
 }
 
-/* ---------------- export ---------------- */
-
-/** Build a GeoJSON Feature of the boundary in WGS84 for export/download. */
-export function verticesToGeoJson(
-  vertices: Vertex[],
-  origin: LocalOrigin,
-  props: Record<string, unknown> = {}
-): { type: 'Feature'; geometry: { type: 'Polygon'; coordinates: [number, number][][] }; properties: Record<string, unknown> } {
-  const ring = [...vertices, vertices[0]].map((v) => {
-    const ll = unprojectToLngLat(v, origin);
-    return [round7(ll.lon), round7(ll.lat)] as [number, number];
-  });
-  return {
-    type: 'Feature',
-    geometry: { type: 'Polygon', coordinates: [ring] },
-    properties: { ...props },
-  };
-}
-
-function round7(v: number): number {
-  return Math.round(v * 1e7) / 1e7;
-}

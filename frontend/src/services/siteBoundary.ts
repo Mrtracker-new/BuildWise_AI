@@ -352,9 +352,6 @@ export interface SharedBoundaryState {
   frontageEdgeIndex: number | null;
 }
 
-export function emptyBoundary(): SharedBoundaryState {
-  return { vertices: [], origin: { lat: 0, lon: 0 }, source: 'trace', frontageEdgeIndex: null };
-}
 
 /**
  * THE funnel: every capture path passes here. Canonicalizes (CCW), classifies,

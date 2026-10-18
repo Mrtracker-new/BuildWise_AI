@@ -109,27 +109,6 @@ export function distanceToEdge(vertices: Vertex[], i: number, p: Vertex): number
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 }
 
-/** Midpoint insertion: index = which edge (i -> i+1) contains the point. */
-export function nearestEdgeIndex(vertices: Vertex[], p: Vertex): number {
-  let best = 0;
-  let bestD = Infinity;
-  for (let i = 0; i < vertices.length; i++) {
-    const a = vertices[i];
-    const b = vertices[(i + 1) % vertices.length];
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const len2 = dx * dx + dy * dy;
-    const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2));
-    const px = a.x + t * dx;
-    const py = a.y + t * dy;
-    const d = Math.hypot(p.x - px, p.y - py);
-    if (d < bestD) {
-      bestD = d;
-      best = i;
-    }
-  }
-  return best;
-}
 
 /**
  * Hover pick: the nearest edge ONLY when the pointer is within `maxDistanceM`
