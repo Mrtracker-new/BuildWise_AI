@@ -1,144 +1,154 @@
 /**
- * CtaBand.tsx — closing CTA + footer in the same material language.
- * Left: headline + CTAs. Right: a miniature "Feasibility Dossier" glass
- * card (the print-ready output the platform produces). Footer carries
- * open-data credits — plain text, no dead links.
+ * CtaBand.tsx — the closing band (#blueprint) plus the site footer.
+ *
+ * Left: heading and CTAs. Right: the printable dossier the platform produces,
+ * presented as a second macOS window so the page's two artefacts share one
+ * language — the app you use, and the document it hands you.
+ *
+ * The window body is opaque and unblurred on purpose. This card scrolls over
+ * the fixed porcelain backdrop, where a backdrop-filter is imperceptible while
+ * still re-blurring its own area on every frame of the scroll.
+ *
+ * The footer is a real footer: the standards the product implements and the
+ * sources it consumes, each in its own column, above a baseline row. It
+ * SUMMARISES the #standards section that now sits mid-page — the detail lives
+ * there, and both "Standards" doorways (the nav link and this band's secondary
+ * button) travel to it rather than to the footer that sits directly beneath
+ * this band.
+ *
+ * The three columns are DERIVED from landing/standards.ts, the same module the
+ * sheet renders from: labels and names, no roles and no credit lines. Those
+ * lists used to be typed out here as well, in a different vocabulary from the
+ * sheet's — "IS 1893 seismic zones" against "IS 1893 (Part 1): 2016", and an
+ * imagery column that credited three providers the sheet had merged into one
+ * row. A footer is where people look for the licence line, so it is the last
+ * place that should be able to disagree with the section it summarises.
  */
 import React from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
-import { fadeRise, staggerParent } from './motion';
+import { EASE_APPLE, fadeRise, staggerParent, timed, SETTLE_VIEWPORT } from './motion';
 import { APP_PATH, navigate } from './router';
 import { scrollToId } from './scroll';
 import { Icon } from '../components/Icon';
-import { LANDING, FONT_HAND } from './theme';
-import logoUrl from '../assets/BuildWise_logo_square.png';
+import { SectionHeading } from './SectionHeading';
+import { GROUP_LABELS, GROUP_ORDER, sourcesIn } from './standards';
+import { WindowBar } from './WindowBar';
+import { LANDING } from './theme';
+import { LOGO_SRC, LOGO_SRCSET } from './logo';
 
 const DOSSIER_ROWS: ReadonlyArray<{ label: string; meta: string }> = [
-  { label: 'Executive Scorecard', meta: 'MCDA' },
-  { label: 'Risk Matrix', meta: 'IS 1893' },
-  { label: 'Cost Benchmark', meta: 'CPWD DSR' },
-  { label: 'Vector Blueprint', meta: '174 mm' },
+  { label: 'Executive scorecard', meta: 'MCDA' },
+  { label: 'Risk matrix', meta: 'IS 1893' },
+  { label: 'Cost benchmark', meta: 'CPWD DSR' },
+  { label: 'Vector blueprint', meta: '174 mm' },
 ];
 
-const DossierCheck: React.FC<{ row: { label: string; meta: string }; delay: number }> = ({ row, delay }) => (
-  <motion.li
-    initial={{ opacity: 0, x: -10 }}
-    whileInView={{ opacity: 1, x: 0 }}
-    viewport={{ once: true, amount: 0.6 }}
-    transition={{ duration: 0.55, delay, ease: [0.32, 0.72, 0, 1] }}
-    className="flex items-center justify-between gap-3 rounded-[10px] bg-[rgba(255,255,255,0.72)] px-3 py-2"
-    style={{ border: '1px solid rgba(11,18,32,0.06)' }}
-  >
-    <span className="flex items-center gap-2">
-      <span className="flex h-[16px] w-[16px] items-center justify-center rounded-full bg-[#e3f6e9] text-[#1fa955]" aria-hidden>
-        <svg width="8" height="8" viewBox="0 0 10 10" fill="none">
-          <path d="M1.8 5.2 4 7.4 8.2 2.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </span>
-      <span className="text-[12px] font-semibold text-[#0b1220]">{row.label}</span>
-    </span>
-    <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[#8a93a3]">{row.meta}</span>
-  </motion.li>
-);
+/* ------------------------------------------------------------------ */
+/* #blueprint — the output band                                        */
+/* ------------------------------------------------------------------ */
 
 export const CtaBand: React.FC = () => {
   const reduced = useReducedMotion();
 
   return (
-    <section id="blueprint" aria-label="Get started with BuildWise AI" className="bw-section-defer relative overflow-hidden pb-24 pt-6 sm:pb-28">
-      {/* Ambient accent mesh */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0"
-        style={{
-          background:
-            'radial-gradient(560px 340px at 18% 30%, rgba(47,111,237,0.10), transparent 70%), radial-gradient(640px 380px at 85% 75%, rgba(106,166,255,0.12), transparent 70%)',
-        }}
-      />
-
+    <section id="blueprint" aria-label="Print-ready output" className="relative scroll-mt-24 pb-28 pt-4 sm:pb-32">
       <motion.div
-        variants={reduced ? undefined : staggerParent(0.1)}
+        variants={staggerParent(0.08)}
         initial="hidden"
         whileInView="show"
-        viewport={{ once: true, amount: 0.25 }}
-        className="relative mx-auto grid max-w-6xl items-center gap-10 px-4 sm:px-6 lg:grid-cols-[1.1fr_0.9fr] lg:gap-14 lg:px-10"
+        viewport={SETTLE_VIEWPORT}
+        className="mx-auto grid max-w-7xl items-center gap-12 px-6 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16 lg:px-10"
       >
-        {/* Copy */}
         <div>
-          <motion.p
-            variants={fadeRise}
-            className="text-[12px] font-semibold uppercase text-[#3f4c5f]"
-            style={{ letterSpacing: LANDING.type.trackingEyebrow }}
-          >
-            Print-Ready Output
-          </motion.p>
-          <motion.h2
-            variants={fadeRise}
-            className="mt-3 font-bold text-[#0b1220]"
-            style={{ fontSize: LANDING.type.sectionTitle, letterSpacing: '-0.03em', lineHeight: 1.12 }}
-          >
-            Every analysis becomes a{' '}
-            <span className="bw-gradient-text">buildable dossier</span>.
-          </motion.h2>
-          <motion.p variants={fadeRise} className="mt-4 max-w-lg text-[16px] leading-[1.6] text-[#4b5768]">
-            One click compiles the full report — executive scorecard, risk matrices,
-            CPWD cost benchmark, Vastu notes, and the 174&nbsp;mm vector blueprint.
-          </motion.p>
-          <motion.div variants={fadeRise} className="mt-7 flex flex-wrap items-center gap-3.5">
+          <SectionHeading
+            eyebrow="Output"
+            title="Every analysis becomes a buildable dossier"
+            copy="One click compiles the executive scorecard, risk matrices, the CPWD cost benchmark, Vastu notes, and the 174mm vector blueprint — as a print-ready PDF."
+          />
+
+          <motion.div variants={fadeRise} className="mt-8 flex flex-wrap items-center gap-3">
             <button
               type="button"
               onClick={() => navigate(APP_PATH)}
-              className="group inline-flex h-12 items-center gap-2.5 rounded-full bg-[#0b1220] px-6 text-[15px] font-semibold text-white transition-[transform,background] duration-200 hover:bg-[#17233a] active:scale-[0.97]"
+              className="group inline-flex h-12 items-center gap-2 rounded-full bg-bw-ink px-6 text-[15px] font-semibold text-white transition-[background-color,transform] duration-200 hover:bg-bw-ink-hover active:scale-[0.98]"
               style={{ boxShadow: LANDING.shadow.dark }}
             >
-              Try BuildWise
-              <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-1"><Icon name="arrow-up-right" size={14} className="inline-block -rotate-45" /></span>
+              Open the app
+              <span
+                aria-hidden
+                className="transition-transform duration-200 group-hover:translate-x-1 motion-reduce:transform-none"
+              >
+                <Icon name="chevron-right" size={15} />
+              </span>
             </button>
+            {/* This button used to target the footer — which, from here, is
+                already on screen: measured, it moved the page 121px and read as
+                broken. It points at the #standards section instead, which is
+                the content its label names and is far enough away to be an
+                actual journey. */}
             <button
               type="button"
-              onClick={() => scrollToId('footer')}
-              className="inline-flex h-12 items-center gap-2 rounded-full px-6 text-[15px] font-semibold text-[#0b1220] transition-[transform,background] duration-200 hover:bg-[rgba(255,255,255,0.85)] active:scale-[0.97]"
-              style={{
-                background: 'rgba(255,255,255,0.8)',
-                border: `1px solid ${LANDING.glass.hairline}`,
-                boxShadow: `${LANDING.glass.topLight}, ${LANDING.shadow.card}`,
-              }}
+              onClick={() => scrollToId('standards')}
+              className="inline-flex h-12 items-center rounded-full border border-bw-line bg-white/80 px-5 text-[15px] font-semibold text-bw-ink transition-[background-color,border-color,transform] duration-200 hover:bg-white active:scale-[0.98]"
             >
-              Read the Docs
+              Standards and data
             </button>
           </motion.div>
         </div>
 
-        {/* Mini dossier card */}
+        {/* The dossier, as the window that produces it */}
         <motion.div
-          id="reports"
-          variants={reduced ? undefined : { hidden: { opacity: 0, y: 40, rotate: 1.5 }, show: { opacity: 1, y: 0, rotate: 0, transition: { duration: 1, ease: [0.32, 0.72, 0, 1] } } }}
-          className="relative scroll-mt-28 rounded-[24px] p-4"
-          style={{
-            // No backdrop-filter: the card scrolls over the fixed porcelain
-            // backdrop, where blur is imperceptible but re-blurs per frame.
-            background: 'rgba(255,255,255,0.82)',
-            border: `1px solid rgba(255,255,255,0.7)`,
-            boxShadow: `${LANDING.glass.topLight}, ${LANDING.shadow.float}`,
-          }}
-          aria-label="Preview of the printable feasibility dossier"
+          /* The transition is stated, not inherited: without one this window
+             animated on framer's default spring while the copy beside it moved
+             on the Apple curve, so the two halves of the row arrived with
+             visibly different weight. */
+          variants={
+            reduced
+              ? { hidden: { opacity: 0 }, show: { opacity: 1, transition: timed(0.3) } }
+              : { hidden: { opacity: 0, y: 24 }, show: { opacity: 1, y: 0, transition: timed(0.7) } }
+          }
+          className="bw-window"
         >
-          <div className="flex items-center justify-between px-1 pb-3">
-            <p className="text-[13px] font-bold text-[#0b1220]">Feasibility Dossier</p>
-            <span className="rounded-full bg-[rgba(47,111,237,0.10)] px-2 py-0.5 text-[10.5px] font-bold tabular-nums text-[#2f6fed]">
-              Score 87
-            </span>
-          </div>
-          <ul className="flex flex-col gap-1.5">
-            {DOSSIER_ROWS.map((row, i) => (
-              <DossierCheck key={row.label} row={row} delay={0.15 + i * 0.1} />
-            ))}
-          </ul>
-          <div className="mt-3 flex items-center justify-between rounded-[12px] bg-[rgba(11,18,32,0.04)] px-3 py-2">
-            <span className="text-[11px] font-semibold text-[#4b5768]">PDF · Vector drawings · Room schedule</span>
-            <span aria-hidden style={{ fontFamily: FONT_HAND }} className="text-[15px] font-semibold text-[#2f6fed]">
-              ready to print
-            </span>
+          <WindowBar
+            title="Feasibility Dossier"
+            subtitle="Bengaluru · 2,450 m²"
+            toolbar={
+              <span className="bw-window-chip gap-1.5">
+                <span className="text-[10.5px] font-bold tabular-nums text-bw-accent">87</span>
+                <span className="text-[10.5px] font-semibold uppercase text-bw-ink-3" style={{ letterSpacing: '0.06em' }}>
+                  score
+                </span>
+              </span>
+            }
+          />
+
+          <div className="rounded-b-[14px] bg-bw-porcelain p-3.5">
+            <ul className="flex flex-col gap-1.5">
+              {DOSSIER_ROWS.map((row, i) => (
+                <motion.li
+                  key={row.label}
+                  initial={{ opacity: 0, x: -8 }}
+                  whileInView={{ opacity: 1, x: 0 }}
+                  viewport={{ once: true, amount: 0.6 }}
+                  transition={{ duration: 0.45, delay: i * 0.07, ease: EASE_APPLE }}
+                  className="flex items-center justify-between gap-3 rounded-[9px] border border-bw-line-soft bg-white px-3 py-2"
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-bw-accent-tint text-bw-accent" aria-hidden>
+                      <Icon name="check" size={10} strokeWidth={2.4} />
+                    </span>
+                    <span className="text-[12.5px] font-semibold text-bw-ink">{row.label}</span>
+                  </span>
+                  <span className="text-[10.5px] font-semibold uppercase text-bw-ink-3" style={{ letterSpacing: '0.08em' }}>
+                    {row.meta}
+                  </span>
+                </motion.li>
+              ))}
+            </ul>
+            <p className="mt-3 flex items-center justify-between rounded-[9px] px-1 text-[11.5px] text-bw-ink-3">
+              <span>PDF · Vector drawings · Room schedule</span>
+              <span className="font-semibold text-bw-green-ink">Ready to print</span>
+            </p>
           </div>
         </motion.div>
       </motion.div>
@@ -147,27 +157,70 @@ export const CtaBand: React.FC = () => {
 };
 
 /* ------------------------------------------------------------------ */
+/* Footer — the closing summary and provenance credits                 */
+/* ------------------------------------------------------------------ */
 
 export const Footer: React.FC = () => (
-  <footer id="footer" className="bw-section-defer border-t border-[rgba(11,18,32,0.08)] bg-white/70">
-    <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-10">
-      <div className="flex flex-col items-start justify-between gap-6 sm:flex-row sm:items-center">
-        <div className="flex items-center gap-3">
-          <img src={logoUrl} alt="BuildWise AI logo" width={34} height={34} className="rounded-[9px]" decoding="async" />
-          <div>
-            <p className="text-[14px] font-bold text-[#0b1220]">BuildWise AI</p>
-            <p className="text-[12px] text-[#6b7787]">From a map pin to a buildable plan.</p>
+  <footer id="footer" className="scroll-mt-24 border-t border-bw-line-soft bg-white/70">
+    <div className="mx-auto max-w-7xl px-6 py-14 lg:px-10">
+      <div className="grid gap-10 lg:grid-cols-[1.2fr_1fr_1fr_1fr]">
+        <div>
+          <div className="flex items-center gap-2.5">
+            <img
+              src={LOGO_SRC}
+              srcSet={LOGO_SRCSET}
+              alt=""
+              width={30}
+              height={30}
+              className="rounded-[8px]"
+              decoding="async"
+            />
+            <p className="text-[15px] font-bold text-bw-ink">BuildWise AI</p>
           </div>
+          <p className="mt-3 max-w-xs text-[13px] leading-[1.6] text-bw-ink-2">
+            Geo-based site feasibility and construction planning. From a map pin to a buildable plan,
+            without a paid API in the path.
+          </p>
+          <button
+            type="button"
+            onClick={() => navigate(APP_PATH)}
+            className="group mt-5 inline-flex h-9 items-center gap-1.5 rounded-full border border-bw-line bg-white px-4 text-[13px] font-semibold text-bw-ink transition-[background-color,border-color] duration-200 hover:bg-bw-line-soft"
+          >
+            Open the app
+            <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-0.5 motion-reduce:transform-none">
+              <Icon name="chevron-right" size={13} />
+            </span>
+          </button>
         </div>
-        <p className="max-w-md text-[12px] leading-[1.6] text-[#6b7787]">
-          Built on open infrastructure — OpenStreetMap contributors · USGS ·
-          Open-Meteo · Esri World Imagery. Press <kbd className="rounded-[5px] border border-[rgba(11,18,32,0.12)] bg-white px-1.5 py-0.5 text-[10px] font-semibold text-[#4b5768]">?</kbd>{' '}
+
+        {/* The index of the #standards sheet: one column per group, in the
+            sheet's own order, showing the names without the roles and credits
+            the sheet renders in full. */}
+        {GROUP_ORDER.map((group) => (
+          <div key={group}>
+            <p className="text-[10.5px] font-semibold uppercase text-bw-ink-2" style={{ letterSpacing: '0.14em' }}>
+              {GROUP_LABELS[group]}
+            </p>
+            <ul className="mt-3 flex flex-col gap-2">
+              {sourcesIn(group).map((source) => (
+                <li key={source.name} className="text-[13px] leading-[1.5] text-bw-ink-2">
+                  {source.name}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-12 flex flex-col gap-3 border-t border-bw-line-soft pt-6 text-[12px] text-bw-ink-2 sm:flex-row sm:items-center sm:justify-between">
+        <p>© 2026 BuildWise AI · MIT License</p>
+        <p>
+          Press{' '}
+          <kbd className="rounded-[5px] border border-bw-line bg-white px-1.5 py-0.5 text-[10.5px] font-semibold text-bw-ink-2">
+            ?
+          </kbd>{' '}
           inside the app for keyboard shortcuts.
         </p>
-      </div>
-      <div className="mt-8 flex flex-col gap-2 border-t border-[rgba(11,18,32,0.06)] pt-5 text-[12px] text-[#8a93a3] sm:flex-row sm:items-center sm:justify-between">
-        <p>© 2026 BuildWise AI · MIT License</p>
-        <p>IS 1893 · NBC 2016 · CPWD DSR — deterministic civil core</p>
       </div>
     </div>
   </footer>

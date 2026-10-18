@@ -1,81 +1,95 @@
 /**
- * FeatureStrip.tsx — six platform capabilities as a hairline-divided
- * strip. Icon tiles carry a macOS-Dock-style neighbor magnification:
- * tiles nearest the pointer scale up with springs (fine pointers only,
- * disabled under reduced motion).
+ * FeatureStrip.tsx — the platform's six capabilities.
+ *
+ * Rewritten from a hairline-divided single-row strip into a card grid, for two
+ * reasons:
+ *
+ *  1. PERFORMANCE. The old strip ran a macOS-Dock magnification: every tile
+ *     read `getBoundingClientRect()` inside a `useTransform` fed by the
+ *     pointer's x position, so a single pointer move across the strip forced up
+ *     to six synchronous layouts — the classic layout-thrash pattern, and it
+ *     fired on every mouse move over the section. Hover feedback is now a CSS
+ *     transform on the hovered card only (see `.bw-surface`), which is
+ *     compositor work, not layout work.
+ *  2. LEGIBILITY. Six equal columns put ~180px of text under each 11px tile
+ *     and broke every title onto two lines. Three columns let each capability
+ *     state its title once and keep its sentence on two lines, and every card
+ *     carries the standard or method it rests on, which is what a technical
+ *     reader is scanning for.
  */
-import React, { useRef } from 'react';
-import {
-  motion,
-  useMotionValue,
-  useReducedMotion,
-  useSpring,
-  useTransform,
-  type MotionValue,
-} from 'framer-motion';
-import { fadeRise, staggerParent } from './motion';
-import { useFinePointer } from './hooks';
+import React from 'react';
+import { motion } from 'framer-motion';
+import { fadeRise, staggerParent, SETTLE_VIEWPORT } from './motion';
+import { SectionHeading } from './SectionHeading';
 
 interface Feature {
   title: string;
   copy: string;
+  /** The standard, method or artefact behind the capability. */
+  meta: string;
   icon: React.ReactNode;
 }
 
 const FEATURES: ReadonlyArray<Feature> = [
   {
-    title: 'Land Suitability',
-    copy: 'Multi-criteria analysis using topography, land use, and environmental data.',
+    title: 'Land suitability',
+    meta: 'MCDA',
+    copy: 'Multi-criteria scoring over topography, land use, and environmental data, with the weightings disclosed.',
     icon: (
-      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <path d="M8 3l4 8 5-5 5 15H2L8 3z" />
       </svg>
     ),
   },
   {
-    title: 'Seismic & Flood Analysis',
-    copy: 'Risk assessment using IS 1893, flood models, and real-world geospatial data.',
+    title: 'Seismic and flood risk',
+    meta: 'IS 1893',
+    copy: 'Zone and inundation stress from the code plus historical event and river-discharge telemetry.',
     icon: (
-      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <polyline points="2 14 6 14 9 6 14 22 17 14 22 14" />
         <path d="M3 9c2-1.6 3.4-1.6 5.4 0M15.6 9c2-1.6 3.4-1.6 5.4 0" opacity="0.7" />
       </svg>
     ),
   },
   {
-    title: 'Cost Estimation',
-    copy: 'Accurate construction cost benchmarks from CPWD DSR.',
+    title: 'Cost estimation',
+    meta: 'CPWD DSR',
+    copy: 'Benchmarked construction cost by elemental head, with terrain and quality surcharges shown separately.',
     icon: (
-      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <path d="M6 3h12M6 8h12M6 13l8.5 8M6 13h3M9 13c6.667 0 6.667-10 0-10" />
       </svg>
     ),
   },
   {
-    title: 'Vastu Guidance',
-    copy: 'Orientation and spatial planning for harmonious design.',
+    title: 'Vastu orientation',
+    meta: '9-zone mandala',
+    copy: 'Orientation and placement guidance scored per zone, alongside the solar and wind bearings that drive it.',
     icon: (
-      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <circle cx="12" cy="12" r="9" />
         <polygon points="15.5 8.5 13.6 13.6 8.5 15.5 10.4 10.4 15.5 8.5" />
       </svg>
     ),
   },
   {
-    title: 'Generative Blueprints',
-    copy: 'AI-assisted architectural floor plans with practical placement rules.',
+    title: 'Generative blueprints',
+    meta: 'Spatial CSP',
+    copy: 'Floor plans solved against a placement knowledge base and non-negotiable topological invariants.',
     icon: (
-      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <rect x="3" y="3" width="18" height="18" rx="2" />
         <path d="M3 9h18M9 21V9M15 9v12" />
       </svg>
     ),
   },
   {
-    title: 'Print-Ready Reports',
-    copy: 'Complete PDF dossiers with analysis, drawings, and recommendations.',
+    title: 'Print-ready dossier',
+    meta: 'Vector PDF',
+    copy: 'One click compiles the scorecard, risk matrices, benchmarks, and a 174mm vector blueprint.',
     icon: (
-      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <polyline points="6 9 6 2 18 2 18 9" />
         <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
         <rect x="6" y="14" width="12" height="8" rx="1" />
@@ -84,75 +98,43 @@ const FEATURES: ReadonlyArray<Feature> = [
   },
 ];
 
-const DockTile: React.FC<{
-  feature: Feature;
-  mx: MotionValue<number>;
-  enabled: boolean;
-}> = ({ feature, mx, enabled }) => {
-  const ref = useRef<HTMLDivElement>(null);
-
-  const distance = useTransform(mx, (v: number) => {
-    const rect = ref.current?.getBoundingClientRect();
-    if (!rect || v === Infinity) return Infinity;
-    return Math.abs(v - (rect.left + rect.width / 2));
-  });
-  const range = enabled ? [0, 180, 380] : [0, 380, Infinity];
-  const scaleSrc = useTransform(distance, range, enabled ? [1.1, 1.035, 1] : [1, 1, 1]);
-  const ySrc = useTransform(distance, range, enabled ? [-6, -2, 0] : [0, 0, 0]);
-  const scale = useSpring(scaleSrc, { stiffness: 300, damping: 28, mass: 1 });
-  const y = useSpring(ySrc, { stiffness: 300, damping: 28, mass: 1 });
-
-  return (
-    <motion.article
-      variants={fadeRise}
-      className="group relative flex flex-col items-start gap-3 px-5 py-6 text-left lg:px-6"
-      style={enabled ? { scale, y } : undefined}
-    >
+/* The card inherits the page's one reveal (fadeRise) instead of describing its
+   own — the old version carried a hand-written `{opacity, y}` pair with no
+   transition at all, so its timing was framer's default spring while every
+   other surface on the page moved on the Apple curve. */
+const CapabilityCard: React.FC<{ feature: Feature }> = ({ feature }) => (
+  <motion.article variants={fadeRise} className="bw-surface p-5">
+    <div className="flex items-start justify-between gap-3">
       <span
         aria-hidden
-        className="flex h-11 w-11 items-center justify-center rounded-[13px] text-white transition-shadow duration-300"
-        style={{
-          background: 'linear-gradient(135deg, #46608c 0%, #6e88b8 100%)',
-          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 18px -6px rgba(70,96,140,0.55)',
-        }}
+        className="flex h-9 w-9 items-center justify-center rounded-[10px] border border-bw-line-soft bg-bw-accent-tint text-bw-accent"
       >
-        <span className="transition-transform duration-300 group-hover:scale-[1.06]">{feature.icon}</span>
+        {feature.icon}
       </span>
-      <h3 className="text-[15px] font-bold tracking-[-0.015em] text-[#0b1220]">{feature.title}</h3>
-      <p className="text-[13px] leading-[1.55] text-[#5b6779]">{feature.copy}</p>
-      {/* Hover glow */}
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-0 rounded-[18px] opacity-0 transition-opacity duration-300 group-hover:opacity-100"
-        style={{ boxShadow: '0 18px 40px -18px rgba(47,111,237,0.35), inset 0 0 0 1px rgba(47,111,237,0.14)' }}
-      />
-    </motion.article>
-  );
-};
+      <span className="mt-1 text-[10.5px] font-semibold uppercase text-bw-ink-3" style={{ letterSpacing: '0.1em' }}>
+        {feature.meta}
+      </span>
+    </div>
+    <h3 className="mt-4 text-[15px] font-bold tracking-[-0.015em] text-bw-ink">{feature.title}</h3>
+    <p className="mt-1.5 text-[13.5px] leading-[1.55] text-bw-ink-2">{feature.copy}</p>
+  </motion.article>
+);
 
-export const FeatureStrip: React.FC = () => {
-  const reduced = useReducedMotion();
-  const fine = useFinePointer();
-  const dockEnabled = fine && !reduced;
-  const mx = useMotionValue(Infinity);
-
-  return (
-    <section id="analysis" aria-label="Platform capabilities" className="bw-section-defer relative py-16 sm:py-20">
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-10">
-        <motion.div
-          variants={reduced ? undefined : staggerParent(0.06)}
-          initial="hidden"
-          whileInView="show"
-          viewport={{ once: true, amount: 0.2 }}
-          onPointerMove={dockEnabled ? (e) => mx.set(e.clientX) : undefined}
-          onPointerLeave={dockEnabled ? () => mx.set(Infinity) : undefined}
-          className="grid grid-cols-1 divide-y divide-[rgba(11,18,32,0.08)] sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 xl:divide-x xl:divide-y-0"
-        >
+export const FeatureStrip: React.FC = () => (
+  <section id="capabilities" aria-label="Platform capabilities" className="relative scroll-mt-24 py-24 sm:py-28">
+    <div className="mx-auto max-w-7xl px-6 lg:px-10">
+      <motion.div variants={staggerParent(0.06)} initial="hidden" whileInView="show" viewport={SETTLE_VIEWPORT}>
+        <SectionHeading
+          eyebrow="Capabilities"
+          title="Six analyses behind every pin"
+          copy="The same run produces suitability, hazard, cost, orientation, and a buildable plan — grounded in Indian code and open data."
+        />
+        <div className="mt-10 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {FEATURES.map((f) => (
-            <DockTile key={f.title} feature={f} mx={mx} enabled={dockEnabled} />
+            <CapabilityCard key={f.title} feature={f} />
           ))}
-        </motion.div>
-      </div>
-    </section>
-  );
-};
+        </div>
+      </motion.div>
+    </div>
+  </section>
+);
