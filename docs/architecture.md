@@ -70,7 +70,7 @@ graph TD
         KB[placement/kb.py - Architect Rules]
         VAL[placement/validator.py - Auto-Repair Engine]
         REAS[placement_reasoner.py - Placement AI]
-        CSP[dissection_engine.py - Slicing Tree Solver]
+        CSP[csp_engine.py - Backtracking CSP Solver]
         CRIT[layout_critic.py - Architectural QA Gate]
     end
 
@@ -164,7 +164,7 @@ backend/app/
 ├── services/                    # Civil engineering calculation core
 │   ├── floorplan/               # Continuous geometry floor plan engine
 │   │   ├── constraints.py       # QA gate & adjacency prohibition matrix
-│   │   ├── dissection_engine.py # Guillotine slicing & reference templates
+│   │   ├── engine.py            # Sole geometry engine (envelope-first)
 │   │   ├── floorplan_service.py # Floor plan orchestration service
 │   │   └── grid_model.py        # NBC 2016 room area catalog
 │   ├── cost_service.py          # CPWD plinth area cost schedule
