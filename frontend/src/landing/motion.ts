@@ -170,15 +170,6 @@ export const ruleDraw: RevealPair = {
   show: { scaleX: 1, transition: timed(0.7) },
 };
 
-/** Pop-in for small elements (chips, dots, badges). */
-export const popIn: Variants = {
-  hidden: { opacity: 0, scale: 0.6 },
-  show: { opacity: 1, scale: 1, transition: SPRING_INTERACTIVE },
-};
-
-/** whileInView viewport config: reveal once, at 20–25% visibility. */
-export const IN_VIEW_ONCE = { once: true, amount: 0.2 } as const;
-
 /**
  * Viewport for below-fold reveals: fire once, when the element's TOP edge
  * crosses 74% of the viewport height.

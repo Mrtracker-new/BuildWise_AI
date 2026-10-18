@@ -27,7 +27,7 @@
  * reports its SETTLED end (1) rather than 0, so every consumer renders its
  * finished state and there is nothing left to animate.
  */
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo } from 'react';
 import type { RefObject } from 'react';
 import {
   useMotionValue,
@@ -250,29 +250,3 @@ export function useLatch(progress: MotionValue<number>): MotionValue<number> {
   return latched;
 }
 
-/**
- * A translate-only rise for a large artefact (the product window), scrubbed by
- * the element's own entry.
- *
- * WHY NO FADE AND NO SCALE, when the timed entrance it replaced had both:
- *  - A 700px window is legible across its whole height before it is finished
- *    rising, so fading it means the reader's first sight of the product is a
- *    half-transparent product. Translation alone leaves it fully readable the
- *    entire way in.
- *  - Scale re-rasterizes the layer: a 1280px window of 11px text at 98.5% is
- *    re-rendered every frame of its arrival to stay crisp, which is a full
- *    re-raster of the largest element on the page. Translating the same layer
- *    is one composite.
- *
- * Whole pixels again (see `useDrift`): resampled 1px hairlines and 11px type
- * lose their snap at fractional offsets.
- */
-export function useEntryRise(distance: number): {
-  ref: RefObject<HTMLDivElement | null>;
-  y: MotionValue<number>;
-} {
-  const ref = useRef<HTMLDivElement>(null);
-  const progress = useEntryProgress(ref);
-  const y = useTransform(progress, (v) => Math.round((1 - v) * distance));
-  return { ref, y };
-}
