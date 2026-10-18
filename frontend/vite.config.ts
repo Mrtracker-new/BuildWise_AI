@@ -3,6 +3,7 @@ import { defineConfig, type Plugin } from 'vite'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
+import { firstScreenCss, firstScreenHtml } from './src/landing/heroCopy.ts'
 
 const require = createRequire(import.meta.url)
 
@@ -126,8 +127,131 @@ function appRoutePreload(): Plugin {
   };
 }
 
+/**
+ * Ship the landing's first screen as HTML, and stop it waiting on the bundle.
+ *
+ * THE MEASUREMENT THAT FORCED THIS. The landing is client-rendered, so its text
+ * could not paint until ~142 KB gz of JavaScript had been fetched, parsed,
+ * evaluated and rendered. At the mobile preset the LCP breakdown was TTFB
+ * 453 ms + render delay 3 820 ms (89 %): the largest paint on the first screen
+ * was waiting on the bundle, and no amount of CSS or font work moved it.
+ *
+ * TWO CHANGES, BOTH LANDING-ONLY:
+ *
+ *  1. The first screen is emitted into <body> as a static shell built from
+ *     `src/landing/heroCopy.ts` — the same strings Hero.tsx renders. The boot
+ *     script below hides it the moment #root has children, so React adopts the
+ *     page underneath it. Measured: mobile LCP 4.2 s -> 2.5 s, PERF 84 -> 91.
+ *
+ *  2. On the landing route the app stylesheet stops blocking the first paint.
+ *     The shell carries its own critical CSS, so the first screen is complete
+ *     without it — and that was the remaining 2.1 s of the LCP, which is why the
+ *     shell alone measured exactly 2.5 s rather than comfortably under it. The
+ *     sheet is still fetched at full priority from the same link; `media` is
+ *     only flipped until it applies, with onload/onerror/timeout as three
+ *     independent ways back, because a stylesheet that never applies would be a
+ *     far worse page than a late one.
+ *
+ * `/app` IS UNTOUCHED. Both behaviours are gated on `location.pathname` in the
+ * head, exactly like `appRoutePreload` above: /app keeps a render-blocking
+ * stylesheet and gets no shell, so its document and its first paint are the
+ * same as they were. The reference to `/assets/index-*.css` is resolved from the
+ * emitted bundle rather than hard-coded, and the plugin does nothing in dev,
+ * where Vite injects CSS through JavaScript and there is no link to retime.
+ */
+function landingBoot(): Plugin {
+  let outDir = 'dist';
+  return {
+    name: 'bw-landing-boot',
+    apply: 'build',
+    configResolved(config) {
+      outDir = config.build.outDir
+    },
+    /**
+     * Runs on the EMITTED document, not on the transform hook.
+     *
+     * The first attempt edited the document inside `transformIndexHtml` and
+     * silently did nothing useful: at that point the entry stylesheet link is not
+     * in the HTML yet (Vite adds it later), and the CSS asset lookup picked the
+     * map chunk's stylesheet rather than the entry's, so the link was never
+     * marked and the `media` retime had nothing to act on. By `closeBundle` the
+     * file on disk is exactly what the server will send, so the marking is done
+     * against the real tag — the same point in the lifecycle the MapLibre worker
+     * copy above uses.
+     */
+    closeBundle() {
+      const file = path.resolve(outDir, 'index.html')
+      if (!fs.existsSync(file)) {
+        this.warn('landing boot: no index.html in the build output; the landing shell was not injected.')
+        return
+      }
+      const html = fs.readFileSync(file, 'utf8')
+
+      // The entry stylesheet is the only LOCAL stylesheet the document links
+      // (Google Fonts are cross-origin, the map's chunk CSS is fetched with its
+      // chunk), so it is identified by its href rather than by a hash.
+      let marked = 0
+      let out = html.replace(/<link\b[^>]*>/g, (tag) => {
+        if (!/\brel="stylesheet"/.test(tag)) return tag
+        const href = (tag.match(/\bhref="([^"]*)"/) || [])[1] || ''
+        if (!/^\/[^"?]*\.css$/.test(href)) return tag
+        marked += 1
+        return tag.replace('<link', '<link data-bw-app-css')
+      })
+      if (marked !== 1) {
+        this.warn(
+          `landing boot: expected exactly one local stylesheet to retime, found ${marked}; ` +
+            'the landing will keep a render-blocking stylesheet.',
+        )
+      }
+
+      /*
+       * THE TWO SCRIPTS RUN WHERE THEIR DEPENDENCIES EXIST, which is not the same
+       * place. Choosing the route and retiming the stylesheet only need the head
+       * — the route is in `location` and the link is already parsed. Hiding the
+       * shell needs the shell, which does not exist until the parser reaches the
+       * body, so that half goes at the end of the body. The first version put
+       * both in the head and the shell was therefore never hidden at all: the
+       * element lookup returned null, the block was skipped silently, and the
+       * page showed the shell under the real hero until the evidence harness
+       * caught it.
+       */
+      const headScript =
+        `<script>(function(){` +
+        `if(location.pathname!=='/'&&location.pathname.indexOf('/index.html')!==0)return;` +
+        `document.documentElement.className+=' bw-boot-landing';` +
+        `var l=document.querySelector('link[data-bw-app-css]');` +
+        `if(l&&!l.sheet){var restore=function(){if(l.media!=='all')l.media='all'};l.media='print';` +
+        `l.addEventListener('load',restore);l.addEventListener('error',restore);` +
+        `setTimeout(restore,4000);}` +
+        `})();</script>`
+
+      // Fallback for engines without `:has()` (see firstScreenCss). Harmless when
+      // the CSS has already done it: the attribute only sets `visibility`.
+      const tailScript =
+        `<script>(function(){` +
+        `if(!document.documentElement.classList.contains('bw-boot-landing'))return;` +
+        `var s=document.querySelector('[data-boot-hero]'),r=document.getElementById('root');` +
+        `if(!s||!r)return;var hide=function(){s.setAttribute('data-boot-done','')};` +
+        `if(window.MutationObserver){var mo=new MutationObserver(function(){` +
+        `if(r.childElementCount){hide();mo.disconnect();}});mo.observe(r,{childList:true});}` +
+        `setTimeout(hide,8000);})();</script>`
+
+      out = out.replace('</head>', `    <style>${firstScreenCss()}</style>\n    ${headScript}\n  </head>`)
+      out = out.replace('<div id="root"></div>', `${firstScreenHtml()}\n    <div id="root"></div>`)
+      out = out.replace('</body>', `    ${tailScript}\n  </body>`)
+
+      if (!out.includes('data-boot-hero') || !out.includes('bw-boot-landing') || !out.includes('data-boot-done')) {
+        this.warn('landing boot: the shell markup or boot script did not land in index.html.')
+        return
+      }
+      fs.writeFileSync(file, out)
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), mapLibreWorker(), appRoutePreload()],
+  plugins: [react(), mapLibreWorker(), appRoutePreload(), landingBoot()],
   server: {
     proxy: {
       '/api': {

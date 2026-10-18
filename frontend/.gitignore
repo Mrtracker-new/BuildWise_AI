@@ -10,6 +10,10 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+
+# Dev-only, isolated audit tooling + its artifacts (never part of the app)
+.audit-tools/
+.audit/
 # Production builds emitted by the perf rig (minified + symbol-attribution)
 dist-*
 *.local

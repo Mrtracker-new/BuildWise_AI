@@ -19,6 +19,30 @@ export default {
         xl: '1440px',
       },
       colors: {
+        /* Landing (marketing) palette. Mirrors the --bw-* custom properties in
+           index.css, which are the single source of the landing's colours:
+           naming them here lets the JSX say `text-bw-ink` / `border-bw-line`
+           instead of repeating hex literals that the token lint (rightly)
+           counts against every file. */
+        bw: {
+          porcelain: 'var(--bw-porcelain-1)',
+          'porcelain-2': 'var(--bw-porcelain-2)',
+          surface: 'var(--bw-white)',
+          ink: 'var(--bw-ink)',
+          'ink-hover': 'var(--bw-ink-hover)',
+          'ink-2': 'var(--bw-ink-2)',
+          'ink-3': 'var(--bw-ink-3)',
+          accent: 'var(--bw-accent)',
+          'accent-deep': 'var(--bw-accent-deep)',
+          'accent-tint': 'var(--bw-accent-tint)',
+          green: 'var(--bw-green)',
+          'green-ink': 'var(--bw-green-ink)',
+          amber: 'var(--bw-amber)',
+          'amber-ink': 'var(--bw-amber-ink)',
+          line: 'var(--bw-line)',
+          'line-soft': 'var(--bw-line-soft)',
+          glass: 'var(--bw-glass)',
+        },
         apple: {
           panel: 'var(--panel)',
           border: 'var(--panel-border)',
