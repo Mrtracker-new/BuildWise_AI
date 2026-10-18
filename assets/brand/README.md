@@ -30,9 +30,9 @@ These master assets are automatically consumed and mirrored in the following app
   - `icon-192.png`, `icon-512.png`: PWA manifest web app icons.
   - `brand/`: Public static asset folder for direct web consumption.
 
-- **Frontend Source (`frontend/src/assets/`):**
-  - Bundled brand assets for Vite/React imports (`AppHeader.tsx`, etc.).
+- **Frontend Source (`frontend/src/assets/`):** only the sizes the app actually imports.
   - `BuildWise_logo_square_32.png`, `BuildWise_logo_square_96.png`: Lanczos derivatives of the 512 px master, for the marketing landing's brandmark, which is drawn at 26–30 CSS px. `frontend/src/landing/logo.ts` serves them as `1x`/`3x` through one shared `srcset`; the master is not used there because a Lighthouse run measured 114 KB of wasted image bytes against that element.
+  - The full-size masters are **not** duplicated here: components reference `/brand/…` from `frontend/public/`, and the canonical files are this directory.
 
 - **Backend PDF Engine (`backend/app/assets/brand/`):**
   - High-resolution vector/raster logo embedded into the executive summary header of generated ReportLab PDF reports.
