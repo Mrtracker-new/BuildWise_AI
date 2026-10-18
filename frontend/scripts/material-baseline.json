@@ -1,0 +1,19 @@
+{
+  "note": "Pinned blur/translucency ledger. Regenerate with: node scripts/lint_material.cjs --update",
+  "surfaces": [
+    "src/components/BlueprintViewer.tsx:1199",
+    "src/components/map/CaptureSheet.tsx:1458",
+    "src/components/map/CaptureSheet.tsx:1512",
+    "src/components/map/CaptureSheet.tsx:1533",
+    "src/components/MethodologyModal.tsx:28",
+    "src/components/ReportSheet.tsx:764",
+    "src/components/ReportSheet.tsx:765",
+    "src/components/SiteMoveDialog.tsx:47",
+    "src/design/primitives.tsx:629",
+    "src/index.css :: .apple-map-popup .maplibregl-popup-content",
+    "src/index.css :: .bw-nav",
+    "src/index.css :: .vibrancy-hud",
+    "src/index.css :: .vibrancy-panel",
+    "src/index.css :: .vibrancy-pill"
+  ]
+}
