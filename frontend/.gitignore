@@ -16,6 +16,8 @@ dist-ssr
 .audit/
 # Production builds emitted by the perf rig (minified + symbol-attribution)
 dist-*
+# Output of `npm run audit:ui` (regenerated on every run; never a source file)
+scripts/audit_report.json
 *.local
 .env
 .env.*
