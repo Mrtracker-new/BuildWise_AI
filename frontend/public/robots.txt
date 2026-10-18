@@ -1,0 +1,13 @@
+# BuildWise AI
+#
+# `/preview/` holds unlinked design prototypes. They are excluded here as well as
+# by a `robots` meta tag set when the route mounts, because a prototype that is
+# reachable only by someone we hand the URL to must not be reachable by a crawler
+# that follows nothing.
+
+User-agent: *
+Disallow: /preview/
+
+# The product and the marketing page are both public and both indexable.
+Allow: /
+Allow: /app
