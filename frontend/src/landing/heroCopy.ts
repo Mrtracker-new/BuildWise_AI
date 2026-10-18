@@ -1,0 +1,147 @@
+/**
+ * landing/heroCopy.ts — the hero's first screen, as data.
+ *
+ * ONE SOURCE, TWO RENDERERS. The strings below are rendered twice: by React in
+ * Hero.tsx once the landing route has mounted, and by the BUILD, into
+ * index.html as a static shell (the `bw-landing-boot` plugin in vite.config.ts).
+ * They live here rather than inline in the JSX so the two renderers cannot drift
+ * — a headline edited in one place and not the other would show as a visible
+ * text change the moment React replaced the shell.
+ *
+ * WHY A STATIC SHELL EXISTS AT ALL. The landing is a client-rendered SPA, so
+ * nothing in it can paint until ~142 KB gz of JavaScript has been downloaded,
+ * parsed, evaluated and rendered. Measured on the mobile preset: FCP 1.7 s, and
+ * an LCP of 4.2 s whose breakdown was TTFB 453 ms + **render delay 3 820 ms
+ * (89 %)**. The largest paint on the first screen was waiting on the bundle.
+ * The shell is the first screen shipped as HTML, so it paints with the document
+ * and React adopts the page underneath it; the plugin hides the shell the moment
+ * #root has children, and until then it is the hero.
+ *
+ * WHAT THE SHELL IS NOT. It is not a second design. `firstScreenCss()` is
+ * generated from the same tokens Hero.tsx uses, so the two paints are the same
+ * pixels; the shell is absolutely positioned and out of flow, so its removal
+ * cannot shift anything (CLS stays a property of the reserved boxes). And it
+ * carries no focusable nodes, so it cannot add a tab stop.
+ *
+ * HIDDEN BY DEFAULT, REVEALED BY ROUTE. index.html is one document serving both
+ * `/` and `/app`, so the shell is in the HTML for both — which means the default
+ * state has to be `display: none` and the LANDING route has to be what turns it
+ * on. The alternative (visible by default, hidden on the landing) would have put
+ * a marketing hero on top of the application for every /app visitor. The switch
+ * is the `bw-boot-landing` class the boot script adds to <html> in the head, on
+ * `/` only, before anything paints.
+ */
+/* `./theme.ts` carries its extension on purpose: this module is also imported by
+   vite.config.ts, which is typechecked under `moduleResolution: nodenext` and
+   therefore requires explicit extensions. theme.ts itself imports nothing, so
+   the chain stops there and no other import in the landing has to change. */
+import { LANDING } from './theme.ts';
+
+/** The first screen's copy. Whitespace-significant characters are explicit. */
+export const HERO_COPY = {
+  eyebrow: 'Geo-based site feasibility',
+  headlineFirst: 'From a map pin',
+  /**
+   * The LEADING SPACE IS LOAD-BEARING. Each headline fragment is its own
+   * `display: block` span, so at the end of a line a space would be collapsed
+   * away visually — but `textContent` (what a screen reader reads, and what
+   * selecting the headline to copy produces) contains no line break at all, and
+   * without it the H1 announces and copies as "From a map pinto a buildable
+   * plan." The landing audit's own heading extraction printed exactly that. A
+   * block-level leading space collapses under `white-space: normal`, so this
+   * changes nothing that is rendered.
+   */
+  headlineSecondLead: ' to a ',
+  headlineSecondAccent: 'buildable plan',
+  headlineSecondTrail: '.',
+  /**
+   * The closing clause used to be "a 174 mm vector floor plan". That number came
+   * from the old hand-built mock-up, not from the engine (Phase A's F-20 flagged it
+   * as an invented specific), and it is the kind of figure a reader reasonably reads
+   * as a real wall thickness. The claim that survives is the one the product
+   * actually makes: the plan is DIMENSIONED. No count is printed here, so there is
+   * no figure for this line to get wrong — the certified counts and the generation
+   * they came from live in the generated `landing/heroMassing.ts`, beside the
+   * geometry they describe.
+   */
+  subcopy:
+    'For architects, builders and landowners: draw your plot on the map and BuildWise returns a ' +
+    'buildable dossier — land suitability, IS 1893 seismic and flood risk, CPWD cost benchmarks, ' +
+    'Vastu orientation, and a\u00a0dimensioned vector floor plan you can hand to a contractor.',
+} as const;
+
+/** Display stack, mirroring FONT_DISPLAY in theme.ts (the landing's `font-sans`). */
+const FONT_STACK =
+  "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'Segoe UI', Roboto, sans-serif";
+
+/**
+ * Critical CSS for the shell.
+ *
+ * This is deliberately NOT the app's stylesheet. The shell has to be able to
+ * paint before that stylesheet exists, which is what makes the plugin free to
+ * stop the landing's first paint from waiting on 17.6 KB gz of Tailwind. Only
+ * the first screen's own rules are here, all of them derived from `LANDING`.
+ */
+export function firstScreenCss(): string {
+  // Every rule is scoped to the landing route; the shell is `display:none`
+  // anywhere else (see the note above).
+  const p = 'html.bw-boot-landing [data-boot-hero]';
+  return `
+${p}{display:block;position:absolute;top:0;left:0;right:0;z-index:1;font-family:${FONT_STACK};color:${LANDING.color.ink}}
+${p} .bh-wrap{margin:0 auto;max-width:80rem;padding:8rem 1.5rem 5rem}
+${p} .bh-eyebrow{display:inline-flex;height:2rem;align-items:center;gap:0.5rem;border:1px solid rgba(11,18,32,0.09);background:rgba(255,255,255,0.75);border-radius:9999px;padding:0 0.875rem 0 0.625rem;color:${LANDING.color.slate}}
+${p} .bh-dot{width:6px;height:6px;flex:none;border-radius:9999px;background:${LANDING.color.accent}}
+${p} .bh-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:${LANDING.type.trackingEyebrow}}
+${p} .bh-h1{margin:1.5rem 0 0;font-size:${LANDING.type.hero};font-weight:700;letter-spacing:${LANDING.type.trackingHero};line-height:1.04;color:${LANDING.color.ink}}
+${p} .bh-h1 span{display:block}
+${p} .bh-accent{background:linear-gradient(96deg,${LANDING.color.accentDeep} 4%,${LANDING.color.accent} 96%);-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent}
+${p} .bh-sub{margin:1.5rem 0 0;max-width:38rem;font-size:17px;line-height:1.6;color:${LANDING.color.slate}}
+[data-boot-hero]{display:none}
+@media (min-width:640px){${p} .bh-wrap{padding-top:9rem}}
+@media (min-width:1024px){${p} .bh-wrap{padding:10rem 2.5rem 5rem}}
+/* THE SWAP IS CSS, NOT A TIMER. The :has() selector below is true the instant
+   React has committed a child, so the shell leaves in the SAME style
+   recalculation the real hero arrives in — one paint, no frame where both exist,
+   and nothing to fail.
+
+   The first version did this from a MutationObserver in a head script, and it
+   never fired: that script ran while the document was still in the head, so the
+   shell element it looked for did not exist yet, the whole block was skipped,
+   and the shell stayed visible UNDER the real hero for the life of the page —
+   a duplicated headline, found by the evidence harness rather than by looking at
+   it. :has() is the mechanism now (Chrome 105+, Safari 15.4+, Firefox 121+);
+   the boot script keeps an observer as a fallback for engines without it.
+
+   visibility, not display, so the element is never removed: an LCP candidate
+   that leaves the DOM invalidates the paint it already earned. */
+${p}[data-boot-done],
+html.bw-boot-landing:has(#root > *) [data-boot-hero]{visibility:hidden}
+html.bw-boot-landing,html.bw-boot-landing body{background-color:${LANDING.color.porcelain1}}
+/* RESERVE THE SCROLLBAR GUTTER FROM THE FIRST LAYOUT. The landing paints one
+   screen tall (this shell) and then React fills in ~3 300px of content, so on a
+   platform with CLASSIC scrollbars the scrollbar does not exist at first paint
+   and does exist a moment later — which takes 15px off the layout width and
+   slides every centred column left by half of it. Lighthouse's desktop run
+   measured that as the landing's only layout shift (CLS 0.011, attributed to the
+   hero's own container), and it is invisible to any test run on a platform with
+   overlay scrollbars, which is why five puppeteer viewports and the mobile
+   Lighthouse run all read 0.000. Reserving the gutter here — in the boot CSS,
+   which is in the head and in force before the first layout — means the width
+   never changes, so nothing moves when the content arrives. */
+html.bw-boot-landing{scrollbar-gutter:stable}`.trim();
+}
+
+/** The shell markup. Text is escaped — this string is written into the document verbatim. */
+export function firstScreenHtml(): string {
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const c = HERO_COPY;
+  return (
+    `<div data-boot-hero><div class="bh-wrap">` +
+    `<p class="bh-eyebrow"><span class="bh-dot"></span>` +
+    `<span class="bh-label">${esc(c.eyebrow)}</span></p>` +
+    `<h1 class="bh-h1"><span>${esc(c.headlineFirst)}</span>` +
+    `<span>${esc(c.headlineSecondLead)}<span class="bh-accent">${esc(c.headlineSecondAccent)}</span>${esc(c.headlineSecondTrail)}</span></h1>` +
+    `<p class="bh-sub">${esc(c.subcopy)}</p>` +
+    `</div></div>`
+  );
+}
