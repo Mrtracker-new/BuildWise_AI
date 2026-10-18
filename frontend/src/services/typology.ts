@@ -167,40 +167,6 @@ export function getMaxStoreys(raw?: string): number {
   }
 }
 
-export function getVerticalProgram(raw?: string, storeys: number = 1): Array<{ level: number; label: string; spaceIds: string[] }> {
-  const canonical = normalizeTypology(raw);
-  const maxS = getMaxStoreys(canonical);
-  const N = Math.max(1, Math.min(maxS, storeys));
-  const res = [];
-  for (let l = 0; l < N; l++) {
-    if (canonical === 'T1_SINGLE_FAMILY') {
-      res.push({
-        level: l,
-        label: l === 0 ? 'Ground Floor (G)' : l === 1 ? 'First Floor (G+1)' : 'Second Floor (G+2)',
-        spaceIds: l === 0 ? ['living', 'kitchen', 'puja', 'bath_1', 'dining', 'stairs'] : ['master_bed', 'bed_2', 'bath_2', 'balcony', 'study'],
-      });
-    } else if (canonical === 'T2_FAMILY_APARTMENT') {
-      res.push({
-        level: l,
-        label: l === 0 ? 'Ground Floor (G) — Entry & Core' : `Typical Floor ${l} (G+${l})`,
-        spaceIds: ['staircase_core', 'lift_core', 'lobby', 'apt_a_living', 'apt_a_kitchen', 'apt_a_bed', 'apt_a_bath', 'apt_b_living', 'apt_b_kitchen', 'apt_b_bed', 'apt_b_bath'],
-      });
-    } else if (canonical === 'T3_LARGE_COMPLEX') {
-      res.push({
-        level: l,
-        label: l === 0 ? 'Ground Floor (G) — Reception' : `Office Plate ${l} (G+${l})`,
-        spaceIds: l === 0 ? ['fire_stair_1', 'lift_bank', 'corridor', 'reception', 'conference_room', 'restroom_block'] : ['fire_stair_1', 'fire_stair_2', 'lift_bank', 'corridor', 'commercial_suite_a', 'commercial_suite_b', 'restroom_block', 'mep_room'],
-      });
-    } else {
-      res.push({
-        level: l,
-        label: l === 0 ? 'Ground Floor (G) — Storage Bay' : 'Mezzanine Level (+3.60m)',
-        spaceIds: l === 0 ? ['storage_bay', 'loading_dock', 'dispatch_buffer', 'staff_amenities', 'steel_stair'] : ['steel_stair', 'mezzanine_office', 'conference_room', 'catwalk'],
-      });
-    }
-  }
-  return res;
-}
 
 export function formatStoreysChip(floors: number): string {
   if (floors <= 1) return 'G (1 LEVEL)';
