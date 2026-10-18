@@ -34,9 +34,6 @@ from app.schemas.site_plan import (
     ParkingEnvelope,
 )
 
-# Equatorial radius of Earth in meters (WGS-84)
-R_EARTH = 6378137.0
-
 # Statutory minimums
 MIN_STATUTORY_EDGE_M = 1.0
 MIN_STATUTORY_AREA_M2 = 36.0
@@ -46,38 +43,6 @@ MIN_HABITABLE_FOOTPRINT_M2 = 28.0
 # =============================================================================
 # 1. LOCAL TANGENT PLANE PROJECTION (E/N EQUIRECTANGULAR)
 # =============================================================================
-
-def project_lat_lon_to_meters(
-    lat: float,
-    lon: float,
-    origin_lat: float,
-    origin_lon: float
-) -> Tuple[float, float]:
-    """
-    Projects WGS84 (latitude, longitude) into local metric tangent plane
-    (+X East, +Y North) relative to origin (origin_lat, origin_lon)
-    using equirectangular projection with cos(lat) scaling.
-    """
-    lat_rad = math.radians(origin_lat)
-    x_m = math.radians(lon - origin_lon) * R_EARTH * math.cos(lat_rad)
-    y_m = math.radians(lat - origin_lat) * R_EARTH
-    return round(x_m, 3), round(y_m, 3)
-
-
-def unproject_meters_to_lat_lon(
-    x_m: float,
-    y_m: float,
-    origin_lat: float,
-    origin_lon: float
-) -> Tuple[float, float]:
-    """
-    Inverse projection from local metric tangent plane to WGS84 (lat, lon).
-    """
-    lat_rad = math.radians(origin_lat)
-    lat = origin_lat + math.degrees(y_m / R_EARTH)
-    lon = origin_lon + math.degrees(x_m / (R_EARTH * math.cos(lat_rad)))
-    return round(lat, 7), round(lon, 7)
-
 
 # =============================================================================
 # 2. VALIDATION & CANONICALIZATION
