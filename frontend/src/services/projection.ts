@@ -61,9 +61,6 @@ export function edgeLength(a: { x: number; y: number }, b: { x: number; y: numbe
   return Math.hypot(b.x - a.x, b.y - a.y);
 }
 
-export function formatDistance(meters: number): string {
-  return `${meters.toFixed(2)} m`;
-}
 
 export function formatBearing(azimuthDegValue: number): string {
   return quadrantBearing(azimuthDegValue);

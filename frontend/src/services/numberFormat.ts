@@ -60,10 +60,3 @@ export function formatIN(value: number): string {
   return intlNumberFormat('en-IN', { maximumFractionDigits: 0 }).format(value);
 }
 
-/** Plain Indian-grouped number with a caller-chosen fraction length. */
-export function formatNumberIN(value: number, maximumFractionDigits = 0): string {
-  return intlNumberFormat('en-IN', {
-    maximumFractionDigits,
-    minimumFractionDigits: maximumFractionDigits,
-  }).format(value);
-}
