@@ -89,9 +89,6 @@ export function specularOffset(normalized: { nx: number; ny: number }, boxWidth:
   };
 }
 
-/** The highlight's radius for a box of `boxWidth` — a fixed size, never scaled. */
-export const specularRadius = (boxWidth: number): number => Math.round(boxWidth * 0.62);
-
 /**
  * A card's tilt for a pointer position: `rotateX`/`rotateY` in degrees, capped by
  * `maxDeg` on BOTH axes.
@@ -109,17 +106,6 @@ export function tiltCard(
   const pitch = clampUnit(normalized.ny) * cap;
   return { rotateX: -pitch, rotateY: lean };
 }
-
-/** Metres per CSS pixel for a box of `boxWidth` showing `planeWidthM`. */
-export const metresPerPixel = (planeWidthM: number, boxWidth: number): number =>
-  planeWidthM / Math.max(1, boxWidth);
-
-/** Screen pixels → plane metres: screen down is plane SOUTH (one negation). */
-export const screenDeltaToPlane = (
-  dxPx: number,
-  dyPx: number,
-  mdPerPx: number,
-): { dxM: number; dyM: number } => ({ dxM: dxPx * mdPerPx, dyM: -dyPx * mdPerPx });
 
 /** Keep a value inside a range; re-exported so call sites import one name. */
 export const within = clampTo;

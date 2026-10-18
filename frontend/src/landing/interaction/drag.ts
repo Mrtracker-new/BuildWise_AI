@@ -124,7 +124,3 @@ export function dragMessage(metrics: Measurement): string {
   )} metres, ${verdict}`;
 }
 
-/** What to announce after a keyboard nudge: the step, then the measurement. */
-export function nudgeMessage(index: number, stepM: number, metrics: Measurement): string {
-  return `Corner ${index + 1} moved ${stepM} metres. Plot area ${metrics.areaSqm.toFixed(1)} square metres.`;
-}
