@@ -100,23 +100,6 @@ def point_segment_distance(px: float, py: float, x1: float, y1: float, x2: float
     return math.hypot(px - (x1 + t * dx), py - (y1 + t * dy))
 
 
-def segment_overlap_length(a1: Tuple[float, float], a2: Tuple[float, float],
-                           b1: Tuple[float, float], b2: Tuple[float, float]) -> float:
-    """Overlap length of segment A onto segment B treating B as an infinite support line
-    (projection method); used for wall-above-wall support ratios."""
-    bdx, bdy = b2[0] - b1[0], b2[1] - b1[1]
-    blen = math.hypot(bdx, bdy)
-    if blen <= _EG_EPS:
-        return 0.0
-    ux, uy = bdx / blen, bdy / blen
-    a_s = (a1[0] - b1[0]) * ux + (a1[1] - b1[1]) * uy
-    a_e = (a2[0] - b1[0]) * ux + (a2[1] - b1[1]) * uy
-    lo, hi = sorted((a_s, a_e))
-    lo = max(lo, 0.0)
-    hi = min(hi, blen)
-    return max(0.0, hi - lo)
-
-
 def segment_intersects_box(seg: Tuple[Tuple[float, float], Tuple[float, float]],
                            box: Tuple[float, float, float, float],
                            shrink: float = 0.02) -> bool:

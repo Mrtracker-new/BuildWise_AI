@@ -66,15 +66,12 @@ STAIR_MIN_HEADROOM_M = 2.20       # >= 2.20m clear headroom throughout
 # NBC 2016 Part 9 / Time-Saver Standards / NKBA Bathroom Guidelines
 WC_WIDTH_M = 0.40
 WC_DEPTH_M = 0.70
-WC_FRONT_CLR_M = 0.60
 WC_SIDE_CLR_M = 0.20              # 200mm side clearance each side (800mm total width)
 
 BASIN_WIDTH_M = 0.55
 BASIN_DEPTH_M = 0.45
-BASIN_FRONT_CLR_M = 0.70
 BASIN_SIDE_CLR_M = 0.10
 
-SHOWER_MIN_DIM_M = 0.90           # Standard 900x900mm shower stall
 SHOWER_STD_M = 0.90               # Standard 900x900mm shower stall
 SHOWER_COMPACT_DIM_M = 0.80       # Absolute statutory minimum 800x800mm
 
