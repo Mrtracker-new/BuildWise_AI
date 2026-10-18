@@ -7,6 +7,17 @@ import { useEffect, useState } from 'react';
 
 export const APP_PATH = '/app';
 export const LANDING_PATH = '/';
+/**
+ * Prefix for the unlinked, `noindex` prototype routes (`/preview/...`).
+ *
+ * A real path prefix rather than a query parameter on `/`, deliberately: a
+ * prototype that lived at `/?proto=trace` would share the landing's document, its
+ * indexed URL and its boot shell, so a search engine would index a marketing page
+ * that is part experiment. A prefix is excluded by `robots.txt` (the one place
+ * the protocol actually allows a page to opt out) and by a `robots` meta tag set
+ * when the route mounts.
+ */
+export const PREVIEW_PREFIX = '/preview';
 
 export function currentPath(): string {
   if (typeof window === 'undefined') return LANDING_PATH;

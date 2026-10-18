@@ -180,6 +180,21 @@ const AppShell: React.FC = () => {
     () => parseSiteDeepLink(window.location.search),
     []
   );
+  /**
+   * Landing hand-off intent (/app?start=capture).
+   *
+   * The marketing hero's primary CTA is a real anchor to this URL, so a reader
+   * who arrives from it lands with the capture wizard already open instead of
+   * having to find the trace flow themselves. Nothing else about the app changes:
+   * the parameter is not persisted, not written back to the URL, and an absent or
+   * unknown value leaves the app exactly as it was (the wizard starts closed).
+   * This is the ONLY /app change the landing programme made — one read of one
+   * query parameter, with no import from the landing graph.
+   */
+  const wantsCapture = useMemo(
+    () => new URLSearchParams(window.location.search).get('start') === 'capture',
+    []
+  );
   // Application Parameters State (no coordinates: the site owns those)
   const [request, setRequest] = useState<AnalysisParams>(() => ({
     built_up_area_sqft: 2000,
@@ -212,7 +227,7 @@ const AppShell: React.FC = () => {
         : site,
     [boundary, site]
   );
-  const [captureOpen, setCaptureOpen] = useState<boolean>(false);
+  const [captureOpen, setCaptureOpen] = useState<boolean>(wantsCapture);
   const [captureStep, setCaptureStep] = useState<CaptureStep>('locate');
   const mapInstanceRef = useRef<MaplibreMap | null>(null);
 

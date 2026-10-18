@@ -10,12 +10,36 @@
  * crosses routes, so switching surfaces costs one chunk fetch, not a re-parse.
  */
 import { Suspense, lazy, useEffect } from 'react'
-import { APP_PATH, usePathname } from './landing/router'
+import { APP_PATH, PREVIEW_PREFIX, usePathname } from './landing/router'
 
 const App = lazy(() => import('./App'))
 const LandingPage = lazy(() =>
   import('./landing/LandingPage').then((m) => ({ default: m.LandingPage })),
 )
+/**
+ * Phase-0 centrepiece prototype — UNLINKED, `noindex`, and NOT IN THE SHIPPED
+ * GRAPH.
+ *
+ * A prototype under review must not move the artifact it is asking to join. A
+ * first cut of this route was always-compiled and its measurements proved why
+ * that is the wrong shape: a third dynamic entry made the bundler re-group shared
+ * chunks, so `useTransform` left the landing's route chunk for a shared chunk the
+ * landing now also loads (landing initial JS +1.22 KB gz) and `/app`'s initial
+ * graph gained a module key it did not have (`_api.js`, +0.24 KB gz). The
+ * `assert:bundle_split` gate caught both — correctly — and the honest fix is not
+ * to widen the gate but to keep the experiment out of the product's graph.
+ *
+ * So the route is reachable in `vite dev` (where the prototype is reviewed) and
+ * in a measurement build built with `VITE_PREVIEW_PROTOTYPES=1`, where the whole
+ * production pipeline — minification, chunking, the boot plugin — applies, so the
+ * frame histogram and the screenshots are taken on a real build rather than on a
+ * dev-server approximation. A plain `npm run build` constant-folds this away and
+ * emits exactly the chunk graph the landing had before the prototype existed.
+ */
+const PREVIEW_ENABLED = import.meta.env.DEV || import.meta.env.VITE_PREVIEW_PROTOTYPES === '1';
+const PreviewTrace = PREVIEW_ENABLED
+  ? lazy(() => import('./preview/PreviewTrace').then((m) => ({ default: m.PreviewTrace })))
+  : null;
 
 const APP_TITLE = 'BuildWise AI - Geo-Based Intelligent Construction Planning';
 
@@ -46,6 +70,7 @@ const RouteFallback: React.FC = () => (
 export function RouterRoot() {
   const path = usePathname()
   const isApp = path === APP_PATH || path.startsWith(`${APP_PATH}/`)
+  const isPreview = path === PREVIEW_PREFIX || path.startsWith(`${PREVIEW_PREFIX}/`)
 
   useEffect(() => {
     if (isApp) {
@@ -56,7 +81,7 @@ export function RouterRoot() {
 
   return (
     <Suspense fallback={<RouteFallback />}>
-      {isApp ? <App /> : <LandingPage />}
+      {isPreview && PreviewTrace ? <PreviewTrace /> : isApp ? <App /> : <LandingPage />}
     </Suspense>
   )
 }
