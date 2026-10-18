@@ -261,7 +261,3 @@ export function holdMapRenderAcrossCommit(reason: string): void {
   setTimeout(release, HOLD_FAILSAFE_MS);
 }
 
-/** Diagnostics: which reasons currently hold the map, and whether it is paused. */
-export function mapRenderGateState(): { paused: boolean; holders: string[] } {
-  return { paused, holders: [...holders] };
-}

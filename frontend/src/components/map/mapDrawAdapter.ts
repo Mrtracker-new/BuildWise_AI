@@ -46,8 +46,6 @@ const GHOST_SRC = 'bw-capture-ghost';
 const DRAFT_SOURCE_IDS = [LIVE_EDGE_SRC, GUIDES_SRC, GHOST_SRC, CLOSE_TARGET_SRC, DRAG_LINE_SRC, INSERT_SRC];
 
 export const CAPTURE_CURSOR = 'crosshair';
-/** Cursor while hovering a vertex handle or mid-edge insert in EDIT mode. */
-export const EDIT_CURSOR = 'move';
 
 let toLngLat: (v: Vertex) => [number, number] = (v) => [v.x, v.y];
 
