@@ -20,15 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMotionValue, useSpring, type MotionValue } from 'framer-motion';
 import { resolveCapability, type Capability, type CapabilityInput } from './capability';
 import { SPRING_POSE, SPRING_SNAPPY, dampedFollow, type SpringPreset } from './springs';
-import {
-  normalizePointer,
-  parallaxTarget,
-  specularOffset,
-  tiltCard,
-  tiltFromOrientation,
-  type Frame,
-} from './pointer';
-import { beatFor, runwayHeight, type BeatPosition } from './stage';
+import { normalizePointer, parallaxTarget, tiltFromOrientation, type Frame } from './pointer';
 import { ENTRY_BAND, progressFromRect, type Band } from './scrub';
 import type { Bounds, ViewBox } from './geometry';
 import { draggedPoint, moveVertex, nudgeVertex, stepFor } from './drag';
@@ -244,99 +236,6 @@ export function useDeviceTilt(amplitude: { x: number; y: number }, enabled: bool
 }
 
 /* ------------------------------------------------------------------ */
-/* P3 · tilt + specular card                                           */
-/* ------------------------------------------------------------------ */
-
-export interface TiltCard {
-  rotateX: MotionValue<number>;
-  rotateY: MotionValue<number>;
-  lightX: MotionValue<number>;
-  lightY: MotionValue<number>;
-  /** 1 while the pointer is over the card, 0 otherwise — drives the specular. */
-  lit: MotionValue<number>;
-  /** Spread onto the card element. Attaches NO window listener. */
-  handlers: {
-    onPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
-    onPointerEnter: (event: React.PointerEvent<HTMLElement>) => void;
-    onPointerLeave: () => void;
-    onBlur: () => void;
-  };
-}
-
-/**
- * Cursor-tracked tilt and specular for a card, written entirely into
- * `MotionValue`s so a pointer move costs a transform write and no React render.
- *
- * The light is an ANSWER TO THE POINTER, so it is absent until the pointer is
- * actually over the card: a radial highlight parked in the middle of a rest frame
- * is a bright blob, not a material. Handlers are attached to the CARD rather than
- * to the window, so a grid of six cards registers zero listeners until a pointer
- * is over one. `enabled === false` (coarse pointer, reduced motion, save-data)
- * leaves the card flat and attaches nothing.
- */
-export function useTiltCard(options: { maxDeg?: number; enabled: boolean; boxWidth: number }): TiltCard {
-  const { maxDeg = 4, enabled, boxWidth } = options;
-
-  const tiltTargetX = useMotionValue(0);
-  const tiltTargetY = useMotionValue(0);
-  const lightTargetX = useMotionValue(0);
-  const lightTargetY = useMotionValue(0);
-  const litTarget = useMotionValue(0);
-
-  const rotateX = useSpring(tiltTargetX, SPRING_POSE);
-  const rotateY = useSpring(tiltTargetY, SPRING_POSE);
-  const lightX = useSpring(lightTargetX, SPRING_POSE);
-  const lightY = useSpring(lightTargetY, SPRING_POSE);
-  const lit = useSpring(litTarget, SPRING_POSE);
-
-  const reset = useCallback(() => {
-    tiltTargetX.set(0);
-    tiltTargetY.set(0);
-    lightTargetX.set(0);
-    lightTargetY.set(0);
-    litTarget.set(0);
-  }, [tiltTargetX, tiltTargetY, lightTargetX, lightTargetY, litTarget]);
-
-  const onPointerMove = useCallback(
-    (event: React.PointerEvent<HTMLElement>) => {
-      if (!enabled || event.pointerType === 'touch') return;
-      const rect = event.currentTarget.getBoundingClientRect();
-      /* Local normalization: the card's own box is the frame, so the tilt is the
-         same on a 320 px card and a 900 px one. */
-      const normalized = normalizePointer(
-        event.clientX - rect.left,
-        event.clientY - rect.top,
-        { width: rect.width, height: rect.height },
-      );
-      /* `tiltCard` takes a y that grows downward, which is what a viewport-local
-         normalization already produces. */
-      const tilt = tiltCard(normalized, maxDeg);
-      tiltTargetX.set(tilt.rotateY);
-      tiltTargetY.set(tilt.rotateX);
-      const light = specularOffset(normalized, boxWidth || rect.width);
-      lightTargetX.set(light.x);
-      lightTargetY.set(light.y);
-    },
-    [enabled, maxDeg, boxWidth, tiltTargetX, tiltTargetY, lightTargetX, lightTargetY],
-  );
-
-  const onPointerEnter = useCallback(
-    (event: React.PointerEvent<HTMLElement>) => {
-      if (!enabled || event.pointerType === 'touch') return;
-      litTarget.set(1);
-      onPointerMove(event);
-    },
-    [enabled, litTarget, onPointerMove],
-  );
-
-  useEffect(() => {
-    if (!enabled) reset();
-  }, [enabled, reset]);
-
-  return { rotateX, rotateY, lightX, lightY, lit, handlers: { onPointerMove, onPointerEnter, onPointerLeave: reset, onBlur: reset } };
-}
-
-/* ------------------------------------------------------------------ */
 /* P4 · damped scroll scrub                                            */
 /* ------------------------------------------------------------------ */
 
@@ -402,62 +301,6 @@ export function useDampedScrub(
   }, [ref, band, tau, shouldLatch, enabled, value, reduced]);
 
   return value;
-}
-
-/* ------------------------------------------------------------------ */
-/* P6 · sticky stage                                                   */
-/* ------------------------------------------------------------------ */
-
-export interface StickyStage {
-  /** Progress across the whole stage, damped and latched. */
-  progress: MotionValue<number>;
-  /** Which beat that progress is in. */
-  beat: BeatPosition;
-  /** The runway height this stage needs, in px. */
-  runwayPx: number;
-  /** The stage's sticky top offset, in px. */
-  topPx: number;
-}
-
-export function useStickyStage(
-  ref: React.RefObject<HTMLElement | null>,
-  options: { beats: number; navClearancePx?: number; enabled?: boolean } = { beats: 1 },
-): StickyStage {
-  const { beats, navClearancePx = 96, enabled = true } = options;
-  const progress = useDampedScrub(ref, { band: ENTRY_BAND, latch: true, enabled });
-
-  const [beat, setBeat] = useState<BeatPosition>({ index: 0, local: 0 });
-  const [viewportH, setViewportH] = useState<number>(() =>
-    typeof window === 'undefined' ? 800 : window.innerHeight,
-  );
-  const [stageH, setStageH] = useState<number>(() =>
-    typeof window === 'undefined' ? 600 : Math.round(window.innerHeight * 0.75),
-  );
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const measure = () => {
-      setStageH(el.offsetHeight || 600);
-      setViewportH(window.innerHeight || 800);
-    };
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    measure();
-    return () => ro.disconnect();
-  }, [ref]);
-
-  /* The beat INDEX is the one piece of stage state React owns: it changes a
-     handful of times per pass, not per frame. The progress value drives the
-     motion; this only tells a caption which line to show. */
-  useEffect(() => {
-    return progress.on('change', (value) => {
-      const next = beatFor(value, beats);
-      setBeat((prev) => (prev.index === next.index ? prev : next));
-    });
-  }, [progress, beats]);
-
-  return { progress, beat, runwayPx: runwayHeight(stageH, beats, viewportH), topPx: navClearancePx };
 }
 
 /* ------------------------------------------------------------------ */
