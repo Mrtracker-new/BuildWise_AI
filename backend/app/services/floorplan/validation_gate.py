@@ -131,11 +131,6 @@ def overall_from_dicts(layer_dicts: List[Dict[str, Any]]) -> str:
     return "FAIL" if worst == "FAIL" else ("WARN" if worst == "WARN" else "PASS")
 
 
-def gate_is_valid(overall: str) -> bool:
-    """Certificate validity hard-fails only on FAIL-status hard layers."""
-    return overall != "FAIL"
-
-
 # =============================================================================
 # LLM BOUNDARY EVENT LOG
 # =============================================================================
@@ -516,19 +511,11 @@ def assemble_gate_report(layer_dicts: List[Dict[str, Any]],
     }
 
 
-def build_validated_layers_stamp_list(gate: Dict[str, Any]) -> List[str]:
-    """Layer ids stamped on sheets: every layer that RAN (PASS/WARN/FAIL), not N/A."""
-    return [d["layer_id"] for d in (gate.get("layers") or []) if d.get("status") != "N/A"]
-
-
 # =============================================================================
 # HONEST DRAWING-STATUS STAMP (single source)
 # =============================================================================
 
 STAMP_HEAD = "STATUS: CONCEPT DESIGN - VALIDATED LAYERS: ["
-STAMP_TAIL = "] - NOT FOR CONSTRUCTION"
-
-
 def drawing_status_stamp(validated_layers: Optional[List[str]],
                          scope_note: Optional[str] = None) -> str:
     """Canonical honest stamp, e.g.
