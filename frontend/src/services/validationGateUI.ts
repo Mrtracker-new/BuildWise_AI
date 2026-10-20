@@ -1,7 +1,7 @@
 /**
  * validationGateUI.ts — QA-panel presentation logic (pure, testable).
  * ==========================================================================
- * The Universal Validation Gate (L1-L14) must never be hidden in the UI:
+ * The Universal Validation Gate (L1-L15) must never be hidden in the UI:
  * every layer renders as a row, N/A rows carry their explicit reason, WARN
  * layers surface as chips, and a gate that arrives incomplete is itself
  * flagged instead of silently rendering fewer rows.
@@ -29,7 +29,7 @@ export interface GateReport {
 }
 
 /** Canonical gate order — a report missing any of these is incomplete. */
-export const GATE_LAYER_IDS: string[] = Array.from({ length: 14 }, (_, i) => `L${i + 1}`);
+export const GATE_LAYER_IDS: string[] = Array.from({ length: 15 }, (_, i) => `L${i + 1}`);
 
 /** Status chip classes shared by every QA surface (design-token adjacent). */
 export const QA_CHIP_CLASSES: Record<string, string> = {

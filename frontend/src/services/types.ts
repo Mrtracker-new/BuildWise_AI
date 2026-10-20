@@ -464,6 +464,25 @@ export interface DuctShaftSpec {
   servicing_rooms: string[];
 }
 
+export interface SpaceIdentity {
+  space_type_id: string;
+  name: string;
+  zone: string;
+  function: string;
+  hygiene_class: string;
+  clear_area_basis: 'clear_face' | 'carpet' | 'gross';
+  min_area_sqm: number;
+  min_width_m: number;
+  max_aspect_ratio: number;
+  citation: string;
+  ventilation_req: string;
+  daylight_req: boolean;
+  is_wet: boolean;
+  orientation_preference: string[];
+  orientation_avoid: string[];
+  source: 'ontology' | 'fallback';
+}
+
 export interface MultiFloorRoomRectangle {
   room_id: string;
   room_name: string;
@@ -480,6 +499,16 @@ export interface MultiFloorRoomRectangle {
   is_vertical_core?: boolean;
   requires_exterior_wall?: boolean;
   naming_threshold_used?: string;
+  aspect_ratio?: number;
+  applied_rules?: string[];
+  relaxations?: Array<Record<string, string>>;
+  fixtures?: BathroomFixtureSpec[];
+  furniture?: FurnitureItemSpec[];
+  space_type_id?: string;
+  identity?: SpaceIdentity;
+  scheme_profile?: string;
+  orientation_rationale?: string;
+  score_contributions?: Record<string, number>;
 }
 
 export interface BathroomFixtureSpec {
@@ -611,7 +640,7 @@ export interface MathematicalValidityCertificate {
 }
 
 // ----------------------------------------------------
-// Universal Validation Gate (L1-L14)
+// Universal Validation Gate (L1-L15)
 // ----------------------------------------------------
 
 export interface ValidationGateLayer {

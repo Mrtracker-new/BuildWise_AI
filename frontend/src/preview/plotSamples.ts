@@ -373,14 +373,20 @@ export const PLOT_SAMPLES: ReadonlyArray<PlotSample> = [
           "title": "Fire & Egress",
           "status": "PASS",
           "summary": "Travel distances verified; 3 bedroom egress checks, 2 exit rows"
+        },
+        {
+          "id": "L15",
+          "title": "Programme Completeness",
+          "status": "PASS",
+          "summary": "All essential programme rooms present"
         }
       ],
       "counts": {
-        "pass": 8,
+        "pass": 9,
         "warn": 5,
         "fail": 0,
         "na": 1,
-        "total": 14
+        "total": 15
       }
     },
     "metrics": {
@@ -899,14 +905,20 @@ export const PLOT_SAMPLES: ReadonlyArray<PlotSample> = [
           "title": "Fire & Egress",
           "status": "PASS",
           "summary": "Travel distances verified; 3 bedroom egress checks, 2 exit rows"
+        },
+        {
+          "id": "L15",
+          "title": "Programme Completeness",
+          "status": "PASS",
+          "summary": "All essential programme rooms present"
         }
       ],
       "counts": {
-        "pass": 8,
+        "pass": 9,
         "warn": 5,
         "fail": 0,
         "na": 1,
-        "total": 14
+        "total": 15
       }
     },
     "metrics": {

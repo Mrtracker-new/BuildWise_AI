@@ -922,7 +922,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
           </label>
         </div>
         <p className="text-[10px] text-[var(--text-3)]">
-          Validation always runs all layers L1-L14 regardless of drawing toggles - toggles affect what is drawn, never what is checked.
+          Validation always runs all layers L1-L15 regardless of drawing toggles - toggles affect what is drawn, never what is checked.
         </p>
       </div>
 
@@ -1403,7 +1403,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                   ))}
                 </div>
 
-                {/* UNIVERSAL VALIDATION GATE - QA PANEL (L1-L14, never hidden) */}
+                {/* UNIVERSAL VALIDATION GATE - QA PANEL (L1-L15, never hidden) */}
                 {(() => {
                   const gate = (cert.details && cert.details.validation_gate) || floorPlan.qa?.validation_gate;
                   if (!gate || !Array.isArray(gate.layers) || gate.layers.length === 0) return null;
@@ -1412,7 +1412,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                   return (
                     <div className="pt-2 border-t border-emerald-500/20 space-y-1.5" data-testid="validation-gate-layer-table">
                       <div className="flex items-center justify-between text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">
-                        <span>Validation Gate - Layers L1-L14</span>
+                        <span>Validation Gate - Layers L1-L15</span>
                         <span className={`font-mono text-[10px] px-1.5 py-0.2 rounded ${chipCls[gate.overall_status] || chipCls.PASS}`}>
                           OVERALL: {gate.overall_status}
                         </span>
@@ -1512,6 +1512,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
               generationId={floorPlan.generation_id}
               storeys={activeFloors}
               isStale={isPlanStale}
+              requestedTypology={activeTypology}
             />
           ) : (
             <Skeleton

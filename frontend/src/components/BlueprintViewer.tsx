@@ -7,6 +7,13 @@ import { useDesign } from '../design';
 import { frontageChipText, polygonChipText } from '../services/sheetTruth';
 import { isGhostOverlayVisible, patchGhostOverlayDom, sanitizeBlueprintSvg } from './report/svgSanitize';
 import { ECS_DISCLOSURE } from './report/termDisclosures';
+import {
+  formatProgrammeCounts,
+  generatedTypologyMatches,
+  getTypologyProfile,
+  summariseFloorProgramme,
+  unitCountForFloor,
+} from '../services/typologyProgramme';
 
 interface BlueprintViewerProps {
   svgString: string;
@@ -20,6 +27,7 @@ interface BlueprintViewerProps {
   generationId?: string;
   storeys?: number;
   isStale?: boolean;
+  requestedTypology?: string;
 }
 
 type SheetGestureState = {
@@ -155,6 +163,35 @@ const ROOM_METADATA: Record<string, { dotColor: string; label: string; zone: str
   mezzanine_office: { dotColor: '#6366F1', label: 'Mezzanine Office', zone: 'OFFICE' },
   conference_room: { dotColor: '#8B5CF6', label: 'Conference Room', zone: 'ADMIN' },
   catwalk: { dotColor: '#94A3B8', label: 'Inspection Catwalk', zone: 'ACCESS' },
+
+  // Canonical ontology IDs emitted by current generations. The legacy keys
+  // above stay for plans generated before the typology vocabulary alignment.
+  // New dot fills consume the semantic tokens (never raw hex) so the design
+  // system gate keeps passing as typologies are added; the chip label, not the
+  // hue, is what identifies the space.
+  t1_stair: { dotColor: 'var(--accent)', label: 'Private Staircase', zone: 'CORE', isCore: true },
+  foyer: { dotColor: 'var(--text-2)', label: 'Entry Foyer', zone: 'N' },
+  shared_stair: { dotColor: 'var(--accent)', label: 'Shared Staircase Core', zone: 'CORE', isCore: true },
+  floor_lobby: { dotColor: 'var(--text-2)', label: 'Floor Distribution Lobby', zone: 'CIRC' },
+  unit_living: { dotColor: 'var(--semantic-green)', label: 'Unit Living / Dining', zone: 'N' },
+  unit_kitchen: { dotColor: 'var(--semantic-amber)', label: 'Unit Kitchen', zone: 'SE' },
+  unit_bed: { dotColor: 'var(--semantic-green)', label: 'Unit Bedroom', zone: 'SW' },
+  unit_bath: { dotColor: 'var(--accent)', label: 'Unit Bathroom', zone: 'W' },
+  unit_balcony: { dotColor: 'var(--semantic-green)', label: 'Unit Private Balcony', zone: 'N' },
+  unit_utility: { dotColor: 'var(--semantic-amber)', label: 'Unit Utility / Dry Balcony', zone: 'SE' },
+  primary_stair: { dotColor: 'var(--semantic-red)', label: 'Fire Staircase 1', zone: 'CORE', isCore: true },
+  secondary_stair: { dotColor: 'var(--semantic-red)', label: 'Fire Exit Staircase 2', zone: 'CORE', isCore: true },
+  lift_lobby: { dotColor: 'var(--accent)', label: 'Elevator Core & Lobby', zone: 'CORE', isCore: true },
+  spine_corridor: { dotColor: 'var(--text-2)', label: 'Double-Loaded Spine Corridor', zone: 'CIRC' },
+  commercial_suite: { dotColor: 'var(--semantic-green)', label: 'Commercial / Office Suite', zone: 'N' },
+  sanitary_block: { dotColor: 'var(--accent)', label: 'Commercial Restroom Block', zone: 'W' },
+  dock_bay: { dotColor: 'var(--semantic-amber)', label: 'Loading Dock Shutter Bay', zone: 'DOCK' },
+  dispatch: { dotColor: 'var(--text-2)', label: 'Dispatch & Staging Buffer', zone: 'BUFFER' },
+  worker_amenity: { dotColor: 'var(--semantic-amber)', label: 'Staff Locker & Sanitary WC', zone: 'AMENITY' },
+  admin_office: { dotColor: 'var(--accent)', label: 'Administrative Office Mezzanine', zone: 'OFFICE' },
+  conf_room: { dotColor: 'var(--accent)', label: 'Conference / Operations Room', zone: 'ADMIN' },
+  ind_stair: { dotColor: 'var(--semantic-red)', label: 'Industrial Fire Egress Stair', zone: 'CORE', isCore: true },
+  admin_catwalk: { dotColor: 'var(--text-2)', label: 'Mezzanine Access Catwalk', zone: 'ACCESS' },
 };
 
 export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
@@ -169,6 +206,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   generationId,
   storeys,
   isStale = false,
+  requestedTypology,
 }) => {
   const { pushToast } = useDesign();
   const [mode, setMode] = useState<'cad' | 'paper'>('cad');
@@ -176,6 +214,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState<boolean>(false);
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
 
   // Site plan and multi-floor view state
   const [viewTab, setViewTab] = useState<'site' | 'floor'>('floor');
@@ -215,6 +254,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   useEffect(() => {
     setViewTab('floor');
     setActiveFloorIndex(0);
+    setSelectedRoomId(null);
     setZoom(1.0);
     setPan({ x: 0, y: 0 });
     setModalZoom(1.0);
@@ -348,6 +388,57 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   // allocated area, so a chip reading it disagreed with the drawing by ~8%.
   // The legend chip resolves the clear area from the same schedule rows the
   // sheet prints, and formats it to the same one decimal place.
+  const generatedProfile = useMemo(
+    () => getTypologyProfile(multiStorey?.building_typology),
+    [multiStorey?.building_typology]
+  );
+  const programmeCounts = useMemo(
+    () => summariseFloorProgramme(currentFloor),
+    [currentFloor]
+  );
+  const programmeText = useMemo(
+    () => formatProgrammeCounts(programmeCounts),
+    [programmeCounts]
+  );
+  const storeyCount = multiStorey?.total_storeys || storeys || 1;
+  const generatedGfa = multiStorey?.total_built_up_area_sqm || 0;
+  const generatedUnitCount = unitCountForFloor(currentFloor);
+  const typologyMismatch = Boolean(
+    multiStorey && requestedTypology && !generatedTypologyMatches(multiStorey, requestedTypology)
+  );
+  const selectedRoom = useMemo(
+    () => currentFloor?.rooms.find((room) => room.room_id === selectedRoomId) || null,
+    [currentFloor, selectedRoomId]
+  );
+  // A new floor is a new room set: an id that only existed on the previous
+  // plate must not highlight or open the inspector.  Derived during render so
+  // the viewer never needs an effect just to clear state.
+  const activeRoomId = selectedRoom ? selectedRoomId : null;
+  const selectedRoomWindows = useMemo(
+    () => (currentFloor?.windows || []).filter((window) => window.room_id === selectedRoom?.room_id),
+    [currentFloor, selectedRoom?.room_id]
+  );
+  const selectedRoomDoors = useMemo(
+    () => (currentFloor?.doors || []).filter(
+      (door) => door.from_room === selectedRoom?.room_id || door.to_room === selectedRoom?.room_id
+    ),
+    [currentFloor, selectedRoom?.room_id]
+  );
+  const selectedRoomShafts = useMemo(
+    () => (multiStorey?.duct_shafts || []).filter((shaft) =>
+      shaft.servicing_rooms.includes(selectedRoom?.room_id || '')
+    ),
+    [multiStorey?.duct_shafts, selectedRoom?.room_id]
+  );
+  const selectedRoomFurniture = selectedRoom?.furniture || [];
+  const selectedRoomFurnitureOk = selectedRoomFurniture.length > 0 &&
+    selectedRoomFurniture.every((item) => item.is_satisfied);
+  const selectedRoomVentilation = selectedRoomWindows.length > 0
+    ? `${selectedRoomWindows.length} opening${selectedRoomWindows.length === 1 ? '' : 's'}`
+    : selectedRoomShafts.length > 0
+      ? `${selectedRoomShafts.length} mechanical shaft${selectedRoomShafts.length === 1 ? '' : 's'}`
+      : 'No opening / shaft';
+
   const currentPlacements = useMemo(() => {
     const schedule = (currentFloor?.room_schedule ?? []) as Array<Record<string, unknown>>;
     const clearByRoom = new Map<string, number>();
@@ -384,6 +475,11 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
       area_sqm: clearAreaFor(p.room_id, p.area_sqm),
     }));
   }, [isMultiStorey, currentFloor, placements]);
+
+  const selectedRoomClearArea = useMemo(
+    () => currentPlacements.find((placement) => placement.room_id === selectedRoom?.room_id)?.area_sqm,
+    [currentPlacements, selectedRoom?.room_id]
+  );
 
   const handleZoomIn = () => setZoom((z) => Math.min(2.5, +(z + 0.25).toFixed(2)));
   const handleZoomOut = () => setZoom((z) => Math.max(0.75, +(z - 0.25).toFixed(2)));
@@ -727,7 +823,64 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
         </div>
       </div>
 
-      {/* 2. Storey Switcher Tabs (Rendered when multi-floor) */}
+      {/* 2. Generated programme provenance: the blueprint states what it is a
+          blueprint OF, not just which parameters were on screen. */}
+      {multiStorey && (
+        <div
+          data-testid="generated-typology-strip"
+          className="flex flex-col gap-1 px-3 sm:px-3.5 py-2 border-b border-[var(--hairline)] bg-emerald-500/[0.06]"
+        >
+          <div className="flex items-center gap-1.5 flex-wrap min-w-0 text-[11px]">
+            <span className="font-semibold uppercase tracking-wider text-[var(--text-3)] shrink-0">
+              Generated as
+            </span>
+            <span
+              data-testid="generated-typology-badge"
+              className="px-2 py-0.5 rounded-[5px] font-mono font-bold text-[10px] bg-emerald-600 text-white tracking-tight select-none"
+            >
+              {generatedProfile.shortCode}
+            </span>
+            <span
+              data-testid="generated-typology-label"
+              className="font-semibold text-[var(--text-1)] truncate"
+            >
+              {generatedProfile.label}
+            </span>
+            <span className="text-[10px] text-[var(--text-2)] font-medium">
+              {generatedProfile.useClass} · {generatedProfile.occupancy}
+            </span>
+            {typologyMismatch && (
+              <span
+                data-testid="generated-typology-mismatch"
+                className="px-1.5 py-0.5 rounded-[4px] text-[9px] font-bold uppercase tracking-wider bg-amber-500/20 text-[var(--semantic-amber-ink)] border border-amber-500/40"
+              >
+                Request now says {getTypologyProfile(requestedTypology).shortCode}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-x-2 gap-y-0.5 flex-wrap text-[10px] text-[var(--text-2)] min-w-0">
+            <span className="font-mono font-semibold text-[var(--text-1)]">
+              {storeyCount <= 1 ? 'G (1 level)' : `G+${storeyCount - 1} (${storeyCount} levels)`}
+            </span>
+            {generatedGfa > 0 && (
+              <span className="font-mono">{generatedGfa.toFixed(1)} m² GFA</span>
+            )}
+            {generatedUnitCount > 0 && (
+              <span>
+                {generatedUnitCount} unit{generatedUnitCount === 1 ? '' : 's'} on this floor
+              </span>
+            )}
+            <span data-testid="generated-programme" className="truncate">
+              {programmeText ? `Programme: ${programmeText}` : 'Programme: no rooms on this floor'}
+            </span>
+          </div>
+          <p className="text-[10px] leading-snug text-[var(--text-3)] truncate" title={generatedProfile.intent}>
+            {generatedProfile.intent}
+          </p>
+        </div>
+      )}
+
+      {/* 3. Storey Switcher Tabs (Rendered when multi-floor) */}
       {renderFloorSwitcher(false)}
 
       {/* 3. Toolbar row below header */}
@@ -1142,9 +1295,17 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
             const chipZone = isTerraceBand ? 'TERRACE' : (isBalcony ? (p.zone || 'NE') : (meta.zone || p.zone));
 
             return (
-              <div
+              <button
+                type="button"
                 key={`${p.room_id}-${pIdx}`}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium whitespace-nowrap select-none border transition-colors ${
+                data-testid={`room-chip-${p.room_id}`}
+                aria-pressed={activeRoomId === p.room_id}
+                onClick={() => setSelectedRoomId((current) => (current === p.room_id ? null : p.room_id))}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium whitespace-nowrap select-none border transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/50 ${
+                  activeRoomId === p.room_id
+                    ? 'ring-2 ring-[var(--accent)]/60 border-[var(--accent)]/60'
+                    : ''
+                } ${
                   p.is_core
                     ? 'bg-purple-500/10 border-purple-500/30 text-purple-700 dark:text-purple-300'
                     : isTerraceBand
@@ -1172,9 +1333,105 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                     TERRACE / Non-Carpet
                   </span>
                 )}
-              </div>
+              </button>
             );
           })}
+          {selectedRoom && (
+            <div
+              data-testid="room-inspector"
+              className="w-full mt-1 rounded-[10px] border border-[var(--hairline)] bg-[var(--card-bg)] p-2.5 space-y-2"
+            >
+              <div className="flex items-start justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0 bg-emerald-500" />
+                  <span className="text-[12px] font-semibold text-[var(--text-1)]">
+                    {selectedRoom.identity?.name || selectedRoom.room_name}
+                  </span>
+                  <span className="text-[10px] font-mono text-[var(--text-3)]">
+                    {selectedRoom.space_type_id || selectedRoom.identity?.space_type_id || selectedRoom.room_id}
+                  </span>
+                  {selectedRoom.unit_id && (
+                    <span className="text-[9px] px-1 py-0.2 rounded bg-sky-500/15 text-sky-700 dark:text-sky-300 font-semibold uppercase tracking-wider">
+                      {selectedRoom.unit_id}
+                    </span>
+                  )}
+                  {selectedRoom.identity?.is_wet && (
+                    <span className="text-[9px] px-1 py-0.2 rounded bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 font-semibold uppercase tracking-wider">
+                      Wet room
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  data-testid="room-inspector-close"
+                  onClick={() => setSelectedRoomId(null)}
+                  className="w-5 h-5 rounded-[5px] hover:bg-[var(--fill-hover)] text-[var(--text-2)] flex items-center justify-center cursor-pointer shrink-0"
+                  aria-label="Close room inspector"
+                >
+                  <Icon name="x" size={11} />
+                </button>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[10px]">
+                <div className="rounded-[6px] bg-[var(--fill)]/70 px-2 py-1.5">
+                  <div className="text-[9px] uppercase tracking-wider text-[var(--text-3)]">Clear area</div>
+                  <div className="font-mono font-semibold text-[var(--text-1)]">
+                    {(selectedRoomClearArea ?? selectedRoom.area_sqm).toFixed(2)} m²
+                  </div>
+                </div>
+                <div className="rounded-[6px] bg-[var(--fill)]/70 px-2 py-1.5">
+                  <div className="text-[9px] uppercase tracking-wider text-[var(--text-3)]">Gross allocation</div>
+                  <div className="font-mono font-semibold text-[var(--text-1)]">{selectedRoom.area_sqm.toFixed(2)} m²</div>
+                </div>
+                <div className="rounded-[6px] bg-[var(--fill)]/70 px-2 py-1.5">
+                  <div className="text-[9px] uppercase tracking-wider text-[var(--text-3)]">Code minimum</div>
+                  <div className="font-mono font-semibold text-[var(--text-1)]">
+                    {selectedRoom.identity ? `${selectedRoom.identity.min_area_sqm.toFixed(1)} m² / ${selectedRoom.identity.min_width_m.toFixed(1)} m` : 'Not resolved'}
+                  </div>
+                </div>
+                <div className="rounded-[6px] bg-[var(--fill)]/70 px-2 py-1.5">
+                  <div className="text-[9px] uppercase tracking-wider text-[var(--text-3)]">Envelope</div>
+                  <div className="font-mono font-semibold text-[var(--text-1)]">
+                    {selectedRoom.width_m.toFixed(2)} × {selectedRoom.depth_m.toFixed(2)} m
+                  </div>
+                </div>
+                <div className="rounded-[6px] bg-[var(--fill)]/70 px-2 py-1.5">
+                  <div className="text-[9px] uppercase tracking-wider text-[var(--text-3)]">Hygiene</div>
+                  <div className="font-semibold text-[var(--text-1)] capitalize">
+                    {selectedRoom.identity?.hygiene_class || 'unclassified'}
+                  </div>
+                </div>
+                <div className="rounded-[6px] bg-[var(--fill)]/70 px-2 py-1.5">
+                  <div className="text-[9px] uppercase tracking-wider text-[var(--text-3)]">Ventilation</div>
+                  <div className="font-semibold text-[var(--text-1)]">{selectedRoomVentilation}</div>
+                </div>
+                <div className="rounded-[6px] bg-[var(--fill)]/70 px-2 py-1.5">
+                  <div className="text-[9px] uppercase tracking-wider text-[var(--text-3)]">Furniture</div>
+                  <div className={`font-semibold ${selectedRoomFurniture.length === 0 ? 'text-[var(--text-3)]' : selectedRoomFurnitureOk ? 'text-[var(--semantic-green-ink)]' : 'text-[var(--semantic-amber-ink)]'}`}>
+                    {selectedRoomFurniture.length === 0 ? 'None required' : `${selectedRoomFurniture.length} placed${selectedRoomFurnitureOk ? '' : ' · short'}`}
+                  </div>
+                </div>
+                <div className="rounded-[6px] bg-[var(--fill)]/70 px-2 py-1.5">
+                  <div className="text-[9px] uppercase tracking-wider text-[var(--text-3)]">Openings / shafts</div>
+                  <div className="font-semibold text-[var(--text-1)]">
+                    {selectedRoomWindows.length} win · {selectedRoomDoors.length} door · {selectedRoomShafts.length} shaft
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap text-[10px] text-[var(--text-2)]">
+                <span className="font-mono">{selectedRoom.fixtures?.length || 0} fixtures</span>
+                <span className="text-[var(--text-3)]">•</span>
+                <span>{selectedRoom.identity?.daylight_req ? 'Daylight required' : 'Daylight not required'}</span>
+                <span className="text-[var(--text-3)]">•</span>
+                <span>{selectedRoom.identity?.clear_area_basis ? `${selectedRoom.identity.clear_area_basis} basis` : 'area basis unresolved'}</span>
+                {selectedRoom.orientation_rationale && (
+                  <>
+                    <span className="text-[var(--text-3)]">•</span>
+                    <span className="truncate" title={selectedRoom.orientation_rationale}>{selectedRoom.orientation_rationale}</span>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
           {safeFloorIndex === 0 && effectiveSitePlan?.wedge_zones?.filter(w => w.is_interior_side).map((wz) => (
             <div
               key={`interior-wedge-${wz.wedge_id}`}
@@ -1231,6 +1488,15 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
                         >
                           {freshnessToken}
                         </span>
+                        {multiStorey && (
+                          <span
+                            data-testid="modal-generated-typology-chip"
+                            title={generatedProfile.intent}
+                            className="font-mono text-[10px] font-semibold text-emerald-800 dark:text-emerald-200 bg-emerald-500/15 border border-emerald-500/30 px-1.5 py-0.5 rounded-[6px] whitespace-nowrap"
+                          >
+                            {generatedProfile.shortCode}
+                          </span>
+                        )}
                       </div>
                       <p className="text-[11px] sm:text-[12px] text-[var(--text-2)] truncate">
                         {isMultiStorey ? `Multi-Storey CAD Drafting (${multiStorey?.total_storeys} Levels)` : 'CAD 2D Drafting (Single Level Ground)'} &bull; {(plotWidthM || 10).toFixed(1)}m x {(plotDepthM || 12).toFixed(1)}m Grid
