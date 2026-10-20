@@ -13,7 +13,18 @@ def generate_floor_plan(req: FloorPlanRequest) -> FloorPlanResponse:
     """
     from app.services.floorplan.engine import SoleGeometryEngine
     engine = SoleGeometryEngine(req)
-    return engine.solve_floorplan_response()
+    response = engine.solve_floorplan_response()
+    if getattr(req, "include_scheme_alternatives", False):
+        # Additive scheme portfolio.  The legacy geometry above is untouched,
+        # so default responses remain byte-equivalent.
+        from app.services.floorplan.scheme_solver import generate_ranked_schemes
+        portfolio = generate_ranked_schemes(req)
+        response.scheme_alternatives = list(portfolio.alternatives)
+        response.scheme_portfolio = portfolio
+        response.selected_scheme_id = portfolio.selected_scheme_id
+        if response.params_snapshot is not None:
+            response.params_snapshot["selected_scheme_id"] = portfolio.selected_scheme_id
+    return response
 
 
 

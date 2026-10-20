@@ -59,7 +59,15 @@ from app.services.floorplan.wall_graph import (
     build_constructible_wall_graph,
     compute_stair_geometry,
 )
+from app.services.floorplan.identity import (
+    apply_space_identities,
+    summarize_identities,
+)
 from app.services.floorplan.svg_generator import generate_multi_floor_blueprint_svg
+from app.services.floorplan.furniture import (
+    repair_room_envelopes_for_furniture,
+)
+from app.services.floorplan.ventilation import ensure_wet_room_ventilation
 from app.services.floorplan.living_quality import (
     audit_and_enforce_zoning_separation,
     audit_and_resolve_door_swings,
@@ -146,6 +154,7 @@ class SoleGeometryEngine:
 
         self.warnings: List[str] = []
         self.relaxations: List[Dict[str, str]] = []
+        self.identity_summaries: List[Dict[str, Any]] = []
 
     # =========================================================================
     # 1. ENVELOPE & SETBACK DETERMINATION
@@ -165,6 +174,8 @@ class SoleGeometryEngine:
                 plot_depth_m=self.plot_d,
                 coverage=self.coverage,
                 plot_polygon=self.req.plot_polygon,
+                program_needed_area_m2=(getattr(self, "program_needed_area_m2", None)
+                                        if getattr(self.req, "program_aware_footprint", False) else None),
                 typology=f"{self.req.building_typology}_courtyard" if (self.req.client_notes and "courtyard" in self.req.client_notes.lower()) else self.req.building_typology,
             )
             warnings.extend(site_warns)
@@ -273,12 +284,43 @@ class SoleGeometryEngine:
                     "area_sqm": env_area,
                 }
 
+            # Programme-aware footprint: the footprint is the
+            # smaller of the programme demand, the coverage cap and the
+            # inscribed buildable; a demand above that cap becomes an explicit
+            # deficit instead of a silently oversized or squeezed plate.
+            if getattr(self.req, "program_aware_footprint", False):
+                need = float(getattr(self, "program_needed_area_m2", 0.0) or 0.0)
+                target = min(avail_area, self.plot_w * self.plot_d * self.coverage, max(need, 30.0))
+                aspect = max(0.5, min(2.0, avail_w / max(avail_d, 0.01)))
+                env_d = math.sqrt(target / aspect)
+                env_w = target / env_d if env_d > 0 else avail_w
+                env_w = round(max(4.0, min(avail_w, env_w)), 2)
+                env_d = round(max(4.0, min(avail_d, env_d)), 2)
+                env_area = round(env_w * env_d, 2)
+                env_x = round(poly_minx + side_setback + max(0.0, (avail_w - env_w) / 2.0), 2)
+                env_y = round(poly_miny + front_setback + max(0.0, (avail_d - env_d) / 2.0), 2)
+                envelope = {
+                    "x": env_x,
+                    "y": env_y,
+                    "width": env_w,
+                    "depth": env_d,
+                    "area_sqm": env_area,
+                }
+                if need > target + 0.5:
+                    warnings.append(
+                        f"LAND-01: Programme needs {need:.1f} m² but the coverage/inscribed "
+                        f"cap allows {target:.1f} m²; explicit deficit "
+                        f"{max(0.0, need - target):.1f} m²."
+                    )
+
             # Canonical site plan synthesis with exact legacy envelope preservation
             is_ok, site_plan, site_warns = compute_canonical_site_plan(
                 plot_width_m=self.plot_w,
                 plot_depth_m=self.plot_d,
                 coverage=self.coverage,
                 plot_polygon=self.req.plot_polygon,
+                program_needed_area_m2=(getattr(self, "program_needed_area_m2", None)
+                                        if getattr(self.req, "program_aware_footprint", False) else None),
                 inscribed_override=envelope,
                 typology=f"{self.req.building_typology}_courtyard" if (self.req.client_notes and "courtyard" in self.req.client_notes.lower()) else self.req.building_typology,
             )
@@ -1175,6 +1217,9 @@ class SoleGeometryEngine:
                 spaces=spaces,
                 previous_rooms=previous_rooms,
             )
+            for repair_line in repair_room_envelopes_for_furniture(rooms):
+                if repair_line not in self.warnings:
+                    self.warnings.append(repair_line)
             self._prune_and_verify_hard_constraints(floor_index, rooms, previous_rooms)
             return rooms
 
@@ -1345,6 +1390,13 @@ class SoleGeometryEngine:
                 kept.append(r)
             rooms = kept
             rooms.insert(0, terrace_room)
+
+        # Furniture sets are placed at solve time.  A narrow bedroom
+        # borrows frontage from surplus in its own row before doors, windows and
+        # the wall graph are hosted, instead of failing the L4 audit afterwards.
+        for repair_line in repair_room_envelopes_for_furniture(rooms):
+            if repair_line not in self.warnings:
+                self.warnings.append(repair_line)
 
         # Check hard pruning constraints on generated rooms
         self._prune_and_verify_hard_constraints(floor_index, rooms, previous_rooms)
@@ -2568,6 +2620,92 @@ class SoleGeometryEngine:
 
         return t1_rooms
 
+    # T2 unit essentials: width floors are hard, area targets are spent from
+    # spare frontage.  A kitchen is never deleted to protect a living-room
+    # width; only a plate that cannot hold all four width floors may omit it,
+    # and that omission is warned explicitly (the L15 gate then fails).
+    _T2_UNIT_MIN_WIDTHS = {"bath": 1.20, "living": 3.40, "kitchen": 1.80, "bed": 3.00}
+    _T2_UNIT_MIN_AREAS = {"bath": 3.0, "living": 16.0, "kitchen": 6.0, "bed": 10.5}
+
+    def _allocate_t2_unit_widths(
+        self, env_w: float, depth: float, bath_w: float, unit_label: str
+    ) -> Dict[str, float]:
+        """Allocate one T2 unit row without ever silently deleting the kitchen.
+
+        Statutory/furniture width floors are preserved.  Living and bedroom
+        then compete for any spare frontage; the kitchen keeps its 1.8 m floor.
+        If the plate is too narrow for all four width floors, the kitchen is
+        omitted only when the living room would otherwise be unusable, and the
+        omission is recorded as a named warning for the L15 gate.
+        """
+        hard = dict(self._T2_UNIT_MIN_WIDTHS)
+        areas = self._T2_UNIT_MIN_AREAS
+        depth = max(float(depth), 0.01)
+        widths = {"bath": round(float(bath_w), 2), "living": hard["living"],
+                  "kitchen": hard["kitchen"], "bed": hard["bed"]}
+        total_hard = round(hard["bath"] + hard["living"] + hard["kitchen"] + hard["bed"], 2)
+
+        if env_w + 1e-6 < total_hard:
+            # Keep the kitchen if a usable living room survives.  If not, omit
+            # the kitchen with an explicit warning instead of pretending the
+            # unit is complete.
+            living_with_kitchen = round(env_w - hard["bath"] - hard["kitchen"] - hard["bed"], 2)
+            if living_with_kitchen >= 2.20:
+                widths["kitchen"] = hard["kitchen"]
+                widths["living"] = living_with_kitchen
+                widths["bed"] = hard["bed"]
+                self.warnings.append(
+                    f"T2-UNIT-MINIMA: {unit_label} living/dining is {living_with_kitchen:.2f} m wide "
+                    f"({living_with_kitchen * depth:.1f} m2) because the {env_w:.2f} m row must also hold "
+                    "a bath, kitchen and bedroom; the kitchen is preserved."
+                )
+            else:
+                widths["kitchen"] = 0.0
+                widths["living"] = round(max(2.20, env_w * 0.42), 2)
+                widths["bed"] = round(max(2.20, env_w - hard["bath"] - widths["living"]), 2)
+                self.warnings.append(
+                    f"T2-UNIT-MINIMA: {unit_label} kitchen omitted - the {env_w:.2f} m row cannot "
+                    "hold bath + living + kitchen + bedroom at code widths; L15 will fail."
+                )
+        else:
+            # Full row: spend spare frontage first on living, then bedroom,
+            # then kitchen and bath area targets.  This keeps the kitchen at
+            # its 1.8 m floor and never trades it away for a wider living room.
+            target = {
+                "living": max(hard["living"], areas["living"] / depth),
+                "bed": max(hard["bed"], areas["bed"] / depth),
+                "kitchen": max(hard["kitchen"], areas["kitchen"] / depth),
+                "bath": max(hard["bath"], areas["bath"] / depth),
+            }
+            spare = round(env_w - sum(widths.values()), 2)
+            for key in ("bed", "living", "kitchen", "bath"):
+                add = min(spare, max(0.0, target[key] - widths[key]))
+                widths[key] = round(widths[key] + add, 2)
+                spare = round(spare - add, 2)
+            if spare > 0.005:
+                # Leftover is habitable frontage: 60 % living, 40 % bedroom.
+                widths["living"] = round(widths["living"] + spare * 0.60, 2)
+                widths["bed"] = round(widths["bed"] + spare * 0.40, 2)
+
+        # Keep the row closed after rounding (no 1 cm gap/overlap at the bed).
+        delta = round(env_w - sum(widths.values()), 2)
+        if abs(delta) >= 0.005:
+            widths["bed"] = round(widths["bed"] + delta, 2)
+
+        # Name every room that still misses its ontology target on this row.
+        for key, label in (("bath", "bathroom"), ("living", "living/dining"),
+                           ("kitchen", "kitchen"), ("bed", "bedroom")):
+            if widths[key] <= 0.0:
+                continue
+            room_area = widths[key] * depth
+            if room_area + 0.01 < areas[key]:
+                self.warnings.append(
+                    f"T2-UNIT-MINIMA: {unit_label} {label} gross {room_area:.1f} m2 "
+                    f"({widths[key]:.2f} x {depth:.2f} m) is below the {areas[key]:.1f} m2 "
+                    "ontology minimum; the row cannot hold all four rooms at full area."
+                )
+        return {k: round(v, 2) for k, v in widths.items()}
+
     def _partition_t2_rooms(
         self,
         floor_index: int,
@@ -2586,13 +2724,19 @@ class SoleGeometryEngine:
         t2_rooms: List[MultiFloorRoomRectangle] = []
 
         # Unit A (North wing) & Unit B (South wing) off central distribution lobby
-        # Invariant: unit doors strictly open off lobby; bathrooms align vertically
-        bath_w = round(min(2.20, max(1.50, core.width_m)), 2)
+        # Invariant: unit doors strictly open off lobby; bathrooms align vertically.
+        # Shared bath width.  Start from the widest code-compliant bath and
+        # shrink it only as far as needed to keep bath + living + kitchen +
+        # bedroom width floors on the row.  The bedroom's area-derived width
+        # is included so a 9.6 m row does not lose the kitchen over 0.05 m.
+        bed_floor = max(3.00, 10.5 / max(north_h, 0.01))
+        bath_w = round(max(1.20, min(1.80, env_w - 3.40 - 1.80 - bed_floor)), 2)
 
-        # Unit A (North): Living + Bed + Bath + Kitchen
-        unit_a_rem_w = round(env_w - bath_w, 2)
-        unit_a_liv_w = round(unit_a_rem_w * 0.60, 2)
-        unit_a_bed_w = round(unit_a_rem_w - unit_a_liv_w, 2)
+        # Unit A (North): Bath + Living/Dining + Kitchen + Bed
+        unit_a_alloc = self._allocate_t2_unit_widths(env_w, north_h, bath_w, "Unit A")
+        unit_a_living_w = unit_a_alloc["living"]
+        unit_a_kit_w = unit_a_alloc["kitchen"]
+        unit_a_bed_w = unit_a_alloc["bed"]
 
         u_a_bath = MultiFloorRoomRectangle(
             room_id=f"t2_unitA_bath_F{floor_index}",
@@ -2614,22 +2758,47 @@ class SoleGeometryEngine:
         )
         t2_rooms.append(u_a_bath)
 
+        if unit_a_kit_w > 0.0:
+            u_a_kit = MultiFloorRoomRectangle(
+                room_id=f"t2_unitA_kitchen_F{floor_index}",
+                room_name="Unit A Kitchen",
+                floor_index=floor_index,
+                unit_id="Unit_A",
+                # Living sits against the lobby (a wide, doorable entry wall);
+                # the kitchen follows it, exactly like Unit B.  Kitchen-first
+                # ordering pushed the living east and left the lobby door a
+                # 0.77 m shared run with no jamb clearance.
+                x=round(bath_w + unit_a_living_w, 2),
+                y=0.0,
+                width_m=unit_a_kit_w,
+                depth_m=north_h,
+                area_sqm=round(unit_a_kit_w * north_h, 2),
+                zone="NW",
+                zone_category="service",
+                vastu_compliant=True,
+                is_vertical_core=False,
+                requires_exterior_wall=True,
+                aspect_ratio=round(north_h / unit_a_kit_w if unit_a_kit_w > 0 else 1.0, 2),
+                applied_rules=["T2-UNIT-DOOR-LOBBY", "NBC-MIN-KITCHEN", "VERT-01-WET-STACK"],
+            )
+            t2_rooms.append(u_a_kit)
+
         u_a_liv = MultiFloorRoomRectangle(
             room_id=f"t2_unitA_living_F{floor_index}",
-            room_name="Unit A Living/Kitchen",
+            room_name="Unit A Living / Dining",
             floor_index=floor_index,
             unit_id="Unit_A",
             x=bath_w,
             y=0.0,
-            width_m=unit_a_liv_w,
+            width_m=unit_a_living_w,
             depth_m=north_h,
-            area_sqm=round(unit_a_liv_w * north_h, 2),
+            area_sqm=round(unit_a_living_w * north_h, 2),
             zone="N",
             zone_category="public",
             vastu_compliant=True,
             is_vertical_core=False,
             requires_exterior_wall=True,
-            aspect_ratio=round(unit_a_liv_w / north_h if north_h > 0 else 1.0, 2),
+            aspect_ratio=round(unit_a_living_w / north_h if north_h > 0 else 1.0, 2),
             applied_rules=["T2-UNIT-DOOR-LOBBY", "NBC-MIN-LIVING"],
         )
         t2_rooms.append(u_a_liv)
@@ -2639,7 +2808,7 @@ class SoleGeometryEngine:
             room_name="Unit A Bedroom",
             floor_index=floor_index,
             unit_id="Unit_A",
-            x=round(bath_w + unit_a_liv_w, 2),
+            x=round(bath_w + unit_a_living_w + unit_a_kit_w, 2),
             y=0.0,
             width_m=unit_a_bed_w,
             depth_m=north_h,
@@ -2675,36 +2844,59 @@ class SoleGeometryEngine:
         )
         t2_rooms.append(u_b_bath)
 
-        unit_b_rem_w = round(env_w - bath_w, 2)
-        unit_b_liv_w = round(unit_b_rem_w * 0.55, 2)
-        unit_b_bed_w = round(unit_b_rem_w - unit_b_liv_w, 2)
+        # Unit B (South): same shared bath width, deeper row for its area targets.
+        unit_b_alloc = self._allocate_t2_unit_widths(env_w, south_h, bath_w, "Unit B")
+        unit_b_living_w = unit_b_alloc["living"]
+        unit_b_kit_w = unit_b_alloc["kitchen"]
+        unit_b_bed_w = unit_b_alloc["bed"]
 
         u_b_liv = MultiFloorRoomRectangle(
             room_id=f"t2_unitB_living_F{floor_index}",
-            room_name="Unit B Living/Kitchen",
+            room_name="Unit B Living / Dining",
             floor_index=floor_index,
             unit_id="Unit_B",
             x=bath_w,
             y=south_y,
-            width_m=unit_b_liv_w,
+            width_m=unit_b_living_w,
             depth_m=south_h,
-            area_sqm=round(unit_b_liv_w * south_h, 2),
+            area_sqm=round(unit_b_living_w * south_h, 2),
             zone="S",
             zone_category="public",
             vastu_compliant=True,
             is_vertical_core=False,
             requires_exterior_wall=True,
-            aspect_ratio=round(unit_b_liv_w / south_h if south_h > 0 else 1.0, 2),
+            aspect_ratio=round(unit_b_living_w / south_h if south_h > 0 else 1.0, 2),
             applied_rules=["T2-UNIT-DOOR-LOBBY", "NBC-MIN-LIVING"],
         )
         t2_rooms.append(u_b_liv)
+
+        if unit_b_kit_w > 0.0:
+            u_b_kit = MultiFloorRoomRectangle(
+                room_id=f"t2_unitB_kitchen_F{floor_index}",
+                room_name="Unit B Kitchen",
+                floor_index=floor_index,
+                unit_id="Unit_B",
+                x=round(bath_w + unit_b_living_w, 2),
+                y=south_y,
+                width_m=unit_b_kit_w,
+                depth_m=south_h,
+                area_sqm=round(unit_b_kit_w * south_h, 2),
+                zone="SE",
+                zone_category="service",
+                vastu_compliant=True,
+                is_vertical_core=False,
+                requires_exterior_wall=True,
+                aspect_ratio=round(south_h / unit_b_kit_w if unit_b_kit_w > 0 else 1.0, 2),
+                applied_rules=["T2-UNIT-DOOR-LOBBY", "NBC-MIN-KITCHEN", "VERT-01-WET-STACK"],
+            )
+            t2_rooms.append(u_b_kit)
 
         u_b_bed = MultiFloorRoomRectangle(
             room_id=f"t2_unitB_bed_F{floor_index}",
             room_name="Unit B Bedroom",
             floor_index=floor_index,
             unit_id="Unit_B",
-            x=round(bath_w + unit_b_liv_w, 2),
+            x=round(bath_w + unit_b_living_w + unit_b_kit_w, 2),
             y=south_y,
             width_m=unit_b_bed_w,
             depth_m=south_h,
@@ -3497,6 +3689,37 @@ class SoleGeometryEngine:
 
         return doors, windows
 
+    def _append_dead_storage_doors(
+        self,
+        floor_index: int,
+        rooms: List[MultiFloorRoomRectangle],
+        doors: List[MultiFloorDoorGeometry],
+    ) -> None:
+        """Give every LAND-07 storage room a real hosted door.
+
+        The specialised L-shape/T1 opening generators do not know about rooms
+        added after partitioning, so without this the new storage would be
+        unreachable and the BFS certificate would fail.
+        """
+        connected = {d.to_room for d in doors} | {d.from_room for d in doors}
+        for room in rooms:
+            if not str(room.room_id).startswith("storage_dead_"):
+                continue
+            if room.room_id in connected:
+                continue
+            partner, hosted = find_door_host(room, rooms, 0.80)
+            if hosted is None or partner is None:
+                continue
+            doors.append(MultiFloorDoorGeometry(
+                door_id=f"door_{room.room_id}",
+                floor_index=floor_index,
+                from_room=partner.room_id,
+                to_room=room.room_id,
+                door_type="standard",
+                **hosted,
+            ))
+            connected.add(room.room_id)
+
     def _generate_multi_wing_openings(
         self,
         floor_index: int,
@@ -3779,10 +4002,14 @@ class SoleGeometryEngine:
         """
         # Multi-wing / L-shape opening generation
         if self.site_plan and self.site_plan.footprint and len(self.site_plan.footprint.wings) > 1:
-            return self._generate_multi_wing_openings(floor_index, envelope, rooms)
+            doors, windows = self._generate_multi_wing_openings(floor_index, envelope, rooms)
+            self._append_dead_storage_doors(floor_index, rooms, doors)
+            return doors, windows
 
         if self.total_storeys == 1 and self.typology == "T1_SINGLE_FAMILY" and self.req.required_rooms and len(self.req.required_rooms) >= 3:
-            return self._generate_t1_openings(floor_index, envelope, rooms)
+            doors, windows = self._generate_t1_openings(floor_index, envelope, rooms)
+            self._append_dead_storage_doors(floor_index, rooms, doors)
+            return doors, windows
 
         doors: List[MultiFloorDoorGeometry] = []
         windows: List[MultiFloorWindowGeometry] = []
@@ -4394,9 +4621,20 @@ class SoleGeometryEngine:
             from app.services.floorplan.grid_model import normalize_room_identifier
             # Placed ids carry level suffixes (e.g. living_F0) and aliases
             # (hall -> living): compare through the normalizer on BOTH sides.
-            placed_norms = {
-                normalize_room_identifier(r.room_id) for fl in floors for r in fl.rooms
-            }
+            # Canonical space identity is the programme vocabulary.  Placed
+            # rows carry display ids (t2_unitA_bed_F0) while the request is in
+            # ontology ids (unit_bed); comparing only room_id made a correctly
+            # solved T2/T3/T4 programme look unmet.  Keep the display id as a
+            # fallback for older plans generated before identity was attached.
+            placed_norms = set()
+            for fl in floors:
+                for r in fl.rooms:
+                    placed_norms.add(normalize_room_identifier(r.room_id))
+                    space_type_id = getattr(r, "space_type_id", None) or (
+                        getattr(getattr(r, "identity", None), "space_type_id", None)
+                    )
+                    if space_type_id:
+                        placed_norms.add(normalize_room_identifier(space_type_id))
             from app.services.floorplan.typologies import get_typology_module
             module = get_typology_module(self.typology)
             expected_ids: set = set()
@@ -4409,7 +4647,7 @@ class SoleGeometryEngine:
             REQUESTED_CORE_ALIASES = {
                 "stairs", "stair", "staircase", "staircase_core", "t1_stair",
                 "shared_stair", "primary_stair", "secondary_stair", "ind_stair",
-                "lift", "lift_core", "lift_bank",
+                "lift", "lift_core", "lift_bank", "lift_lobby",
             }
             core_norms = {
                 normalize_room_identifier(r.room_id)
@@ -4452,6 +4690,11 @@ class SoleGeometryEngine:
         """
         t0 = time.perf_counter()
 
+        # Programme demand is computed from the ontology catalogue, not
+        # from the geometry this solve is about to produce.
+        from app.schemas.land_economics import compute_program_needed_area
+        self.program_needed_area_m2 = compute_program_needed_area(self)
+
         # LLM-BOUNDARY INVARIANT (enforced per solve): parsed client constraints
         # may carry TEXT-DERIVED intent only. Any geometry/coordinate fields are
         # stripped (never honored) and the strip is logged as an auditable event.
@@ -4465,6 +4708,23 @@ class SoleGeometryEngine:
         # Step 1: Envelope & Setbacks
         is_feasible, deg_level, envelope, warnings = self._compute_envelope()
         self.warnings.extend(warnings)
+
+        # Footprint provenance: name the constraint that actually sized the plate.
+        # Irregular plots are always governed by their inscribed footprint; a
+        # rectangular plate is programme-led only when demand is below the
+        # coverage cap.
+        _irregular = bool(
+            self.req.plot_polygon is not None
+            and not getattr(self.req.plot_polygon, "is_regular_rectangle", True)
+        )
+        _coverage_cap = self.plot_w * self.plot_d * self.coverage
+        if _irregular:
+            self.footprint_source = "inscribed"
+        elif (getattr(self.req, "program_aware_footprint", False)
+              and float(getattr(self, "program_needed_area_m2", 0.0)) < _coverage_cap - 0.01):
+            self.footprint_source = "program"
+        else:
+            self.footprint_source = "coverage"
 
         if not is_feasible:
             elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
@@ -4558,6 +4818,42 @@ class SoleGeometryEngine:
                 previous_rooms=previous_rooms,
             )
 
+            # Close rectangular dead strips at wing junctions before
+            # openings, furniture, wall graphs and the gate are generated.  The
+            # ground plate is the land-use surface; upper-floor rooms keep their
+            # own masks/terrace bands untouched.
+            if z == 0:
+                from app.services.floorplan.land_economics import repair_interior_dead_corners
+                _plate = None
+                _fp = self.site_plan.footprint if self.site_plan else None
+                if _fp is not None:
+                    if getattr(_fp, "wings", None):
+                        _parts = [
+                            shp_box(w.x - _fp.x, w.y - _fp.y,
+                                    w.x - _fp.x + w.width_m, w.y - _fp.y + w.depth_m)
+                            for w in _fp.wings
+                        ]
+                        _parts += [
+                            shp_box(c.x - _fp.x, c.y - _fp.y,
+                                    c.x - _fp.x + c.width_m, c.y - _fp.y + c.depth_m)
+                            for c in getattr(_fp, "corridors", []) or []
+                        ]
+                        _plate = unary_union(_parts)
+                    elif getattr(_fp, "courtyard_void", None) is not None:
+                        _void = _fp.courtyard_void
+                        _plate = shp_box(0.0, 0.0, _fp.width_m, _fp.depth_m)
+                        if getattr(_void, "polygon_coords", None):
+                            from shapely.geometry import Polygon as _ShpPolygon
+                            try:
+                                _plate = _plate.difference(_ShpPolygon(_void.polygon_coords))
+                            except Exception:
+                                pass
+                for repair_line in repair_interior_dead_corners(
+                    rooms, envelope, plate_polygon=_plate
+                ):
+                    if repair_line not in self.warnings:
+                        self.warnings.append(repair_line)
+
             max_room_x = max((r.x + r.width_m for r in rooms), default=envelope["width"])
             max_room_y = max((r.y + r.depth_m for r in rooms), default=envelope["depth"])
             if max_room_x > envelope["width"] or max_room_y > envelope["depth"]:
@@ -4582,6 +4878,27 @@ class SoleGeometryEngine:
                 if nl not in self.warnings:
                     self.warnings.append(nl)
 
+            # One resolved ontology identity per room.  Runs after the
+            # L5 naming threshold so a demoted Master Suite never keeps a suite
+            # identity, and before openings/wall graphs so every schedule, label,
+            # legend and service layer reads the same object.
+            identity_summary = apply_space_identities(rooms, self.typology)
+            self.identity_summaries.append(identity_summary)
+            if identity_summary["fallback"]:
+                self.warnings.append(
+                    "SPACE-IDENTITY: unresolved ontology id(s) on floor "
+                    f"{z}: {', '.join(identity_summary['fallback'])} (fallback identity used)."
+                )
+
+            # Fresh-air provision is solved with the plate, not left to
+            # the L9 audit.  Every wet room with no compliant opening receives a
+            # dedicated exhaust riser before the wall graph and sheets are built.
+            for vent_line in ensure_wet_room_ventilation(
+                z, rooms, windows, duct_shafts, envelope
+            ):
+                if vent_line not in self.warnings:
+                    self.warnings.append(vent_line)
+
             for r in rooms:
                 if any(k in r.room_id.lower() for k in ("bath", "toilet", "wc")):
                     _f_ok, _fx, f_warns = place_and_audit_bathroom_fixtures(r, doors)
@@ -4590,13 +4907,12 @@ class SoleGeometryEngine:
                             self.warnings.append(fw)
 
             for r in rooms:
-                if r.zone_category in ("public", "private") or any(
-                    k in r.room_id.lower() for k in ("living", "dining", "kitchen", "bed", "study")
-                ):
-                    _fu_ok, _fi, fu_warns = place_and_audit_furniture_catalog(r)
-                    for fw in fu_warns:
-                        if fw not in self.warnings:
-                            self.warnings.append(fw)
+                if r.zone_category in ("circulation", "terrace"):
+                    continue
+                _fu_ok, _fi, fu_warns = place_and_audit_furniture_catalog(r)
+                for fw in fu_warns:
+                    if fw not in self.warnings:
+                        self.warnings.append(fw)
 
             # Re-run swing collision resolution with furniture envelopes now placed
             sw_ok, sw_log, _ = audit_swings_against_walls_corridors_furniture(doors, rooms)
@@ -4722,7 +5038,7 @@ class SoleGeometryEngine:
             "program_intent_audit": pi_audit,
         }
 
-        # Step 5c: UNIVERSAL VALIDATION GATE (L1-L14).
+        # Step 5c: UNIVERSAL VALIDATION GATE (L1-L15).
         # Every generation, every typology, every floor count is judged by the
         # same contract. No layer is silently skipped; N/A carries a reason.
         from app.services.floorplan.validation_gate import HARD_FAIL_LAYERS
@@ -4881,6 +5197,51 @@ class SoleGeometryEngine:
         for fl in building.floors:
             fl.validation_gate = gate
 
+        # Land economics: absorb every >=1 m² residual as a labelled
+        # wedge, report efficiency/waste, and add the SPACE-EFFICIENCY layer.
+        from app.services.floorplan.land_economics import compute_land_economics
+        land_report = compute_land_economics(
+            building,
+            self.site_plan,
+            program_needed_area_m2=getattr(self, "program_needed_area_m2", 0.0),
+            footprint_source=getattr(self, "footprint_source", "coverage"),
+            program_aware_footprint=bool(getattr(self.req, "program_aware_footprint", False)),
+        )
+        building.land_economics = land_report
+        identity_report = summarize_identities(
+            r for fl in building.floors for r in fl.rooms
+        )
+        building.global_metrics["space_identity"] = identity_report
+        building.qa_report["space_identity"] = identity_report
+        building.global_metrics["land_economics_status"] = land_report.certificate.status
+        building.global_metrics["program_needed_area_m2"] = land_report.program_needed_area_m2
+        building.global_metrics["program_deficit_sqm"] = land_report.program_deficit_sqm
+        building.global_metrics["land_use_efficiency_pct"] = land_report.land_use_efficiency_pct
+        building.global_metrics["circulation_ratio_pct"] = land_report.circulation_ratio_pct
+        building.global_metrics["anonymous_outdoor_area_sqm"] = land_report.anonymous_outdoor_area_sqm
+        building.global_metrics["dead_corner_area_sqm"] = land_report.dead_corner_area_sqm
+        building.qa_report["land_economics_status"] = land_report.certificate.status
+        building.qa_report["land_economics_checks"] = dict(land_report.certificate.checks)
+        building.qa_report["waste_pct"] = land_report.waste_pct
+        if self.site_plan is not None:
+            building.qa_report["wedge_zones_count"] = len(self.site_plan.wedge_zones)
+        if land_report.warnings:
+            for warning in land_report.warnings:
+                if warning not in building.warnings:
+                    building.warnings.append(warning)
+            self.warnings.extend(w for w in land_report.warnings if w not in self.warnings)
+        if self.site_plan is not None:
+            # Absorption appends wedge zones, so the site sheet must be rendered
+            # after the report rather than from the pre-absorption snapshot.
+            self.site_plan.waste_pct = land_report.waste_pct
+            self.site_plan.waste_warning_triggered = land_report.waste_pct > 25.0
+            from app.services.floorplan.drawing_ir import build_site_drawing_ir, render_svg_from_ir
+            site_ir = build_site_drawing_ir(
+                self.site_plan, gen_id=str(self.seed), typology=self.raw_typology
+            )
+            self.site_plan.svg_site_plan = render_svg_from_ir(site_ir, theme="cad")
+            building.site_plan = self.site_plan.model_dump()
+
         return building
 
     # =========================================================================
@@ -4938,6 +5299,8 @@ class SoleGeometryEngine:
                 vastu_compliant=r.vastu_compliant,
                 applied_rules=r.applied_rules,
                 relaxations=r.relaxations,
+                space_type_id=r.space_type_id,
+                identity=r.identity,
             ))
 
         rect_doors: List[DoorGeometry] = []
@@ -4995,6 +5358,10 @@ class SoleGeometryEngine:
             validation_gate=gate_report,
         )
 
+        identity_report = summarize_identities(
+            r for fl in building.floors for r in fl.rooms
+        )
+
         rect_model = RectanglesModel(
             envelope=envelope_rect,
             rooms=rect_rooms,
@@ -5049,6 +5416,8 @@ class SoleGeometryEngine:
                     depth_m=r.height,
                     zone=r.zone,
                     vastu_compliant=r.vastu_compliant,
+                    space_type_id=r.space_type_id,
+                    identity=r.identity,
                 )
             )
 
@@ -5122,7 +5491,10 @@ class SoleGeometryEngine:
                     (self.site_plan.provenance or {}).get("frontage_source")
                     if self.site_plan else None
                 ),
-                "building_typology": self.raw_typology,
+                # Canonical generation intent. The raw request token stays in
+                # provenance so an alias (e.g. "apartment") remains auditable.
+                "building_typology": self.typology,
+                "requested_typology": self.raw_typology,
                 "floors": self.total_storeys,
                 "ground_coverage_ratio": self.coverage,
                 "plot_width_m": self.plot_w,
@@ -5135,9 +5507,21 @@ class SoleGeometryEngine:
                 "design_intent": getattr(self.req, "design_intent", None) or "maximize_enclosed",
                 "shape_type": self.site_plan.plot_polygon.shape_type if self.site_plan else "rectangle",
                 "plot_polygon": self.site_plan.plot_polygon.model_dump() if self.site_plan else None,
+                "program_aware_footprint": bool(getattr(self.req, "program_aware_footprint", False)),
+                "footprint_source": (
+                    building.land_economics.footprint_source if building.land_economics else None
+                ),
+                "land_economics_status": (
+                    building.land_economics.certificate.status if building.land_economics else None
+                ),
+                "program_needed_area_m2": (
+                    building.land_economics.program_needed_area_m2 if building.land_economics else None
+                ),
+                "space_identity": identity_report,
             },
             generation_id=f"GEN-{self.typology[:2]}-{self.total_storeys}F-{int(self.seed) if isinstance(self.seed, (int, float)) else 'F01'}",
             seed=str(self.seed),
             generated_at=time.time() * 1000.0,
             site_plan=self.site_plan,
+            land_economics=building.land_economics,
         )

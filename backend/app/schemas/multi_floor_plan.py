@@ -1,6 +1,9 @@
 from typing import List, Dict, Optional, Literal, Any
 from pydantic import BaseModel, Field
 
+from app.schemas.land_economics import LandEconomicsReport
+from app.schemas.space_identity import SpaceIdentity
+
 
 class UnmetRequirement(BaseModel):
     """
@@ -101,6 +104,14 @@ class MultiFloorRoomRectangle(BaseModel):
     fixtures: List[BathroomFixtureSpec] = Field(default_factory=list, description="Coded bathroom fixtures with statutory clearances")
     furniture: List[FurnitureItemSpec] = Field(default_factory=list, description="Minimum furniture layout satisfying circulation envelopes")
     naming_threshold_used: Optional[str] = Field(default=None, description="Ontological naming and area threshold applied")
+    space_type_id: Optional[str] = Field(default=None, description="Canonical ontology space type (unit-independent identity)")
+    identity: Optional[SpaceIdentity] = Field(
+        default=None,
+        description="Resolved ontology identity: the single source for name, zone, hygiene, clear-area basis and statutory minima",
+    )
+    scheme_profile: Optional[str] = Field(default=None, description="Scheme profile that placed this room")
+    orientation_rationale: Optional[str] = Field(default=None, description="Why this room was assigned this orientation/band")
+    score_contributions: Dict[str, float] = Field(default_factory=dict, description="Per-metric score contribution from this room")
 
 
 class MultiFloorDoorGeometry(BaseModel):
@@ -176,7 +187,7 @@ class SingleFloorPlanModel(BaseModel):
     stair_schedule: List[Dict[str, Any]] = Field(default_factory=list)
     validation_gate: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Universal validation gate layer table (L1-L14) for this floor"
+        description="Universal validation gate layer table (L1-L15) for this floor"
     )
     mathematical_certificate: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -228,7 +239,7 @@ class MultiStoreyBuildingModel(BaseModel):
     )
     validation_gate: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Universal validation gate report: per-layer L1-L14 statuses, overall=worst layer, N/A-with-reason, LLM-boundary audit"
+        description="Universal validation gate report: per-layer L1-L15 statuses, overall=worst layer, N/A-with-reason, LLM-boundary audit"
     )
     plot_polygon: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -237,6 +248,10 @@ class MultiStoreyBuildingModel(BaseModel):
     site_plan: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Canonical site plan model dictionary"
+    )
+    land_economics: Optional[LandEconomicsReport] = Field(
+        default=None,
+        description="Land-economics report and SPACE-EFFICIENCY certificate"
     )
 
 

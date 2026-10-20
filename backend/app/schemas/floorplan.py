@@ -3,6 +3,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from app.schemas.room_program import RoomProgram
 from app.schemas.multi_floor_plan import MultiStoreyBuildingModel, ExtractedClientConstraints
 from app.schemas.site_plan import PlotPolygonModel, SitePlanModel
+from app.schemas.scheme import SchemeAlternative, SchemePortfolio
+from app.schemas.land_economics import LandEconomicsReport
+from app.schemas.space_identity import SpaceIdentity
 
 class TerraceBandSpec(BaseModel):
     """
@@ -76,6 +79,18 @@ class FloorPlanRequest(BaseModel):
         default=True,
         description="Draw structural layer (column grid bubbles, beams, feasibility notes) on sheets; validation always runs L12 regardless"
     )
+    include_scheme_alternatives: Optional[bool] = Field(
+        default=False,
+        description="Generate the constrained solver's ranked scheme portfolio (Max Area / Max Vastu / Max Light+Vent) alongside the legacy plan"
+    )
+    program_aware_footprint: Optional[bool] = Field(
+        default=False,
+        description="Programme-aware footprint: size the rectangular footprint from the ontology programme (plus walls/circulation) instead of coverage alone; explicit programme deficit warns when the envelope cannot fit"
+    )
+    selected_scheme_id: Optional[str] = Field(
+        default=None,
+        description="Optional user-chosen scheme id; recorded in provenance when scheme alternatives are generated"
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -101,6 +116,12 @@ class FloorPlanRequest(BaseModel):
                 data["plot_polygon"] = data["plotPolygon"]
             if "bypassCache" in data and "bypass_cache" not in data:
                 data["bypass_cache"] = data["bypassCache"]
+            if "includeSchemeAlternatives" in data and "include_scheme_alternatives" not in data:
+                data["include_scheme_alternatives"] = data["includeSchemeAlternatives"]
+            if "programAwareFootprint" in data and "program_aware_footprint" not in data:
+                data["program_aware_footprint"] = data["programAwareFootprint"]
+            if "selectedSchemeId" in data and "selected_scheme_id" not in data:
+                data["selected_scheme_id"] = data["selectedSchemeId"]
             # If plot_polygon is provided without plot dimensions, derive bounding box dimensions
             poly_data = data.get("plot_polygon")
             if poly_data:
@@ -167,6 +188,26 @@ class FloorPlanRequest(BaseModel):
             raise ValueError("At least 3 distinct rooms are required to synthesize a floor plan.")
         return deduped
 
+    @model_validator(mode="after")
+    def normalize_programme_ids(self) -> "FloorPlanRequest":
+        """Resolve legacy/display room IDs to canonical ontology IDs.
+
+        Old clients (and saved snapshots) send IDs such as ``apt_a_living`` or
+        ``loading_dock``.  The typology was still solved correctly, but the
+        programme audit reported every such room as unmet because the solver
+        only knows the ontology IDs.  Normalizing here keeps the request and
+        the audit on the same vocabulary without hiding genuinely unsupported
+        rooms.
+        """
+        if self.required_rooms:
+            from app.services.floorplan.room_aliases import normalize_room_ids
+
+            self.required_rooms = normalize_room_ids(
+                self.building_typology or "residential_single",
+                self.required_rooms,
+            )
+        return self
+
 class EnvelopeRect(BaseModel):
     x: float
     y: float
@@ -186,6 +227,8 @@ class RoomRectangle(BaseModel):
     vastu_compliant: bool
     applied_rules: List[str] = Field(default_factory=list, description="Ontology rule IDs shaping this room")
     relaxations: List[Dict[str, str]] = Field(default_factory=list, description="Rule relaxations with rationale tags")
+    space_type_id: Optional[str] = Field(default=None, description="Canonical ontology space type")
+    identity: Optional[SpaceIdentity] = Field(default=None, description="Resolved identity: single source for name, zone and service class")
 
 class DoorGeometry(BaseModel):
     door_id: str
@@ -241,6 +284,8 @@ class RoomPlacement(BaseModel):
     depth_m: float
     zone: str
     vastu_compliant: bool
+    space_type_id: Optional[str] = None
+    identity: Optional[SpaceIdentity] = None
 
 class FloorPlanMetrics(BaseModel):
     vastu_compliance_pct: float = Field(..., ge=0.0, le=100.0)
@@ -307,6 +352,22 @@ class FloorPlanResponse(BaseModel):
     site_plan: Optional[SitePlanModel] = Field(
         default=None,
         description="Canonical site plan with buildable polygon, setbacks, and outdoor fragments"
+    )
+    scheme_alternatives: Optional[List[SchemeAlternative]] = Field(
+        default=None,
+        description="Ranked scheme alternatives (only present when include_scheme_alternatives=true)"
+    )
+    scheme_portfolio: Optional[SchemePortfolio] = Field(
+        default=None,
+        description="Scheme portfolio provenance, reference metrics and selected scheme (only present when requested)"
+    )
+    selected_scheme_id: Optional[str] = Field(
+        default=None,
+        description="Selected scheme id, recorded in the response and provenance"
+    )
+    land_economics: Optional[LandEconomicsReport] = Field(
+        default=None,
+        description="Land-economics report and SPACE-EFFICIENCY certificate"
     )
 
 
