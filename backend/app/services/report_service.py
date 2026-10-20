@@ -16,6 +16,12 @@ from reportlab.graphics.shapes import Drawing, Rect, String, ArcPath, Circle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
+from app.services.floorplan.identity import (
+    identity_dict,
+    identity_name,
+    identity_zone_category,
+)
+
 
 # =============================================================================
 # 1. FONT REGISTRATION & TYPOGRAPHY SYSTEM
@@ -383,20 +389,22 @@ def make_floorplan_legend(floorplan_data: Dict[str, Any], width: float = CONTENT
         raw_rooms = floorplan_data.get("placements") or []
 
     cells = []
-    seen_names = set()
     for idx, r in enumerate(raw_rooms, 1):
         rid = str(_get(r, "room_id", "") or "")
-        name = str(_get(r, "room_name", "") or "")
+        name = identity_name(r, rid.replace("_", " ").title() if rid else "Room")
         if not name:
             name = rid.replace("_", " ").title() if rid else "Room"
-        if name in seen_names:
-            continue
-        seen_names.add(name)
+        # Every room gets a legend row.  Names are allowed to repeat
+        # (two bathrooms, four bedrooms); identity + room id distinguish them.
         is_core = bool(_get(r, "is_vertical_core", False)) or rid in ("stairs", "staircase", "lift", "elevator")
-        zone = str(_get(r, "zone", "General") or "General")
+        zone = identity_zone_category(r)
         chip_label = "[Core]" if is_core else f"[{zone.title()}]"
         dot_color = "#AF52DE" if is_core else ZONE_COLORS.get(zone.lower(), "#0071E3")
-        cell_p = Paragraph(f'<b>{idx}.</b> <font color="{dot_color}" size=8>•</font> <b>{html.escape(name)}</b> <font color="{COLOR_TEXT_TERTIARY.hexval()}" size=6.5>{html.escape(chip_label)}</font>', p_leg)
+        sid = str(_get(r, "space_type_id", "") or identity_dict(r).get("space_type_id", "") or "")
+        detail = f"{html.escape(chip_label)}"
+        if sid and not sid.startswith("unresolved:"):
+            detail += f" · {html.escape(sid)}"
+        cell_p = Paragraph(f'<b>{idx}.</b> <font color="{dot_color}" size=8>•</font> <b>{html.escape(name)}</b> <font color="{COLOR_TEXT_TERTIARY.hexval()}" size=6.5>{detail}</font>', p_leg)
         cells.append(cell_p)
 
     if not cells:
@@ -526,7 +534,7 @@ def make_construction_schedules_table(
             _synth_grade = "standard"
         rooms_raw = _get(floor_data, "rooms", []) or (_get(floor_data, "rectangles", {}) or {}).get("rooms", []) or _get(floor_data, "placements", [])
         for idx, r in enumerate(rooms_raw, 1):
-            r_nm = str(_get(r, "room_name", f"Room {idx}"))
+            r_nm = identity_name(r, f"Room {idx}")
             r_w = _safe_float(_get(r, "width_m", _get(r, "width", 3.0)), 3.0)
             r_d = _safe_float(_get(r, "depth_m", _get(r, "height", 3.0)), 3.0)
             r_ar = _safe_float(_get(r, "area_sqm", r_w * r_d), r_w * r_d)
@@ -538,6 +546,8 @@ def make_construction_schedules_table(
             r_sched.append({
                 "room_number": idx,
                 "room_name": r_nm,
+                "space_type_id": _get(r, "space_type_id", None),
+                "identity": identity_dict(r),
                 "clear_area_sqm": r_ar,
                 "clear_dims": f"{r_w:.2f}m x {r_d:.2f}m",
                 "finish_zone": _r_finish,
@@ -1132,7 +1142,7 @@ def make_universal_gate_table(gate: Dict[str, Any]) -> List[Any]:
     UNIVERSAL VALIDATION GATE layer table as ReportLab flowables.
     Shared by the Sheet 10.0 dossier and the single-floor blueprint page so the
     gate is a content layer on every blueprint-bearing PDF (SVG/PDF parity).
-    Every generation lists ALL layers L1-L14 with per-layer status
+    Every generation lists ALL layers L1-L15 with per-layer status
     (PASS | WARN | FAIL | N/A-with-reason); overall = worst layer.
     """
     flowables: List[Any] = []
@@ -1152,7 +1162,7 @@ def make_universal_gate_table(gate: Dict[str, Any]) -> List[Any]:
     }
     _gate_rows = [
         [
-            Paragraph("<b>UNIVERSAL VALIDATION GATE - LAYERS L1-L14</b>", _g_head),
+            Paragraph("<b>UNIVERSAL VALIDATION GATE - LAYERS L1-L15</b>", _g_head),
             Paragraph("", _g_cell),
             Paragraph(f"<b>OVERALL: {_g_overall}</b>",
                       _g_status.get(_g_overall, _g_cell)),
@@ -1163,7 +1173,7 @@ def make_universal_gate_table(gate: Dict[str, Any]) -> List[Any]:
             Paragraph("<b>Status</b>", _g_th),
         ],
     ]
-    for _ld in _gate_layers[:14]:
+    for _ld in _gate_layers[:15]:
         _lid = str(_ld.get("layer_id", "?"))
         _lt = str(_ld.get("title", ""))
         _lst = str(_ld.get("status", "PASS"))
@@ -2301,7 +2311,7 @@ def generate_pdf_report(
 
         # =========================================================================
         # UNIVERSAL VALIDATION GATE - LAYER TABLE (SHEET 10.0)
-        # Every generation lists ALL layers L1-L14 with per-layer status
+        # Every generation lists ALL layers L1-L15 with per-layer status
         # (PASS | WARN | FAIL | N/A-with-reason); overall = worst layer.
         # Rendering extracted to make_universal_gate_table so the
         # single-floor blueprint path emits the same content layer.
@@ -2415,6 +2425,9 @@ def generate_pdf_report(
                         "height": _safe_float(_get(r, "depth_m", _get(r, "height", 0.0))),
                         "area_sqm": _safe_float(_get(r, "area_sqm", 0.0)),
                         "zone": str(_get(r, "zone", "General")),
+                        "zone_category": str(_get(r, "zone_category", "")),
+                        "space_type_id": _get(r, "space_type_id", None),
+                        "identity": identity_dict(r),
                         "vastu_compliant": bool(_get(r, "vastu_compliant", True)),
                         "is_vertical_core": bool(_get(r, "is_vertical_core", False)),
                     }
@@ -2509,6 +2522,9 @@ def generate_pdf_report(
                         "height": _safe_float(_get(r, "depth_m", _get(r, "height", 0.0))),
                         "area_sqm": _safe_float(_get(r, "area_sqm", 0.0)),
                         "zone": str(_get(r, "zone", "General")),
+                        "zone_category": str(_get(r, "zone_category", "")),
+                        "space_type_id": _get(r, "space_type_id", None),
+                        "identity": identity_dict(r),
                         "vastu_compliant": bool(_get(r, "vastu_compliant", True)),
                         "is_vertical_core": bool(_get(r, "is_vertical_core", False)),
                     }

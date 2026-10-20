@@ -56,6 +56,13 @@ import html
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Any, Literal
 
+from app.services.floorplan.identity import (
+    identity_dict,
+    identity_is_outdoor,
+    identity_is_wet,
+    identity_name,
+)
+
 # ReportLab imports (lazy or guarded if needed)
 try:
     from reportlab.graphics.shapes import Drawing, Rect, Line, String, ArcPath, Circle, Polygon, PolyLine
@@ -677,7 +684,7 @@ def build_drawing_ir(
         _truth_tail = f" | FRTG {_frtg_txt} | POLYHASH {_poly_hash or 'NA'}"
     freshness_token = f"GEN {clean_gen} | PLOT {plot_w:.1f}m FRONTAGE x {plot_d:.1f}m DEPTH | {storeys_label} | ENV {env_w:.2f}x{env_d:.2f}m{_truth_tail}"
 
-    # Universal validation gate (L1-L14): stamped layer list + per-layer table.
+    # Universal validation gate (L1-L15): stamped layer list + per-layer table.
     gate_data = _get(building_model, "validation_gate", None) or _get(floor_data, "validation_gate", None) or {}
     gate_layers_list = list(gate_data.get("layers") or [])
     gate_validated = list(gate_data.get("validated_layers") or [])
@@ -752,7 +759,8 @@ def build_drawing_ir(
     norm_rooms: List[Dict[str, Any]] = []
     for r in rooms_list:
         rid = str(_get(r, "room_id", "") or "")
-        rname = str(_get(r, "room_name", rid.replace("_", " ").title()) or rid)
+        r_identity = identity_dict(r)
+        rname = identity_name(r, rid.replace("_", " ").title())
         rx = _safe_float(_get(r, "x", 0.0), 0.0) - offset_x
         ry = _safe_float(_get(r, "y", 0.0), 0.0) - offset_y
         rw = _safe_float(_get(r, "width_m", _get(r, "width", 0.0)), 0.0)
@@ -775,6 +783,18 @@ def build_drawing_ir(
             # Carry zone_category - the terrace drainage set keys off it
             # (the key was previously dropped, leaving that block dead code).
             "zone_category": str(_get(r, "zone_category", "")),
+            "space_type_id": str(_get(r, "space_type_id", r_identity.get("space_type_id", "")) or ""),
+            "identity": r_identity,
+            "is_outdoor": identity_is_outdoor(r),
+            # Drainage/overflow symbols are for roof terraces only; a balcony is
+            # still an outdoor identity but carries a guarded edge, not a
+            # 1:100 roof slope.  Annotating every balcony as a terrace caused
+            # label collisions on compact plates.
+            "is_terrace_drainage": (
+                r_identity.get("space_type_id") == "terrace"
+                or str(_get(r, "zone_category", "")).lower() == "terrace"
+            ),
+            "is_wet": identity_is_wet(r),
             "is_vertical_core": is_core,
             "unit_id": u_id,
             "raw": r,
@@ -872,7 +892,15 @@ def build_drawing_ir(
         if is_core:
             fc = "#FAF5FF"
 
-        is_terrace = str(_get(r["raw"], "zone_category", "")).lower() == "terrace" or "terrace" in rid.lower()
+        # A terrace is a non-carpet outdoor surface; a balcony keeps the normal
+        # room fill (and stays in the fill-per-room count), while both remain
+        # outdoor identities for the drainage service layer.
+        _raw_terrace = r["raw"]
+        is_terrace = (
+            identity_dict(_raw_terrace).get("space_type_id") == "terrace"
+            or str(_get(_raw_terrace, "zone_category", "")).lower() == "terrace"
+            or "terrace" in rid.lower()
+        )
         if is_terrace:
             fc = "#F8FAFC"
             poly_pts = [
@@ -1207,19 +1235,51 @@ def build_drawing_ir(
         from_rm_id = str(_get(d, "from_room", ""))
         to_rm = next((r for r in rooms_list if str(_get(r, "room_id", "")) == to_rm_id), None)
         from_rm = next((r for r in rooms_list if str(_get(r, "room_id", "")) == from_rm_id), None)
-        matched_rm = to_rm if (to_rm and _get(to_rm, "unit_id")) else (from_rm if (from_rm and _get(from_rm, "unit_id")) else (to_rm or from_rm))
+        # A unit badge belongs on the unit *entry* door (shared lobby/corridor
+        # on one side, unit room on the other).  Tagging every internal door of
+        # the unit printed four identical "UNIT A" chips per flat, on top of
+        # the bath, kitchen and bedroom tags.
+        to_is_unit = bool(to_rm and _get(to_rm, "unit_id"))
+        from_is_unit = bool(from_rm and _get(from_rm, "unit_id"))
+        if to_is_unit and from_is_unit:
+            matched_rm = None
+        elif to_is_unit or from_is_unit:
+            matched_rm = to_rm if to_is_unit else from_rm
+        else:
+            matched_rm = to_rm or from_rm
         unit_badge = None
         if matched_rm:
             u_id = str(_get(matched_rm, "unit_id", "") or "")
             r_name = str(_get(matched_rm, "room_name", "") or "")
             r_id = str(_get(matched_rm, "room_id", "") or "")
             comb = f"{u_id} {r_name} {r_id}"
+            _rx = _safe_float(_get(matched_rm, "x", 0.0), 0.0)
+            _ry = _safe_float(_get(matched_rm, "y", 0.0), 0.0)
+            _rw = _safe_float(_get(matched_rm, "width_m", _get(matched_rm, "width", 0.0)), 0.0)
+            _rd = _safe_float(_get(matched_rm, "depth_m", _get(matched_rm, "height", 0.0)), 0.0)
+            # The room frame the badge may print inside (IR coordinates).
+            # Badges ride a door hinge, but a hinge-relative offset puts two
+            # adjacent unit entries on top of each other and on the stair
+            # "UP" letter; the unit's own room is the collision-free anchor.
+            _badge_rect = (
+                (_rx, _ry, _rw, _rd)
+                if is_multi_wing
+                else (_rx, env_d - (_ry + _rd), _rw, _rd)
+            )
+            tag = None
             if "A" in u_id or "North" in comb or "suite_north" in r_id.lower() or "unit 1" in r_name.lower() or ("T3" in bldg_typ and ("reception" in r_id.lower() or "main_entry" in did.lower() or "reception" in to_rm_id.lower() or "reception" in from_rm_id.lower())):
-                unit_badge = {"tag": "UNIT A", "x": hx_ir + 0.1, "y": hy_ir - 0.35}
+                tag = "UNIT A"
             elif "B" in u_id or "South" in comb or "suite_south" in r_id.lower() or "unit 2" in r_name.lower() or ("T3" in bldg_typ and ("conference" in r_id.lower() or "lounge" in r_id.lower() or "conference" in to_rm_id.lower() or "visitor_lounge" in to_rm_id.lower())):
-                unit_badge = {"tag": "UNIT B", "x": hx_ir + 0.1, "y": hy_ir - 0.35}
+                tag = "UNIT B"
             elif u_id:
-                unit_badge = {"tag": u_id.replace("_", " ").upper(), "x": hx_ir + 0.1, "y": hy_ir - 0.35}
+                tag = u_id.replace("_", " ").upper()
+            if tag:
+                unit_badge = {
+                    "tag": tag,
+                    "x": hx_ir + 0.1,
+                    "y": hy_ir - 0.35,
+                    "rect": _badge_rect,
+                }
 
         op_prim = OpeningPrimitive(
             layer="openings",
@@ -1743,7 +1803,11 @@ def build_drawing_ir(
         rd_lbl = _safe_float(clear_r.get("depth_m", rd_m), rd_m) if clear_r else rd_m
         area_lbl = _safe_float(clear_r.get("area_sqm", clear_r.get("clear_area_sqm", area_m2)), area_m2) if clear_r else area_m2
 
-        is_terrace = "terrace" in rid.lower() or str(_get(r_raw, "zone_category", "")).lower() == "terrace"
+        is_terrace = (
+            identity_dict(r_raw).get("space_type_id") == "terrace"
+            or str(_get(r_raw, "zone_category", "")).lower() == "terrace"
+            or "terrace" in rid.lower()
+        )
         if is_terrace:
             full_name = "OPEN TO SKY / TERRACE"
             abbrev_name = "TERRACE"
@@ -2403,7 +2467,7 @@ def build_drawing_ir(
         # sheet). The loop below is terrace-conditioned, so plates without a
         # terrace zone are unaffected.
         for tr in norm_rooms:
-            if str(tr.get("zone_category", "")) != "terrace":
+            if not tr.get("is_terrace_drainage"):
                 continue
             tx, ty = _safe_float(tr.get("x", 0.0), 0.0), _safe_float(tr.get("y", 0.0), 0.0)
             tw, td = _safe_float(tr.get("width_m", 0.0), 0.0), _safe_float(tr.get("depth_m", 0.0), 0.0)
@@ -2517,6 +2581,10 @@ def build_drawing_ir(
                 "room_number": idx,
                 "room_name": r["room_name"],
                 "room_id": r["room_id"],
+                "space_type_id": r.get("space_type_id") or None,
+                "identity": dict(r.get("identity") or {}),
+                "identity_name": r["room_name"],
+                "is_wet": bool(r.get("is_wet")),
                 "clear_dimensions": f"{rw:.2f}m x {rd:.2f}m",
                 "clear_dims": f"{rw:.2f}m x {rd:.2f}m",
                 "clear_area_sqm": r["area_sqm"],
@@ -2673,7 +2741,7 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
         _lt_y_plan = schedules_y + (
             (54.0 + 88.0 + 88.0 + 152.0 + 112.0) if _narrow else (54.0 + 82.0 + 205.0)
         )
-        _legend_start = 29.0 + (14 * 10.5) + (16.0 if _warn_present else 4.0)
+        _legend_start = 29.0 + (15 * 10.5) + (16.0 if _warn_present else 4.0)
         scale_strip_y = _lt_y_plan + _legend_start + max(0, len(legend_lines) - 1) * 9.0 + 24.0
     else:
         # Site sheets / sheets without a gate table: strip under the panel.
@@ -2851,6 +2919,107 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
             hrx, hry = st.headroom_text_pos
             svg.append(f'  <text x="{px(hrx):.1f}" y="{py(hry):.1f}" font-size="6.5" font-weight="700" fill="{core_stroke}" text-anchor="middle" letter-spacing="0.2">{st.headroom_text}</text>')
 
+    # 4b. Unit-badge placement plan
+    #  The unit entry tag is fixed-size typography riding a door hinge.  Two
+    #  adjacent unit doors (T2 north/south entries) place two 38 x 13 px tags
+    #  on the same hinge line, and the stair "UP" text or a door tag can sit
+    #  right under them.  Score a deterministic candidate set against the
+    #  on-plan text boxes already scheduled and the tags drawn so far, then
+    #  take the least-overlapping spot instead of always printing to the
+    #  right of the hinge.
+    _badge_obstacles: List[Tuple[float, float, float, float]] = []
+    for _tp in ir.primitives_by_layer("text"):
+        if not isinstance(_tp, TextPrimitive):
+            continue
+        _hw = float(getattr(_tp, "halo_w_m", 1.8) or 1.8) / 2.0
+        _hh = float(getattr(_tp, "halo_h_m", 0.55) or 0.55) / 2.0
+        _badge_obstacles.append(
+            (px(_tp.x - _hw), py(_tp.y + _hh), px(_tp.x + _hw), py(_tp.y - _hh))
+        )
+    # Every opening tag is a fixed 15 x 11 px box centred on its tag point.
+    for _op in ir.primitives_by_layer("openings"):
+        if isinstance(_op, OpeningPrimitive):
+            _tx, _ty = px(_op.tag_x), py(_op.tag_y)
+            _badge_obstacles.append((_tx - 7.5, _ty - 5.5, _tx + 7.5, _ty + 5.5))
+    for _st in ir.primitives_by_layer("cores"):
+        if not isinstance(_st, StairPrimitive):
+            continue
+        for _pos, _half_w in (
+            (getattr(_st, "up_text_pos", None), 10.0),
+            (getattr(_st, "dn_text_pos", None), 10.0),
+        ):
+            if _pos:
+                _sx, _sy = px(_pos[0]), py(_pos[1])
+                _badge_obstacles.append((_sx - _half_w, _sy - 6.0, _sx + _half_w, _sy + 6.0))
+        _head = getattr(_st, "headroom_text_pos", None)
+        if _head:
+            _head_text = str(getattr(_st, "headroom_text", "") or "")
+            _half_w = max(12.0, len(_head_text) * 2.4)
+            _sx, _sy = px(_head[0]), py(_head[1])
+            _badge_obstacles.append((_sx - _half_w, _sy - 5.5, _sx + _half_w, _sy + 5.5))
+
+    def _rect_overlap(a: Tuple[float, float, float, float], b: Tuple[float, float, float, float]) -> float:
+        w = min(a[2], b[2]) - max(a[0], b[0])
+        h = min(a[3], b[3]) - max(a[1], b[1])
+        return w * h if w > 0.0 and h > 0.0 else 0.0
+
+    def _place_unit_badge(hx_s: float, hy_s: float, ub: Dict[str, Any]) -> Tuple[float, float]:
+        ub_w, ub_h = 38.0, 13.0
+        candidates: List[Tuple[float, float]] = []
+        rect = ub.get("rect") if isinstance(ub, dict) else None
+        if rect and float(rect[2]) > 0.20 and float(rect[3]) > 0.20:
+            _rx, _ry, _rw, _rd = (float(v) for v in rect)
+            left = px(_rx)
+            right = px(_rx + _rw)
+            bottom = py(_ry)
+            top = py(_ry + _rd)
+
+            def _clamp(v: float, lo: float, hi: float) -> float:
+                return lo if hi < lo else min(max(v, lo), hi)
+
+            # Four room corners and four edge midpoints, clamped so the chip
+            # stays inside the room.  Corners carry door tags on small rooms;
+            # the edge midpoints are the free fallback in a large living room.
+            _spots = [
+                (left + 2.0, top + 2.0, False, False),
+                (right - 2.0, top + 2.0, True, False),
+                (left + 2.0, bottom - 2.0, False, True),
+                (right - 2.0, bottom - 2.0, True, True),
+                ((left + right) / 2.0, top + 2.0, None, False),
+                ((left + right) / 2.0, bottom - 2.0, None, True),
+                (left + 2.0, (top + bottom) / 2.0, False, None),
+                (right - 2.0, (top + bottom) / 2.0, True, None),
+            ]
+            for cx, cy, is_right, is_bottom in _spots:
+                x = cx - ub_w / 2.0 if is_right is None else cx - (ub_w if is_right else 0.0)
+                y = cy - ub_h / 2.0 if is_bottom is None else cy - (ub_h if is_bottom else 0.0)
+                candidates.append((
+                    _clamp(x, left + 2.0, right - ub_w - 2.0),
+                    _clamp(y, top + 2.0, bottom - ub_h - 2.0),
+                ))
+            # Nearest spot first: the chip still reads as the unit's entry
+            # marker rather than floating in the far end of the room.
+            candidates.sort(key=lambda c: (c[0] - hx_s) ** 2 + (c[1] - hy_s) ** 2)
+        # Hinge-relative fallbacks for a room too small to hold the chip.
+        candidates.extend([
+            (hx_s + 4.0, hy_s - 22.0), (hx_s + 4.0, hy_s + 12.0),
+            (hx_s - ub_w - 4.0, hy_s - 22.0), (hx_s - ub_w - 4.0, hy_s + 12.0),
+            (hx_s - ub_w / 2.0, hy_s - 38.0), (hx_s - ub_w / 2.0, hy_s + 20.0),
+        ])
+        best: Optional[Tuple[float, float, float, Tuple[float, float, float, float]]] = None
+        for _cx, _cy in candidates:
+            x = min(max(2.0, _cx), svg_w - ub_w - 2.0)
+            y = min(max(2.0, _cy), svg_h - ub_h - 2.0)
+            box = (x, y, x + ub_w, y + ub_h)
+            score = sum(_rect_overlap(box, ob) for ob in _badge_obstacles)
+            if best is None or score < best[0] - 1e-9:
+                best = (score, x, y, box)
+            if score <= 0.0:
+                break
+        _, x, y, box = best
+        _badge_obstacles.append(box)
+        return x, y
+
     # 5. Openings Layer (Doors & Windows)
     for op in ir.primitives_by_layer("openings"):
         if isinstance(op, OpeningPrimitive):
@@ -2872,11 +3041,7 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                     ub = op.unit_badge
                     ub_w = 38.0
                     ub_h = 13.0
-                    ub_x = hx_s + 4.0
-                    if hy_s < margin_y + 35.0:
-                        ub_y = hy_s + 12.0
-                    else:
-                        ub_y = hy_s - 22.0
+                    ub_x, ub_y = _place_unit_badge(hx_s, hy_s, ub)
                     unit_badge_bg = "#FEF3C7" if not is_cad else "rgba(245, 158, 11, 0.15)"
                     unit_badge_stroke = "#D97706" if not is_cad else "#F59E0B"
                     unit_badge_text = "#92400E" if not is_cad else "#F59E0B"
@@ -3241,7 +3406,7 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
         svg.append(f'    <text x="0.0" y="82.5" font-size="5.5" font-weight="500" fill="{text_dim}">Landing: {s_row.get("landing_dims", "2.15 x 1.00 m")} | Floor-to-floor: {s_row.get("floor_to_floor", "3.00 m")}</text>')
         svg.append('  </g>')
 
-        # UNIVERSAL VALIDATION GATE - LAYER TABLE (L1-L14)
+        # UNIVERSAL VALIDATION GATE - LAYER TABLE (L1-L15)
         # Every generation shows the full per-layer status table: PASS/WARN/FAIL
         # chips and N/A-with-reason rows. Never hidden, never silently skipped.
         layer_rows = [ld for ld in getattr(ir.header, "layer_statuses", []) or [] if isinstance(ld, dict)]
@@ -3254,13 +3419,13 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
             lt_y = (stair_tbl_y + 112.0) if _narrow_stack else (room_tbl_y + 205.0)
             status_fill = {"PASS": "#047857", "WARN": "#B45309", "FAIL": "#DC2626", "N/A": "#64748B"}
             svg.append(f'  <g transform="translate({lt_x}, {lt_y})">')
-            svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">VALIDATION GATE - LAYERS L1-L14 (OVERALL: {html.escape(str(getattr(ir.header, "overall_layer_status", "PASS")))})</text>')
+            svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">VALIDATION GATE - LAYERS L1-L15 (OVERALL: {html.escape(str(getattr(ir.header, "overall_layer_status", "PASS")))})</text>')
             lid_x, lst_x, lsum_x = 0.0, 26.0, 62.0
             svg.append(f'    <text x="{lid_x}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">LAYER</text>')
             svg.append(f'    <text x="{lst_x}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">STATUS</text>')
             svg.append(f'    <text x="{lsum_x}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">SUMMARY</text>')
             _summary_max = max(24, int((svg_w - margin_x - lsum_x - 12.0) / (6.0 * 0.60)))
-            for row_idx, ld in enumerate(layer_rows[:14]):
+            for row_idx, ld in enumerate(layer_rows[:15]):
                 ry_pos = 29.0 + (row_idx * 10.5)
                 lid = str(ld.get("layer_id", "?"))
                 lstat = str(ld.get("status", "PASS"))
@@ -3274,10 +3439,10 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                 svg.append(f'    <text x="{lsum_x}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(lsum)}</text>')
             warn_rows = [ld for ld in layer_rows if str(ld.get("status")) == "WARN"]
             if warn_rows:
-                warn_y = 29.0 + (14 * 10.5) + 4.0
+                warn_y = 29.0 + (15 * 10.5) + 4.0
                 warn_labels = "; ".join(f"{ld.get('layer_id')}: {_ellipsize_str((ld.get('findings') or ['advisory'])[0] if ld.get('findings') else 'advisory', 40)}" for ld in warn_rows[:3])
                 svg.append(f'    <text x="0" y="{warn_y:.1f}" font-size="5.5" font-weight="600" fill="#F59E0B">WARN CHIPS: {html.escape(_ellipsize_str(warn_labels, _panel_text_max_chars))}</text>')
-            legend_y = 29.0 + (14 * 10.5) + (16.0 if warn_rows else 4.0)
+            legend_y = 29.0 + (15 * 10.5) + (16.0 if warn_rows else 4.0)
             for li, lline in enumerate(legend_lines):
                 svg.append(f'    <text x="0" y="{legend_y + li * 9.0:.1f}" font-size="5.5" font-weight="500" fill="{text_dim}">{html.escape(lline)}</text>')
             svg.append('  </g>')
@@ -3341,9 +3506,9 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
             slt_y = tax_y + 108.0
             sfill = {"PASS": "#047857", "WARN": "#B45309", "FAIL": "#DC2626", "N/A": "#64748B"}
             svg.append(f'  <g transform="translate({margin_x}, {slt_y})">')
-            svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">VALIDATION GATE - LAYERS L1-L14 (SITE SCOPE, OVERALL: {html.escape(str(getattr(ir.header, "overall_layer_status", "PASS")))})</text>')
+            svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">VALIDATION GATE - LAYERS L1-L15 (SITE SCOPE, OVERALL: {html.escape(str(getattr(ir.header, "overall_layer_status", "PASS")))})</text>')
             sl_id_x, sl_st_x, sl_sum_x = 0.0, 26.0, 62.0
-            for row_idx, ld in enumerate(site_layer_rows[:14]):
+            for row_idx, ld in enumerate(site_layer_rows[:15]):
                 ry_pos = 21.0 + (row_idx * 10.5)
                 sl_lid = str(ld.get("layer_id", "?"))
                 sl_stat = str(ld.get("status", "PASS"))
@@ -3590,6 +3755,33 @@ def render_reportlab_from_ir(
                     ub_h_pt = 13.0
                     ub_x_pt = x_pt(op.hinge_x) + 4.0
                     ub_y_pt = y_pt(op.hinge_y) + 4.0
+                    # Same room-corner anchor as the SVG sheet, so the vector
+                    # PDF does not print the chip on the door tag or the stair
+                    # "UP" letter.
+                    _rect_ir = ub.get("rect") if isinstance(ub, dict) else None
+                    if _rect_ir and float(_rect_ir[2]) > 0.20 and float(_rect_ir[3]) > 0.20:
+                        _rx, _ry, _rw, _rd = (float(v) for v in _rect_ir)
+                        _left = x_pt(_rx)
+                        _right = x_pt(_rx + _rw)
+                        _bottom = y_pt(_ry)
+                        _top = y_pt(_ry + _rd)
+                        _corners = [
+                            (_left + 2.0, _top - ub_h_pt - 2.0),
+                            (_right - ub_w_pt - 2.0, _top - ub_h_pt - 2.0),
+                            (_left + 2.0, _bottom + 2.0),
+                            (_right - ub_w_pt - 2.0, _bottom + 2.0),
+                        ]
+                        _corners.sort(
+                            key=lambda c: (c[0] - x_pt(op.hinge_x)) ** 2
+                            + (c[1] - y_pt(op.hinge_y)) ** 2
+                        )
+                        ub_x_pt, ub_y_pt = _corners[0]
+
+                        def _clamp_pt(v: float, lo: float, hi: float) -> float:
+                            return lo if hi < lo else min(max(v, lo), hi)
+
+                        ub_x_pt = _clamp_pt(ub_x_pt, _left + 2.0, _right - ub_w_pt - 2.0)
+                        ub_y_pt = _clamp_pt(ub_y_pt, _bottom + 2.0, _top - ub_h_pt - 2.0)
                     drawing.add(Rect(ub_x_pt, ub_y_pt, ub_w_pt, ub_h_pt, rx=2, ry=2, fillColor=colors.HexColor("#FEF3C7"), strokeColor=colors.HexColor("#D97706"), strokeWidth=0.8))
                     drawing.add(String(ub_x_pt + ub_w_pt / 2.0, ub_y_pt + 3.0, ub["tag"], textAnchor="middle", fontSize=7.0, fontName="Helvetica-Bold", fillColor=colors.HexColor("#D97706")))
             elif op.opening_type == "window":

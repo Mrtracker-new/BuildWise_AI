@@ -4,7 +4,7 @@ test_svg_pdf_content_parity.py - SVG/PDF content parity
 Both renderers consume the same Drawing IR; this pin asserts that the
 CONTENT layers survive into both output formats for the same build:
 
-  - universal gate table: every layer id L1-L14 + the OVERALL verdict
+  - universal gate table: every layer id L1-L15 + the OVERALL verdict
   - honest status stamp (STATUS: CONCEPT DESIGN ... NOT FOR CONSTRUCTION)
   - title block: GEN token, plot dimensions, storeys label
   - schedules: door schedule tag D1 and room-schedule content
