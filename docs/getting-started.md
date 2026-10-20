@@ -98,7 +98,7 @@ On Windows systems, you can start both services simultaneously using the root la
 .\run_project.bat
 ```
 
-This batch script automatically frees stale ports 8000 and 5173, starts Uvicorn, and boots Vite.
+This batch script automatically performs first-time bootstrapping (creates Python venv in `backend/`, installs `requirements.txt`, installs `node_modules` in `frontend/`), frees stale ports 8000 and 5173, and launches both the FastAPI backend and Vite frontend services. On subsequent runs, it skips installation and launches immediately. You can force reinstallation at any time by running `.\run_project.bat --install`.
 
 ---
 
