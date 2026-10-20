@@ -21,9 +21,15 @@ One pin on a map yields a full civil-engineering feasibility report — MCDA lan
 - **Print-Grade PDF Dossier:** Instant server-side ReportLab vector PDF compilation with an executive scorecard, 174mm vector blueprint, and room schedule.
 - **Zero Paid APIs:** Built entirely on open infrastructure — OpenFreeMap, Esri World Imagery, OpenTopoMap, USGS, Open-Meteo, and Copernicus Sentinel-2.
 
-## Quick Start
+### Windows (One-Click Setup & Launch)
+```bat
+.\run_project.bat
+```
+*(Automatically creates `backend\venv`, installs Python requirements, installs frontend npm packages, and starts both services).*
 
-### Backend
+### Manual Setup
+
+#### Backend
 ```bash
 cd backend
 python -m venv venv && source venv/bin/activate  # Windows: .\venv\Scripts\activate
@@ -32,7 +38,7 @@ cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
-### Frontend
+#### Frontend
 ```bash
 cd frontend
 npm install
