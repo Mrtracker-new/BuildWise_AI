@@ -928,233 +928,49 @@ def place_and_audit_bathroom_fixtures(
 def place_and_audit_furniture_catalog(
     room: MultiFloorRoomRectangle,
 ) -> Tuple[bool, List[FurnitureItemSpec], List[str]]:
+    """Place the ontology minimum furniture set inside the actual room.
+
+    Furniture evaluation moves from a post-hoc nominal check to a placement-time
+    geometry operation.  Every envelope is placed inside the room; a room is
+    satisfied only when the whole set fits.  The same ``layout_room`` function
+    is used by ``repair_room_envelopes_for_furniture`` and the constrained
+    solver, so demand and audit can never disagree.
     """
-    Evaluates room type minimum furniture set + circulation envelopes:
-    - Master Bedroom / Suite: 1800x2000 bed + 600 wardrobe + 500 side clearance + 750 foot clearance
-    - Secondary Bedroom: 1500x2000 bed + 600 wardrobe + 500 side clearance
-    - Living Room: 3-seater sofa + coffee table + 600mm circulation perimeter
-    - Dining: 6-seat table + 900mm pull-out clearance on all active sides
-    - Kitchen: Working triangle (Sink, Cooktop, Fridge) with 3.6m <= perimeter <= 7.9m
-    Attaches FurnitureItemSpec list to room.
-    """
-    items: List[FurnitureItemSpec] = []
+    from app.services.floorplan.furniture import (
+        furniture_set_for,
+        layout_room,
+    )
+
     warnings: List[str] = []
-    all_ok = True
-
-    rid = room.room_id.lower()
-    rname = room.room_name.lower()
     rx, ry, rw, rd = room.x, room.y, room.width_m, room.depth_m
+    item_types = furniture_set_for(
+        getattr(room, "space_type_id", None), room.room_id
+    )
+    if not item_types:
+        room.furniture = []
+        return True, [], warnings
 
-    # A. MASTER BEDROOM / SUITE
-    if "master" in rid or "master" in rname:
-        bed_w, bed_d = BED_KING_WIDTH_M, BED_KING_DEPTH_M
-        # Place king bed centered along north/south wall
-        bx = round(rx + max(BED_SIDE_CLR_M, (rw - bed_w) / 2.0), 2)
-        by = round(ry + BED_FOOT_CLR_M, 2)
-        side_clr = round(min(bx - rx, (rx + rw) - (bx + bed_w)), 2)
-        foot_clr = round(rd - (by - ry) - bed_d, 2)
-        bed_ok = (side_clr >= 0.40 and (foot_clr >= 0.50 or rd >= 3.20))
-
+    layout = layout_room(rw, rd, item_types)
+    items: List[FurnitureItemSpec] = []
+    for placed in layout.items:
         items.append(FurnitureItemSpec(
-            item_id=f"bed_king_{room.room_id}",
-            item_type="bed_king",
-            x=bx,
-            y=by,
-            width_m=bed_w,
-            depth_m=bed_d,
-            circulation_clearance_m=side_clr,
-            is_satisfied=bed_ok,
+            item_id=f"{placed.item_type}_{room.room_id}",
+            item_type=placed.item_type,
+            x=round(rx + placed.x, 2),
+            y=round(ry + placed.y, 2),
+            width_m=round(placed.width_m, 2),
+            depth_m=round(placed.depth_m, 2),
+            circulation_clearance_m=round(placed.clearance_m, 2),
+            is_satisfied=bool(layout.satisfied),
         ))
 
-        # Wardrobe along side wall
-        ward_w = round(min(rw * 0.60, 2.40), 2)
-        ward_d = WARDROBE_DEPTH_M
-        wx = round(rx + 0.20, 2)
-        wy = round(ry + rd - ward_d - 0.20, 2)
-        items.append(FurnitureItemSpec(
-            item_id=f"wardrobe_{room.room_id}",
-            item_type="wardrobe",
-            x=wx,
-            y=wy,
-            width_m=ward_w,
-            depth_m=ward_d,
-            circulation_clearance_m=0.75,
-            is_satisfied=(rd >= 3.20 or rw >= 3.40),
-        ))
-
-    # B. SECONDARY BEDROOM
-    elif "bed" in rid or "bed" in rname:
-        bed_w, bed_d = BED_QUEEN_WIDTH_M, BED_QUEEN_DEPTH_M
-        bx = round(rx + max(BED_SIDE_CLR_M, (rw - bed_w) / 2.0), 2)
-        by = round(ry + 0.60, 2)
-        side_clr = round(min(bx - rx, (rx + rw) - (bx + bed_w)), 2)
-        bed_ok = (side_clr >= 0.35 and rw >= 2.80)
-
-        items.append(FurnitureItemSpec(
-            item_id=f"bed_queen_{room.room_id}",
-            item_type="bed_queen",
-            x=bx,
-            y=by,
-            width_m=bed_w,
-            depth_m=bed_d,
-            circulation_clearance_m=side_clr,
-            is_satisfied=bed_ok,
-        ))
-
-        items.append(FurnitureItemSpec(
-            item_id=f"wardrobe_{room.room_id}",
-            item_type="wardrobe",
-            x=round(rx + 0.20, 2),
-            y=round(ry + rd - WARDROBE_DEPTH_M - 0.15, 2),
-            width_m=round(min(rw * 0.50, 1.80), 2),
-            depth_m=WARDROBE_DEPTH_M,
-            circulation_clearance_m=0.60,
-            is_satisfied=(rw >= 2.80 and rd >= 3.00),
-        ))
-
-    # C. LIVING ROOM
-    elif "living" in rid or "living" in rname:
-        # Sofa 3-seater + Coffee Table
-        sx = round(rx + max(LIVING_CIRC_CLR_M, (rw - SOFA_WIDTH_M) / 2.0), 2)
-        sy = round(ry + max(LIVING_CIRC_CLR_M, (rd - SOFA_DEPTH_M - COFFEE_TABLE_DEPTH_M - 0.60) / 2.0), 2)
-        sofa_ok = (rw >= 3.40 and rd >= 3.20)
-
-        items.append(FurnitureItemSpec(
-            item_id=f"sofa_set_{room.room_id}",
-            item_type="sofa_3seater",
-            x=sx,
-            y=sy,
-            width_m=SOFA_WIDTH_M,
-            depth_m=SOFA_DEPTH_M,
-            circulation_clearance_m=LIVING_CIRC_CLR_M,
-            is_satisfied=sofa_ok,
-        ))
-
-        items.append(FurnitureItemSpec(
-            item_id=f"coffee_table_{room.room_id}",
-            item_type="coffee_table",
-            x=round(sx + (SOFA_WIDTH_M - COFFEE_TABLE_WIDTH_M) / 2.0, 2),
-            y=round(sy + SOFA_DEPTH_M + 0.45, 2),
-            width_m=COFFEE_TABLE_WIDTH_M,
-            depth_m=COFFEE_TABLE_DEPTH_M,
-            circulation_clearance_m=0.60,
-            is_satisfied=sofa_ok,
-        ))
-
-    # D. DINING ROOM
-    elif "dining" in rid or "dining" in rname:
-        dw, dd = DINING_6P_WIDTH_M, DINING_6P_DEPTH_M
-        dx = round(rx + max(DINING_PULLOUT_CLR_M, (rw - dw) / 2.0), 2)
-        dy = round(ry + max(DINING_PULLOUT_CLR_M, (rd - dd) / 2.0), 2)
-        dining_ok = (rw >= 2.40 and rd >= 2.40)
-
-        items.append(FurnitureItemSpec(
-            item_id=f"dining_table_6p_{room.room_id}",
-            item_type="dining_table_6p",
-            x=dx,
-            y=dy,
-            width_m=dw,
-            depth_m=dd,
-            circulation_clearance_m=DINING_PULLOUT_CLR_M,
-            is_satisfied=dining_ok,
-        ))
-
-    # E. KITCHEN WORKING TRIANGLE
-    elif "kitchen" in rid or "kitchen" in rname:
-        # Place Cooktop, Sink, Fridge with NKBA per-leg bound (1.2m - 2.7m):
-        # Cooktop + Sink share the hot work-top run along one wall, spaced to a
-        # legal leg; Fridge sits on the opposite run at a clamped offset so both
-        # remaining legs stay within the bound (re-proportioning resolution).
-        cooktop_pos = (round(rx + rw * 0.25, 2), round(ry + rd - 0.60, 2))
-        sink_pos = (round(rx + rw * 0.75, 2), round(ry + rd - 0.60, 2))
-        # Leg 1 (cooktop-sink) must fit the per-leg bound
-        l1_raw = math.hypot(sink_pos[0] - cooktop_pos[0], sink_pos[1] - cooktop_pos[1])
-        if l1_raw > KITCHEN_TRIANGLE_MAX_LEG_M:
-            mid_x = (cooktop_pos[0] + sink_pos[0]) / 2.0
-            half = KITCHEN_TRIANGLE_MAX_LEG_M / 2.0
-            cooktop_pos = (round(mid_x - half, 2), cooktop_pos[1])
-            sink_pos = (round(mid_x + half, 2), sink_pos[1])
-        elif l1_raw < KITCHEN_TRIANGLE_MIN_LEG_M:
-            mid_x = (cooktop_pos[0] + sink_pos[0]) / 2.0
-            half = KITCHEN_TRIANGLE_MIN_LEG_M / 2.0
-            cooktop_pos = (round(mid_x - half, 2), cooktop_pos[1])
-            sink_pos = (round(mid_x + half, 2), sink_pos[1])
-        # Fridge centered between cooktop & sink on the opposite counter run:
-        # offset backwards so both remaining legs hit ~95% of the max leg bound
-        # (re-proportioning keeps the triangle inside NKBA ergonomic limits).
-        mid_cx = (cooktop_pos[0] + sink_pos[0]) / 2.0
-        half_leg = abs(sink_pos[0] - mid_cx)
-        leg_target = KITCHEN_TRIANGLE_MAX_LEG_M * 0.95
-        vert = math.sqrt(max(0.0, leg_target ** 2 - half_leg ** 2))
-        fridge_y = round(cooktop_pos[1] - vert, 2)
-        if fridge_y < ry + 0.30:
-            fridge_y = round(ry + 0.30, 2)
-        fridge_x = round(mid_cx, 2)
-        fridge_pos = (fridge_x, fridge_y)
-
-        # Triangle legs:
-        l1 = math.hypot(cooktop_pos[0] - sink_pos[0], cooktop_pos[1] - sink_pos[1])
-        l2 = math.hypot(sink_pos[0] - fridge_pos[0], sink_pos[1] - fridge_pos[1])
-        l3 = math.hypot(fridge_pos[0] - cooktop_pos[0], fridge_pos[1] - cooktop_pos[1])
-        tri_sum = round(l1 + l2 + l3, 2)
-
-        tri_ok = (
-            KITCHEN_TRIANGLE_MIN_SUM_M <= tri_sum <= KITCHEN_TRIANGLE_MAX_SUM_M
-            and all(KITCHEN_TRIANGLE_MIN_LEG_M <= leg <= KITCHEN_TRIANGLE_MAX_LEG_M for leg in (l1, l2, l3))
-        )
-        if not tri_ok:
-            all_ok = False
-            if tri_sum < KITCHEN_TRIANGLE_MIN_SUM_M:
-                warnings.append(
-                    f"Kitchen working triangle sum-of-legs ({tri_sum:.2f}m) below NKBA minimum ({KITCHEN_TRIANGLE_MIN_SUM_M}m) "
-                    f"- room may be undersized ({rw:.2f} x {rd:.2f}m); resize or re-proportion advised."
-                )
-            elif tri_sum > KITCHEN_TRIANGLE_MAX_SUM_M:
-                warnings.append(
-                    f"Kitchen working triangle sum-of-legs ({tri_sum:.2f}m) above NKBA maximum ({KITCHEN_TRIANGLE_MAX_SUM_M}m) "
-                    f"- room oversized; consider re-proportioning."
-                )
-            else:
-                warnings.append(
-                    f"Kitchen working triangle leg bound violated (each leg must be {KITCHEN_TRIANGLE_MIN_LEG_M}-{KITCHEN_TRIANGLE_MAX_LEG_M}m)."
-                )
-
-        items.append(FurnitureItemSpec(
-            item_id=f"cooktop_{room.room_id}",
-            item_type="kitchen_cooktop",
-            x=cooktop_pos[0],
-            y=cooktop_pos[1],
-            width_m=0.75,
-            depth_m=0.60,
-            circulation_clearance_m=0.90,
-            is_satisfied=tri_ok,
-        ))
-        items.append(FurnitureItemSpec(
-            item_id=f"sink_{room.room_id}",
-            item_type="kitchen_sink",
-            x=sink_pos[0],
-            y=sink_pos[1],
-            width_m=0.80,
-            depth_m=0.55,
-            circulation_clearance_m=0.90,
-            is_satisfied=tri_ok,
-        ))
-        items.append(FurnitureItemSpec(
-            item_id=f"fridge_{room.room_id}",
-            item_type="kitchen_fridge",
-            x=fridge_pos[0],
-            y=fridge_pos[1],
-            width_m=0.80,
-            depth_m=0.70,
-            circulation_clearance_m=0.90,
-            is_satisfied=tri_ok,
-        ))
-
-    all_ok = all(it.is_satisfied for it in items) if items else True
-    if not all_ok and room.zone_category not in ("circulation", "terrace"):
+    all_ok = bool(layout.satisfied) and len(items) == len(item_types)
+    if not all_ok:
+        reason = layout.reason or "item envelopes overlap or leave the room"
         warnings.append(
-            f"Furniture clearance resolution: Room '{room.room_id}' ({rw:.2f} x {rd:.2f}m) fails its minimum "
-            "furniture set / circulation envelope - resize, re-proportion, or accept advisory."
+            f"Furniture clearance resolution: Room '{room.room_id}' "
+            f"({rw:.2f} x {rd:.2f}m) cannot hold its minimum set "
+            f"({', '.join(item_types)}): {reason}."
         )
     room.furniture = items
     return all_ok, items, warnings
@@ -1177,8 +993,10 @@ def audit_and_enforce_naming_honesty(
     for r in rooms:
         rname = r.room_name
         rid = r.room_id.lower()
+        is_bath = "bath" in rname.lower() or "bath" in rid
+        is_master_class = "master" in rname.lower() or "master" in rid
 
-        if "suite" in rname.lower() or "suite" in rid:
+        if is_master_class and not is_bath and ("suite" in rname.lower() or "suite" in rid):
             if r.area_sqm < MASTER_SUITE_MIN_AREA_M2:
                 r.room_name = "Master Bedroom"
                 r.naming_threshold_used = f"Class Demoted: Area {r.area_sqm:.1f}m² < 14.0m² statutory Master Suite threshold"
@@ -1188,7 +1006,7 @@ def audit_and_enforce_naming_honesty(
                 )
             else:
                 r.naming_threshold_used = f"Master Suite Certified: Area {r.area_sqm:.1f}m² >= 14.0m² with wardrobe zone"
-        elif "master" in rname.lower() or "master" in rid:
+        elif is_master_class and not is_bath:
             # Honesty policy: never silently PROMOTE a bedroom to 'Suite'. The
             # suite class additionally requires a dedicated wardrobe/dressing
             # zone designation; area alone does not justify the upgrade. We only

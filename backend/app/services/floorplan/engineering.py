@@ -223,7 +223,18 @@ def compute_ventilation_registry(floors: List[Any], duct_shafts: List[Any]) -> D
 
         for r in (getattr(fl, "rooms", None) or []):
             rid = getattr(r, "room_id", "")
-            if not is_wet_room(rid, getattr(r, "zone_category", ""), getattr(r, "is_vertical_core", False)):
+            # Resolved identity is the single source: a dry archive deck in a
+            # service zone must not be treated as a wet room merely because of
+            # its zone category.  Fall back to the legacy predicate only when
+            # the identity object is absent.
+            identity = getattr(r, "identity", None)
+            if identity is not None:
+                is_wet = bool(getattr(identity, "is_wet", False))
+            else:
+                is_wet = is_wet_room(
+                    rid, getattr(r, "zone_category", ""), getattr(r, "is_vertical_core", False)
+                )
+            if not is_wet:
                 continue
             area = float(getattr(r, "area_sqm", 0.0) or 0.0)
             sanitary = _is_sanitary_identity(rid)

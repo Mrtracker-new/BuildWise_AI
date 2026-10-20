@@ -237,12 +237,13 @@ def test_golden_irregular_cases(shape_name: str, vertices, expected_min_area: fl
     achieved_far = total_built_up / plot_area
     assert achieved_far <= sp.certificate.far_limit + 0.1
 
-    # 4. Outdoor difference fragments are non-empty and labelled
-    assert len(sp.outdoor_zones) > 0
-    total_outdoor_area = sum(f.area_sqm for f in sp.outdoor_zones)
-    assert total_outdoor_area > 0
+    # 4. Every residual is labelled exactly once: outdoor fragments and/or
+    # functional wedge zones (a fully absorbed plate may have no outdoor zone).
+    assert len(sp.outdoor_zones) + len(sp.wedge_zones) > 0
+    total_labelled_area = sum(f.area_sqm for f in sp.outdoor_zones) + sum(w.area_sqm for w in sp.wedge_zones)
+    assert total_labelled_area > 0
     # Each fragment must have a valid zone name and coordinates
-    for frag in sp.outdoor_zones:
+    for frag in list(sp.outdoor_zones) + list(sp.wedge_zones):
         assert frag.name != ""
         assert frag.area_sqm > 0
         assert len(frag.polygon_coords) >= 3

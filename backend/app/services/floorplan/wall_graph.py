@@ -24,6 +24,8 @@ from typing import List, Dict, Tuple, Optional, Any, Literal
 from shapely.geometry import box as shapely_box, Point
 from shapely.ops import unary_union
 
+from app.services.floorplan.identity import identity_dict, identity_is_wet, identity_name
+
 
 # =============================================================================
 # 1. STATUTORY WALL SPECIFICATIONS & THICKNESSES
@@ -507,11 +509,19 @@ class ClearRoom:
     is_vertical_core: bool = False
     unit_id: Optional[str] = None
     wall_ids: List[str] = field(default_factory=list)
+    space_type_id: Optional[str] = None
+    identity: Dict[str, Any] = field(default_factory=dict)
+    is_wet: bool = False
+    is_sanitary: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "room_id": self.room_id,
             "room_name": self.room_name,
+            "space_type_id": self.space_type_id,
+            "identity": dict(self.identity),
+            "is_wet": self.is_wet,
+            "is_sanitary": self.is_sanitary,
             "floor_index": self.floor_index,
             "x": round(self.x, 3),
             "y": round(self.y, 3),
@@ -866,7 +876,18 @@ def build_constructible_wall_graph(
     # Map raw rooms to clear dimensions
     for r in raw_rooms:
         rid = str(_val(r, "room_id", "") or "")
-        rname = str(_val(r, "room_name", rid.replace("_", " ").title()) or rid)
+        rname = identity_name(r, rid.replace("_", " ").title())
+        r_identity = identity_dict(r)
+        r_is_wet = identity_is_wet(r)
+        # Sanitary partitions/windows follow the ONTOLOGY hygiene class, not
+        # every wet point: a kitchen is wet but needs habitable ventilation, and
+        # a utility strip is wet but is not a WC.
+        r_is_sanitary = str(r_identity.get("hygiene_class") or "") == "foul"
+        if not r_identity:
+            r_is_sanitary = any(
+                b in rid.lower() or b in str(_val(r, "room_name", "")).lower()
+                for b in ("bath", "toilet", "wc", "sanitary")
+            )
         rx = round(float(_val(r, "x", 0.0)), 3)
         ry = round(float(_val(r, "y", 0.0)), 3)
         rw = round(float(_val(r, "width_m", _val(r, "width", 3.0))), 3)
@@ -876,7 +897,7 @@ def build_constructible_wall_graph(
         z = _val(r, "zone", "CENTER")
         zcat = _val(r, "zone_category", "public")
 
-        is_bath = any(b in rid.lower() or b in rname.lower() for b in ("bath", "toilet", "wc", "sanitary"))
+        is_bath = r_is_sanitary
 
         # Thickness of enclosing walls
         t_w = W1_EXTERIOR_THICKNESS_M if rx <= 0.01 else (W3_PARTITION_THICKNESS_M if is_bath else W2_INTERIOR_THICKNESS_M)
@@ -915,6 +936,13 @@ def build_constructible_wall_graph(
             finish_grade=finish_grade,
             is_vertical_core=is_core,
             unit_id=unit,
+            space_type_id=(
+                r_identity.get("space_type_id")
+                or _val(r, "space_type_id", None)
+            ),
+            identity=r_identity,
+            is_wet=r_is_wet,
+            is_sanitary=r_is_sanitary,
         )
         clear_rooms[rid] = c_room
 
@@ -1307,7 +1335,7 @@ def build_constructible_wall_graph(
         if r.is_vertical_core or "stair" in r.room_id:
             continue
 
-        is_sanitary = any(s in r.room_id.lower() or s in r.room_name.lower() for s in ("bath", "toilet", "wc", "wash"))
+        is_sanitary = r.is_sanitary
 
         # NBC 2016 statutory opening ratio
         if is_sanitary:
@@ -1818,6 +1846,11 @@ def build_constructible_wall_graph(
             "room_number": idx,
             "room_name": r.room_name,
             "room_id": r.room_id,
+            "space_type_id": r.space_type_id,
+            "identity": dict(r.identity),
+            "identity_name": r.room_name,
+            "is_wet": r.is_wet,
+            "is_sanitary": r.is_sanitary,
             "clear_dimensions": f"{r.width_m:.2f}m x {r.depth_m:.2f}m",
             "clear_dims": f"{r.width_m:.2f}m x {r.depth_m:.2f}m",
             "clear_area_sqm": canonical_area,

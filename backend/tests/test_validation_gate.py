@@ -4,7 +4,7 @@ test_validation_gate.py - Universal Validation Gate & Engineering Layers
 Covers review points 9, 13, 14, 15, 16, 17, 18, 20, 23, 24 + LLM-boundary:
 
 1. UNIVERSAL GATE (matrix T1-T4 x 1-4 floors x strictness):
-   - Every generation runs ALL layers L1-L14 - zero silent skips.
+   - Every generation runs ALL layers L1-L15 - zero silent skips.
    - Per-layer status in {PASS, WARN, FAIL, N/A}; N/A always carries a reason.
    - overall_status == worst layer; validated_layers == non-N/A ids.
    - WARN layers surface findings (chips), never hidden.
@@ -90,28 +90,31 @@ def _solve(typology: str, floors: int, strictness: str = "medium",
 @pytest.mark.parametrize("floors", [1, 2, 3, 4])
 @pytest.mark.parametrize("strictness", STRICTNESS)
 def test_gate_runs_all_layers_zero_silent_skips(typology: str, floors: int, strictness: str):
-    """Every generation - any typology, any floor count - runs the full L1-L14 stack."""
+    """Every generation - any typology, any floor count - runs the full L1-L15 stack."""
     b = _solve(typology, floors, strictness)
     gate = b.validation_gate
     assert gate is not None, f"{typology} F{floors}: no gate report"
     ids = [ld["layer_id"] for ld in gate["layers"]]
     assert ids == LAYER_IDS, f"{typology} F{floors}: layer ids {ids} != canonical order"
-    assert len(gate["layers"]) == 14
+    assert len(gate["layers"]) == len(LAYER_IDS)
     for ld in gate["layers"]:
         assert ld["status"] in VALID_STATUSES, f"{ld['layer_id']} status {ld['status']}"
         if ld["status"] == "N/A":
-            assert ld.get("reason"), f"{ld['layer_id']} N/A without reason"
-    # Overall = worst layer
-    worst = "PASS"
-    for ld in gate["layers"]:
-        if _RANK[ld["status"]] > _RANK[worst]:
-            worst = ld["status"]
-    assert gate["overall_status"] == worst
-    assert gate["overall_status"] in ("PASS", "WARN", "FAIL")
+            assert ld.get("reason"), f"{ld['layer_id']} N/A without reason"        # Overall = worst *evaluated* layer. N/A means the layer did not run and
+        # carries a reason; it is not a quality status and cannot downgrade the
+        # gate (the public contract is PASS | WARN | FAIL).
+        worst = "PASS"
+        for ld in gate["layers"]:
+            if ld["status"] == "N/A":
+                continue
+            if _RANK[ld["status"]] > _RANK[worst]:
+                worst = ld["status"]
+        assert gate["overall_status"] == worst
+        assert gate["overall_status"] in ("PASS", "WARN", "FAIL")
     # validated_layers = every layer that ran (not N/A)
     assert gate["validated_layers"] == [ld["layer_id"] for ld in gate["layers"] if ld["status"] != "N/A"]
     # Building scope: L9/L10/L12/L13/L14 always evaluated (never N/A)
-    for must_run in ("L9", "L10", "L12", "L13", "L14"):
+    for must_run in ("L9", "L10", "L12", "L13", "L14", "L15"):
         row = next(ld for ld in gate["layers"] if ld["layer_id"] == must_run)
         assert row["status"] != "N/A", f"{must_run} silently skipped on {typology} F{floors}"
     # WARN rows surface findings (chips), never hidden
@@ -131,7 +134,7 @@ def test_certificate_carries_layer_statuses_and_stamp_layers(typology: str, floo
     b = _solve(typology, floors)
     cert = b.mathematical_certificate
     assert cert["layer_statuses"], "certificate missing layer_statuses"
-    assert len(cert["layer_statuses"]) == 14
+    assert len(cert["layer_statuses"]) == len(LAYER_IDS)
     assert cert["overall_layer_status"] == b.validation_gate["overall_status"]
     # Floor sheets carry the same gate (zero silent skips per floor)
     for fl in b.floors:
@@ -159,17 +162,74 @@ def test_certificate_carries_layer_statuses_and_stamp_layers(typology: str, floo
 @pytest.mark.parametrize("typology", TYPologies)
 @pytest.mark.parametrize("floors", [1, 2, 3, 4])
 def test_gate_sheet_layer_table_rendered(typology: str, floors: int):
-    """SVG sheets render the full VALIDATION GATE layer table (L1-L14)."""
+    """SVG sheets render the full VALIDATION GATE layer table (L1-L15)."""
     b = _solve(typology, floors)
     svg = b.floors[0].svg_blueprint_cad or ""
-    assert "VALIDATION GATE - LAYERS L1-L14" in svg
+    assert "VALIDATION GATE - LAYERS L1-L15" in svg
     for lid in LAYER_IDS:
         assert lid in svg
     for ld in b.validation_gate["layers"]:
         assert ld["status"] in svg  # every status chip rendered
     # Paper theme parity
     svg_paper = b.floors[0].svg_blueprint_paper or ""
-    assert "VALIDATION GATE - LAYERS L1-L14" in svg_paper
+    assert "VALIDATION GATE - LAYERS L1-L15" in svg_paper
+
+
+# =============================================================================
+# 1b. L15 PROGRAMME COMPLETENESS
+# =============================================================================
+
+def test_l15_t2_12x15_keeps_both_kitchens():
+    """The canonical compact T2 plan keeps one kitchen per unit and passes L15.
+
+    Regression: the old allocation guard deleted both kitchens at 12x15 and
+    every other layer still passed.  Presence is now a hard gate.
+    """
+    req = FloorPlanRequest(plot_width_m=12.0, plot_depth_m=15.0, floors=1,
+                           building_typology="T2_FAMILY_APARTMENT")
+    b = SoleGeometryEngine(req).solve()
+    ids = [r.room_id for r in b.floors[0].rooms]
+    assert sum("kitchen" in rid for rid in ids) == 2, ids
+    l15 = next(ld for ld in b.validation_gate["layers"] if ld["layer_id"] == "L15")
+    assert l15["status"] == "PASS", l15
+    assert l15["details"]["missing"] == []
+    assert set(l15["details"]["per_unit"]) == {"Unit_A", "Unit_B"}
+    for unit_ids in l15["details"]["per_unit"].values():
+        assert {"unit_living", "unit_kitchen", "unit_bed", "unit_bath"} <= set(unit_ids)
+
+
+def test_l15_missing_kitchen_fails_gate_and_invalidates_certificate():
+    """A plate that cannot hold a kitchen must fail L15, not silently pass."""
+    req = FloorPlanRequest(plot_width_m=8.0, plot_depth_m=10.0, floors=1,
+                           building_typology="T2_FAMILY_APARTMENT")
+    b = SoleGeometryEngine(req).solve()
+    l15 = next(ld for ld in b.validation_gate["layers"] if ld["layer_id"] == "L15")
+    assert l15["status"] == "FAIL"
+    assert any("unit_kitchen" in f for f in l15.get("findings") or [])
+    assert b.validation_gate["overall_status"] == "FAIL"
+    assert b.mathematical_certificate["is_valid"] is False
+
+
+def test_l15_catches_multi_wing_typology_fallback():
+    """A T3/T4 L-shape drawn with the T1 house programme fails completeness."""
+    from app.schemas.site_plan import PlotPolygonModel
+
+    poly = PlotPolygonModel(
+        vertices=[(0, 0), (14, 0), (14, 8), (8, 8), (8, 14), (0, 14)],
+        shape_type="polygon", is_regular_rectangle=False,
+        bounding_box=(0.0, 0.0, 14.0, 14.0),
+    )
+    for typology, expected in (
+        ("T3_LARGE_COMPLEX", "sanitary_block"),
+        ("T4_WAREHOUSE", "dock_bay"),
+    ):
+        req = FloorPlanRequest(plot_width_m=14.0, plot_depth_m=14.0,
+                               plot_polygon=poly, floors=1,
+                               building_typology=typology)
+        b = SoleGeometryEngine(req).solve()
+        l15 = next(ld for ld in b.validation_gate["layers"] if ld["layer_id"] == "L15")
+        assert l15["status"] == "FAIL", f"{typology}: {l15}"
+        assert any(expected in m for m in l15["details"]["missing"])
 
 
 # =============================================================================
@@ -618,7 +678,7 @@ def test_site_sheet_gate_na_with_reasons_and_stamp():
     # Site sheet SVG renders the gate table with N/A reasons
     site_ir = build_drawing_ir.__globals__["build_site_drawing_ir"](site)
     svg = render_svg_from_ir(site_ir)
-    assert "VALIDATION GATE - LAYERS L1-L14" in svg
+    assert "VALIDATION GATE - LAYERS L1-L15" in svg
     assert "N/A" in svg
 
 

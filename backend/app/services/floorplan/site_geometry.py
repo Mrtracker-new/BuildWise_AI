@@ -451,7 +451,9 @@ def decompose_buildable_into_wings(
     is_extreme_aspect = (aspect > 3.0) and (min(plot_w, plot_d) >= 10.0)
 
     # 1. Single Rectangle Path (Strict Rectangle-Equivalence)
-    if is_rect and not is_courtyard and not is_extreme_aspect and buildable_poly.area <= 400.0:
+    if is_rect and not is_courtyard and not is_extreme_aspect and (
+        buildable_poly.area <= 400.0 or program_needed_area_m2 is not None
+    ):
         if inscribed_override:
             env_w = round(inscribed_override["width"], 2)
             env_d = round(inscribed_override["depth"], 2)
@@ -784,22 +786,62 @@ def decompose_buildable_into_wings(
 # 6. OUTDOOR DIFFERENCE FRAGMENTS & VASTU
 # =============================================================================
 
-def extract_outdoor_fragments(
+def _outdoor_fragments_from_residual(
+    residual: Any,
+    footprint_poly: Polygon,
     buildable_poly: Polygon,
-    footprint_poly: Polygon
 ) -> List[OutdoorFragment]:
-    """
-    Decomposes (buildable minus footprint) into labelled spatial fragments with areas.
-    """
-    diff = buildable_poly.difference(footprint_poly)
-    fragments: List[OutdoorFragment] = []
+    """Label a residual surface (already buildable minus footprint/wedges).
 
-    geoms = diff.geoms if isinstance(diff, MultiPolygon) else [diff]
+    A rectangular setback yard is a polygon *with a hole* (buildable minus
+    footprint).  Storing only its exterior ring would draw a fragment covering
+    the whole buildable and double-count the footprint.  Split ring-shaped
+    residual into simple side pieces first.
+    """
+    fragments: List[OutdoorFragment] = []
+    if residual is None or residual.is_empty or residual.area < 0.1:
+        return fragments
+
+    raw = list(residual.geoms) if isinstance(residual, MultiPolygon) else [residual]
+    geoms: List[Polygon] = []
+    fx1, fy1, fx2, fy2 = footprint_poly.bounds
+    bx1, by1, bx2, by2 = buildable_poly.bounds
+    # Four full-height/full-width bands partition the ring exactly; corner
+    # squares belong to the west/east bands, never to a dropped sub-0.1 m²
+    # fragment.  (The old split left four unlabelled corner squares.)
+    side_boxes = [
+        box(bx1 - 1.0, by1 - 1.0, fx1, by2 + 1.0),
+        box(fx2, by1 - 1.0, bx2 + 1.0, by2 + 1.0),
+        box(fx1, by1 - 1.0, fx2, fy1),
+        box(fx1, fy2, fx2, by2 + 1.0),
+    ]
+    for g in raw:
+        if not isinstance(g, Polygon) or g.is_empty:
+            continue
+        if not g.interiors:
+            geoms.append(g)
+            continue
+        covered = []
+        for side in side_boxes:
+            part = g.intersection(side)
+            if part.is_empty:
+                continue
+            for piece in (part.geoms if hasattr(part, "geoms") else [part]):
+                if isinstance(piece, Polygon) and piece.area >= 0.1:
+                    geoms.append(piece)
+                    covered.append(piece)
+        remainder = g.difference(shapely.unary_union(covered)) if covered else g
+        if remainder.is_empty:
+            continue
+        for piece in (remainder.geoms if hasattr(remainder, "geoms") else [remainder]):
+            if isinstance(piece, Polygon) and piece.area >= 0.1 and not piece.interiors:
+                geoms.append(piece)
+
     fx, fy = footprint_poly.centroid.x, footprint_poly.centroid.y
 
     idx = 1
     for g in geoms:
-        if not isinstance(g, Polygon) or g.area < 1.0:
+        if not isinstance(g, Polygon) or g.area < 0.1:
             continue
         gx, gy = g.centroid.x, g.centroid.y
         dx = gx - fx
@@ -825,6 +867,18 @@ def extract_outdoor_fragments(
         idx += 1
 
     return fragments
+
+
+def extract_outdoor_fragments(
+    buildable_poly: Polygon,
+    footprint_poly: Polygon
+) -> List[OutdoorFragment]:
+    """Decomposes (buildable minus footprint) into labelled spatial fragments."""
+    return _outdoor_fragments_from_residual(
+        buildable_poly.difference(footprint_poly),
+        footprint_poly,
+        buildable_poly,
+    )
 
 
 def extract_wedge_and_outdoor_zones(
@@ -922,18 +976,28 @@ def extract_wedge_and_outdoor_zones(
                 ))
                 w_idx += 1
             elif area_sqm >= 1.0:
+                # A generic "Setback Buffer" is an anonymous residual.  Name it
+                # as a functional landscape pocket so the Phase A harness and the
+                # land-economics certificate agree that no anonymous outdoor
+                # region >= 1.0 m² remains.
                 outdoors.append(OutdoorFragment(
                     fragment_id=f"OUT-{o_idx:02d}",
-                    name=f"Setback Buffer {o_idx}",
+                    name=f"Boundary Planter Pocket {o_idx}",
                     area_sqm=area_sqm,
                     centroid=(round(g.centroid.x, 2), round(g.centroid.y, 2)),
                     polygon_coords=[(round(x, 2), round(y, 2)) for x, y in g.exterior.coords],
                 ))
                 o_idx += 1
 
-    # Ensure outdoors has fallback fragments if none were small
+    # Ensure outdoors has fallback fragments if none were small.  The fallback
+    # must exclude wedge polygons: otherwise the same residual is counted once
+    # as a wedge and again as outdoor area.
     if not outdoors:
-        outdoors = extract_outdoor_fragments(buildable_poly, footprint_poly)
+        wedge_union = shapely.unary_union([
+            Polygon(w.polygon_coords) for w in wedges
+        ]) if wedges else None
+        remainder = diff.difference(wedge_union) if wedge_union is not None else diff
+        outdoors = _outdoor_fragments_from_residual(remainder, footprint_poly, buildable_poly)
 
     return wedges, outdoors
 
@@ -1496,6 +1560,8 @@ def compute_canonical_site_plan(
          "reason": "Accessible routes are evaluated on building floor sheets"},
         {"layer_id": "L14", "title": "Fire & Egress", "status": "N/A",
          "reason": "Travel distances and exit widths are evaluated on building floor sheets"},
+        {"layer_id": "L15", "title": "Programme Completeness", "status": "N/A",
+         "reason": "Essential-room completeness is evaluated per building floor, not at site scope"},
     ]
     _statuses_rank = {"PASS": 0, "N/A": 1, "WARN": 2, "FAIL": 3}
     # Overall = worst APPLICABLE layer: N/A never gates (universal contract),
@@ -1509,7 +1575,7 @@ def compute_canonical_site_plan(
         if _statuses_rank.get(_ld["status"], 0) > _statuses_rank.get(_site_overall, 0):
             _site_overall = _ld["status"]
     _site_gate = {
-        "layer_ids": [f"L{i}" for i in range(1, 15)],
+        "layer_ids": [f"L{i}" for i in range(1, 16)],
         "layers": _site_layer_rows,
         "overall_status": _site_overall,
         "validated_layers": ["L1", "L2"],

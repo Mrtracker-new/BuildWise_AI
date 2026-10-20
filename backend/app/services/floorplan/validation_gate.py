@@ -2,7 +2,7 @@
 validation_gate.py - Universal Validation Gate 
 =========================================================
 Every generation - any typology, any floor count - is judged by the same
-contract: the full L1-L14 layer stack. No layer is ever silently skipped;
+contract: the full L1-L15 layer stack. No layer is ever silently skipped;
 when a layer does not apply, it is recorded as N/A WITH AN EXPLICIT REASON.
 
 Layer map:
@@ -20,6 +20,7 @@ Layer map:
   L12 Structural                        (engineering)
   L13 Accessibility                     (engineering)
   L14 Fire & egress                     (engineering)
+  L15 Programme completeness            (essential rooms present per typology/unit)
 
 Overall status = worst layer (FAIL > WARN > N/A > PASS > N/A is never worse
 than WARN unless no other signal exists...). Concretely:
@@ -39,7 +40,7 @@ logger = logging.getLogger("buildwise.validation_gate")
 
 # Canonical layer order rendered on sheets and UI panels.
 LAYER_IDS: List[str] = ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8",
-                        "L9", "L10", "L11", "L12", "L13", "L14"]
+                        "L9", "L10", "L11", "L12", "L13", "L14", "L15"]
 
 LAYER_TITLES: Dict[str, str] = {
     "L1": "Geometry & Statutory",
@@ -56,12 +57,13 @@ LAYER_TITLES: Dict[str, str] = {
     "L12": "Structural",
     "L13": "Accessibility",
     "L14": "Fire & Egress",
+    "L15": "Programme Completeness",
 }
 
 STATUS_ORDER = {"PASS": 0, "N/A": 1, "WARN": 2, "FAIL": 3}
 
 # Layers whose FAIL invalidates the whole certificate (hard layers).
-HARD_FAIL_LAYERS = {"L1", "L2", "L8", "L14"}
+HARD_FAIL_LAYERS = {"L1", "L2", "L8", "L14", "L15"}
 
 
 @dataclass
@@ -129,6 +131,92 @@ def overall_from_dicts(layer_dicts: List[Dict[str, Any]]) -> str:
         if STATUS_ORDER.get(s, 0) > STATUS_ORDER.get(worst, 0):
             worst = s
     return "FAIL" if worst == "FAIL" else ("WARN" if worst == "WARN" else "PASS")
+
+
+# Essential programme per typology.  These are the rooms a dwelling/unit or
+# operating building cannot function without; optional spaces (study, puja,
+# balcony, utility) are deliberately not gated here.
+_T1_ESSENTIAL = ({"living", "kitchen"},
+                 {"master_bed", "bed_2", "master_suite"},
+                 {"bath_1", "bath_2", "bath_master", "powder_room"})
+_T2_UNIT_ESSENTIAL = ("unit_living", "unit_kitchen", "unit_bed", "unit_bath")
+_T3_ESSENTIAL_ANY = {"commercial_suite", "conference_suite", "conference_room",
+                     "reception_lobby", "reception"}
+_T4_ESSENTIAL = ("dock_bay", "dispatch", "storage_bay", "worker_amenity")
+
+
+def _room_space_id(room: Any) -> Optional[str]:
+    sid = getattr(room, "space_type_id", None)
+    if sid:
+        return str(sid)
+    ident = getattr(room, "identity", None)
+    if isinstance(ident, dict):
+        sid = ident.get("space_type_id")
+    else:
+        sid = getattr(ident, "space_type_id", None)
+    if sid:
+        return str(sid)
+    from app.services.floorplan.ontology import ONTOLOGY
+    return ONTOLOGY.resolve_space_id(str(getattr(room, "room_id", "")), None)
+
+
+def assess_programme_completeness(
+    floors: List[Any], typology: str
+) -> Dict[str, Any]:
+    """Return the essential-room verdict for the requested typology.
+
+    This is presence, not size: a plan can pass L15 while an individual room
+    is below its area target (that is L1/I2 territory).  Its job is to stop the
+    silent deletion of an essential room - the failure mode that let a T2 flat
+    without a kitchen pass every other layer.
+    """
+    rooms = [r for f in (floors or []) for r in (getattr(f, "rooms", None) or [])]
+    if not rooms:
+        return {"status": "N/A", "reason": "No floor plates to audit",
+                "missing": [], "per_unit": {}, "rooms_checked": 0}
+
+    typed = [(r, _room_space_id(r)) for r in rooms]
+    missing: List[str] = []
+    per_unit: Dict[str, List[str]] = {}
+
+    if typology == "T2_FAMILY_APARTMENT":
+        units: Dict[str, set] = {}
+        for room, sid in typed:
+            uid = str(getattr(room, "unit_id", "") or "")
+            if uid:
+                units.setdefault(uid, set()).add(sid)
+        if not units:
+            missing.append("no unit-identified rooms (T2 programme not materialised)")
+        for uid in sorted(units):
+            per_unit[uid] = sorted(s for s in units[uid] if s)
+            for need in _T2_UNIT_ESSENTIAL:
+                if need not in units[uid]:
+                    missing.append(f"{need} in {uid}")
+    elif typology == "T3_LARGE_COMPLEX":
+        ids = {sid for _r, sid in typed if sid}
+        if "sanitary_block" not in ids:
+            missing.append("sanitary_block")
+        if not (ids & _T3_ESSENTIAL_ANY):
+            missing.append("commercial/conference/reception space")
+    elif typology == "T4_WAREHOUSE":
+        ids = {sid for _r, sid in typed if sid}
+        missing.extend(need for need in _T4_ESSENTIAL if need not in ids)
+    else:
+        ids = {sid for _r, sid in typed if sid}
+        any_bed, any_bath = _T1_ESSENTIAL[1], _T1_ESSENTIAL[2]
+        missing.extend(need for need in _T1_ESSENTIAL[0] if need not in ids)
+        if not (ids & any_bed):
+            missing.append("bedroom")
+        if not (ids & any_bath):
+            missing.append("bathroom")
+
+    return {
+        "status": "FAIL" if missing else "PASS",
+        "missing": missing,
+        "per_unit": per_unit,
+        "rooms_checked": len(rooms),
+        "typology": typology,
+    }
 
 
 # =============================================================================
@@ -225,7 +313,7 @@ def build_gate_layers(
     plate_masks: Any = None,
 ) -> List[Dict[str, Any]]:
     """
-    Runs the universal gate over ALL layers L1-L14 and returns the serialized
+    Runs the universal gate over ALL layers L1-L15 and returns the serialized
     per-layer status list (for cert.details["validation_gate"]["layers"]).
     Import-time isolation: engineering imports are local so the gate can never
     break legacy certificate emission.
@@ -483,6 +571,29 @@ def build_gate_layers(
     except Exception as exc:
         logger.exception("L14 fire-egress layer crashed")
         layers.append(make_layer("L14", "WARN", summary=f"Layer evaluation error: {exc}"))
+
+    # ---------------------------------------------------------------- L15
+    try:
+        completeness = assess_programme_completeness(floors, typology)
+        l15_status = completeness["status"]
+        l15_reason = completeness.get("reason")
+        l15_missing = completeness.get("missing") or []
+        layers.append(make_layer(
+            "L15", l15_status,
+            summary=("All essential programme rooms present" if l15_status == "PASS"
+                     else (l15_reason or "Missing essential programme rooms: " + ", ".join(l15_missing))),
+            reason=l15_reason if l15_status == "N/A" else None,
+            findings=[f"Missing essential room: {m}" for m in l15_missing],
+            citation="NBC 2016 Part 3 occupancy requirements; typology programme catalogue",
+            details={"missing": l15_missing, "per_unit": completeness.get("per_unit") or {},
+                     "rooms_checked": completeness.get("rooms_checked", 0)},
+        ))
+    except Exception as exc:
+        logger.exception("L15 programme-completeness layer crashed")
+        layers.append(make_layer("L15", "FAIL",
+                                 summary=f"Completeness audit unavailable: {exc}",
+                                 findings=["Essential rooms could not be verified"],
+                                 citation="NBC 2016 Part 3 occupancy requirements"))
 
     # Enforce completeness: the gate may NEVER return fewer layers than declared.
     present = {l.layer_id for l in layers}

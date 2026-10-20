@@ -411,12 +411,18 @@ def test_l5_master_suite_only_above_threshold():
     for fl in b.floors:
         for r in fl.rooms:
             name = r.room_name.lower()
-            if "suite" in name:
+            # Match the designated class, not the "ensuite" substring in a bath
+            # name (canonical labels include "Master Bath (En-suite)").
+            if name.startswith("master suite"):
                 assert r.area_sqm >= MASTER_SUITE_MIN_AREA_M2, (
                     f"{r.room_id} named 'Master Suite' at {r.area_sqm} m2 < {MASTER_SUITE_MIN_AREA_M2} m2"
                 )
                 assert r.naming_threshold_used and "14.0" in r.naming_threshold_used
-            elif "master" in name or "master" in r.room_id.lower():
+            elif (
+                ("master" in name or "master" in r.room_id.lower())
+                and "bath" not in name
+                and "bath" not in r.room_id.lower()
+            ):
                 assert "bedroom" in name, f"Master room {r.room_id} must be 'Master Bedroom' below threshold"
 
 
