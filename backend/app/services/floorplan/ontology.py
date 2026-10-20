@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Dict, List, Tuple, Optional, Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # =============================================================================
@@ -51,6 +51,29 @@ class HygieneType(str, Enum):
     NEUTRAL = "neutral"
     WET = "wet"
     FOUL = "foul"
+
+
+class SpaceZone(str, Enum):
+    """Canonical four-way zoning shared by every typology."""
+    PUBLIC = "public"
+    PRIVATE = "private"
+    SERVICE = "service"
+    CIRCULATION = "circulation"
+
+
+class HygieneClass(str, Enum):
+    """Operational hygiene class used by the relation algebra.
+
+    Distinct from ``HygieneType`` (the sanitation severity scale): this is the
+    room's functional class, so a kitchen is COOKING (wet but not foul) and a
+    server room is TECHNICAL (dry but service-side).
+    """
+    WET = "wet"
+    DRY = "dry"
+    SACRED = "sacred"
+    COOKING = "cooking"
+    EATING = "eating"
+    TECHNICAL = "technical"
 
 
 class PublicAccess(str, Enum):
@@ -96,6 +119,7 @@ class ServiceSide(str, Enum):
 
 class RelationType(str, Enum):
     MUST_ADJACENT = "MUST_ADJACENT"
+    MUST_STACK = "MUST_STACK"
     PREFER_ADJACENT = "PREFER_ADJACENT"
     NEUTRAL = "NEUTRAL"
     PREFER_SEPARATE = "PREFER_SEPARATE"
@@ -120,6 +144,140 @@ class RationaleTag(str, Enum):
 # =============================================================================
 # 2. SPACE TYPE SPECIFICATION & ATTRIBUTE SCHEMA
 # =============================================================================
+
+# ---------------------------------------------------------------------------
+# 2a. DERIVED SEMANTIC TABLES (declarative; no solver knowledge)
+# ---------------------------------------------------------------------------
+#
+# Zone overrides are only needed where the function/access attributes alone
+# would mis-classify the room (e.g. a study is FUNCTION.WORK but private, a
+# balcony is FUNCTION.OUTDOOR but belongs to the dwelling's private zone).
+ZONE_OVERRIDES: Dict[str, SpaceZone] = {
+    "balcony": SpaceZone.PRIVATE,
+    "unit_balcony": SpaceZone.PRIVATE,
+    "study": SpaceZone.PRIVATE,
+    "storage_bay": SpaceZone.SERVICE,
+    "dock_bay": SpaceZone.SERVICE,
+    "dispatch": SpaceZone.CIRCULATION,
+}
+
+# Minimum furniture set per space archetype. Item ids match the clearance
+# catalog in living_quality.py so the solver can later validate the same set
+# at placement time instead of after the plate is frozen.
+FURNITURE_SETS: Dict[str, List[str]] = {
+    "bed_master": ["bed_king", "wardrobe", "bedside_table"],
+    "bed": ["bed_queen", "wardrobe"],
+    "living": ["sofa_3seater", "coffee_table"],
+    "dining": ["dining_table_6p"],
+    "kitchen": ["kitchen_cooktop", "kitchen_sink", "kitchen_fridge"],
+    "study": ["desk", "task_chair", "bookshelf"],
+    "office": ["desk", "task_chair", "credenza"],
+    "meeting": ["meeting_table", "task_chair"],
+    "reception": ["reception_desk", "lounge_chair"],
+    "lounge": ["lounge_chair"],
+    "puja": ["mandir"],
+    "utility": ["washing_machine"],
+    "amenity": ["locker", "bench"],
+    "server": ["server_rack"],
+    "electrical": ["panel_board"],
+    "balcony": ["outdoor_chair"],
+}
+
+
+def _enum_value(value: Any) -> Any:
+    return value.value if isinstance(value, Enum) else value
+
+
+def _infer_zone(
+    space_id: str,
+    function: Any,
+    hygiene: Any,
+    public_access: Any,
+    is_vertical_core: bool,
+) -> SpaceZone:
+    """Attribute algebra: function + access + hygiene -> canonical zone."""
+    override = ZONE_OVERRIDES.get(space_id.lower())
+    if override is not None:
+        return override
+    fn = _enum_value(function)
+    acc = _enum_value(public_access)
+    if is_vertical_core or fn == FunctionType.CIRCULATION.value:
+        return SpaceZone.CIRCULATION
+    if fn in {
+        FunctionType.COOKING.value,
+        FunctionType.SANITATION.value,
+        FunctionType.STORAGE.value,
+        FunctionType.TECHNICAL.value,
+        FunctionType.LOADING.value,
+        FunctionType.AMENITY.value,
+        FunctionType.SECURITY.value,
+    }:
+        return SpaceZone.SERVICE
+    if fn in {FunctionType.SLEEP.value, FunctionType.WORSHIP.value}:
+        return SpaceZone.PRIVATE
+    if acc in {PublicAccess.PRIVATE.value, PublicAccess.RESTRICTED.value}:
+        return SpaceZone.PRIVATE
+    return SpaceZone.PUBLIC
+
+
+def _infer_hygiene_class(function: Any, hygiene: Any, security: Any) -> HygieneClass:
+    """Attribute algebra: function dominates the sanitation severity scale."""
+    fn = _enum_value(function)
+    hyg = _enum_value(hygiene)
+    sec = _enum_value(security)
+    if fn == FunctionType.COOKING.value:
+        return HygieneClass.COOKING
+    if hyg == HygieneType.SACRED.value:
+        return HygieneClass.SACRED
+    if fn == FunctionType.EATING.value:
+        return HygieneClass.EATING
+    if fn == FunctionType.TECHNICAL.value or sec == SecurityLevel.SECURE.value:
+        return HygieneClass.TECHNICAL
+    if hyg in {HygieneType.WET.value, HygieneType.FOUL.value}:
+        return HygieneClass.WET
+    return HygieneClass.DRY
+
+
+def _infer_furniture_set(space_id: str, function: Any) -> List[str]:
+    """Archetype -> minimum furniture set. Service/industrial rooms may be empty."""
+    sid = space_id.lower()
+    fn = _enum_value(function)
+    if "master" in sid:
+        return list(FURNITURE_SETS["bed_master"])
+    if "bed" in sid:
+        return list(FURNITURE_SETS["bed"])
+    if "living" in sid:
+        return list(FURNITURE_SETS["living"])
+    if "dining" in sid:
+        return list(FURNITURE_SETS["dining"])
+    if "kitchen" in sid:
+        return list(FURNITURE_SETS["kitchen"])
+    if "study" in sid:
+        return list(FURNITURE_SETS["study"])
+    if "office" in sid or sid == "commercial_suite":
+        return list(FURNITURE_SETS["office"])
+    if "conference" in sid or "conf_room" in sid or "meeting" in sid:
+        return list(FURNITURE_SETS["meeting"])
+    if "reception" in sid or "foyer" in sid:
+        return list(FURNITURE_SETS["reception"])
+    if "lounge" in sid:
+        return list(FURNITURE_SETS["lounge"])
+    if "puja" in sid or "prayer" in sid:
+        return list(FURNITURE_SETS["puja"])
+    if "utility" in sid:
+        return list(FURNITURE_SETS["utility"])
+    if "amenity" in sid:
+        return list(FURNITURE_SETS["amenity"])
+    if "server" in sid:
+        return list(FURNITURE_SETS["server"])
+    if "electrical" in sid:
+        return list(FURNITURE_SETS["electrical"])
+    if "balcony" in sid:
+        return list(FURNITURE_SETS["balcony"])
+    if "terrace" in sid:
+        return ["outdoor_chair", "outdoor_table"]
+    return []
+
 
 class SpaceTypeSpec(BaseModel):
     """
@@ -161,8 +319,16 @@ class SpaceTypeSpec(BaseModel):
     min_width_m: float = Field(gt=0.0)
     max_aspect_ratio: float = Field(default=2.0, gt=0.0)
 
+    # Semantic identity (derived from the attributes above, no per-entry churn)
+    zone: SpaceZone = SpaceZone.PUBLIC
+    hygiene_class: HygieneClass = HygieneClass.DRY
+    furniture_set: List[str] = Field(default_factory=list)
+    clear_area_basis: Literal["clear_face", "carpet", "gross"] = "clear_face"
+
     # Vastu Shastra Cardinal Zoning Weights (-1.0 = Prohibited, 0.0 = Neutral, 1.0 = Optimal)
     vastu_zone_weights: Dict[str, float] = Field(default_factory=dict)
+    orientation_preference: List[str] = Field(default_factory=list)
+    orientation_avoid: List[str] = Field(default_factory=list)
 
     # Permitted Storey Levels per Typology: 0 = Ground, 1 = G+1, 2 = G+2, 3 = G+3
     permitted_levels: List[int] = Field(default_factory=lambda: [0, 1, 2, 3])
@@ -171,6 +337,75 @@ class SpaceTypeSpec(BaseModel):
     is_vertical_core: bool = False
     requires_exterior_wall: bool = True
     citation: str = "NBC 2016 Part 3 Table 1"
+
+    @property
+    def is_wet(self) -> bool:
+        """True for plumbing/wet points: bathrooms, kitchens, utilities, wash points."""
+        return self.hygiene_class in (HygieneClass.WET, HygieneClass.COOKING) or self.moisture_emit >= 2
+
+    @field_validator("typologies")
+    @classmethod
+    def validate_typology_keys(cls, value: List[str]) -> List[str]:
+        allowed = set(TYPOLOGY_PROFILES) if "TYPOLOGY_PROFILES" in globals() else {
+            "T1_SINGLE_FAMILY", "T2_FAMILY_APARTMENT", "T3_LARGE_COMPLEX", "T4_WAREHOUSE",
+        }
+        unknown = [t for t in value if t not in allowed]
+        if unknown:
+            raise ValueError(f"Unknown typology keys: {unknown}")
+        return value
+
+    @field_validator("vastu_zone_weights")
+    @classmethod
+    def validate_vastu_directions(cls, value: Dict[str, float]) -> Dict[str, float]:
+        allowed = {"N", "NE", "E", "SE", "S", "SW", "W", "NW", "CENTER"}
+        unknown = [d for d in value if d not in allowed]
+        if unknown:
+            raise ValueError(f"Unknown Vastu directions: {unknown}")
+        for weight in value.values():
+            if not (-1.0 <= float(weight) <= 1.0):
+                raise ValueError("Vastu weights must lie in [-1.0, 1.0]")
+        return value
+
+    @model_validator(mode="before")
+    @classmethod
+    def derive_semantics(cls, data: Any) -> Any:
+        """Fill every semantic field from the declared attributes.
+
+        Explicit values always win; this only supplies what the catalogue did
+        not state, so adding a space type stays a single-record data change.
+        """
+        if not isinstance(data, dict):
+            return data
+        sid = str(data.get("id", "")).lower()
+        weights = data.get("vastu_zone_weights") or {}
+
+        if not data.get("zone"):
+            data["zone"] = _infer_zone(
+                sid,
+                data.get("function"),
+                data.get("hygiene"),
+                data.get("public_access", PublicAccess.SEMI),
+                bool(data.get("is_vertical_core", False)),
+            )
+        if not data.get("hygiene_class"):
+            data["hygiene_class"] = _infer_hygiene_class(
+                data.get("function"),
+                data.get("hygiene"),
+                data.get("security", SecurityLevel.OPEN),
+            )
+        if "furniture_set" not in data or data.get("furniture_set") is None:
+            data["furniture_set"] = _infer_furniture_set(sid, data.get("function"))
+        if "orientation_preference" not in data or data.get("orientation_preference") is None:
+            data["orientation_preference"] = sorted(
+                [d for d, w in weights.items() if float(w) >= 0.6],
+                key=lambda d: (-float(weights[d]), d),
+            )
+        if "orientation_avoid" not in data or data.get("orientation_avoid") is None:
+            data["orientation_avoid"] = sorted(
+                [d for d, w in weights.items() if float(w) <= -0.5],
+                key=lambda d: (float(weights[d]), d),
+            )
+        return data
 
 
 # =============================================================================
@@ -299,6 +534,32 @@ UNIVERSAL_SPACE_CATALOG: Dict[str, SpaceTypeSpec] = {
         requires_exterior_wall=True,
         citation="Vastu Shastra Canon & NBC 2016 Cl 12.2",
     ),
+    "terrace": SpaceTypeSpec(
+        id="terrace",
+        name="Open Terrace / Sky Deck",
+        typologies=["T1_SINGLE_FAMILY", "T2_FAMILY_APARTMENT", "T3_LARGE_COMPLEX", "T4_WAREHOUSE"],
+        function=FunctionType.OUTDOOR,
+        hygiene=HygieneType.CLEAN,
+        odor_emit=0, moisture_emit=0, grease_emit=0, noise_emit=1,
+        noise_sensitive=1, acoustic_privacy=1,
+        public_access=PublicAccess.PRIVATE,
+        visitor_depth=VisitorDepth.MID,
+        security=SecurityLevel.OPEN,
+        service_side=ServiceSide.FRONT_OF_HOUSE,
+        fire_hazard=FireHazard.LOW,
+        egress_role=EgressRole.NONE,
+        floor_load=FloorLoad.NORMAL,
+        daylight_req=True,
+        ventilation_req="natural",
+        min_area_sqm=3.0,
+        min_width_m=1.20,
+        max_aspect_ratio=4.00,
+        vastu_zone_weights={"N": 1.0, "NE": 1.0, "E": 1.0, "W": 0.5, "NW": 0.5, "CENTER": 0.0, "SE": -0.5, "S": -0.5, "SW": -0.8},
+        permitted_levels=[1, 2, 3],
+        is_vertical_core=False,
+        requires_exterior_wall=True,
+        citation="NBC 2016 Pt 3 Cl 10.2.1 (terrace drainage) / RULE-FP law",
+    ),
     "master_bed": SpaceTypeSpec(
         id="master_bed",
         name="Master Bedroom",
@@ -402,6 +663,32 @@ UNIVERSAL_SPACE_CATALOG: Dict[str, SpaceTypeSpec] = {
         is_vertical_core=False,
         requires_exterior_wall=True,
         citation="NBC 2016 Pt 3 Cl 12.2.5",
+    ),
+    "powder_room": SpaceTypeSpec(
+        id="powder_room",
+        name="Powder Room",
+        typologies=["T1_SINGLE_FAMILY"],
+        function=FunctionType.SANITATION,
+        hygiene=HygieneType.FOUL,
+        odor_emit=2, moisture_emit=2, grease_emit=0, noise_emit=1,
+        noise_sensitive=0, acoustic_privacy=3,
+        public_access=PublicAccess.SEMI,
+        visitor_depth=VisitorDepth.FRONT,
+        security=SecurityLevel.CONTROLLED,
+        service_side=ServiceSide.BACK_OF_HOUSE,
+        fire_hazard=FireHazard.LOW,
+        egress_role=EgressRole.NONE,
+        floor_load=FloorLoad.NORMAL,
+        daylight_req=False,
+        ventilation_req="both",
+        min_area_sqm=1.8,
+        min_width_m=1.10,
+        max_aspect_ratio=2.00,
+        vastu_zone_weights={"NW": 1.0, "W": 0.8, "SE": -0.8, "NE": -1.0},
+        permitted_levels=[0, 1],
+        is_vertical_core=False,
+        requires_exterior_wall=False,
+        citation="NBC 2016 Pt 9 Sec 1 (WC + wash basin powder room)",
     ),
     "bath_master": SpaceTypeSpec(
         id="bath_master",
@@ -643,7 +930,7 @@ UNIVERSAL_SPACE_CATALOG: Dict[str, SpaceTypeSpec] = {
     ),
     "central_lobby": SpaceTypeSpec(
         id="central_lobby",
-        name="Central Circulation Lobby",
+        name="Circulation Lobby",
         typologies=["T1_SINGLE_FAMILY"],
         function=FunctionType.CIRCULATION,
         hygiene=HygieneType.NEUTRAL,
@@ -669,7 +956,7 @@ UNIVERSAL_SPACE_CATALOG: Dict[str, SpaceTypeSpec] = {
     ),
     "unit_living": SpaceTypeSpec(
         id="unit_living",
-        name="Apartment Living/Dining",
+        name="Living / Dining",
         typologies=["T2_FAMILY_APARTMENT"],
         function=FunctionType.SOCIAL,
         hygiene=HygieneType.CLEAN,
@@ -695,7 +982,7 @@ UNIVERSAL_SPACE_CATALOG: Dict[str, SpaceTypeSpec] = {
     ),
     "unit_kitchen": SpaceTypeSpec(
         id="unit_kitchen",
-        name="Apartment Kitchen",
+        name="Kitchen",
         typologies=["T2_FAMILY_APARTMENT"],
         function=FunctionType.COOKING,
         hygiene=HygieneType.WET,
@@ -721,7 +1008,7 @@ UNIVERSAL_SPACE_CATALOG: Dict[str, SpaceTypeSpec] = {
     ),
     "unit_bed": SpaceTypeSpec(
         id="unit_bed",
-        name="Apartment Bedroom",
+        name="Bedroom",
         typologies=["T2_FAMILY_APARTMENT"],
         function=FunctionType.SLEEP,
         hygiene=HygieneType.CLEAN,
@@ -747,7 +1034,7 @@ UNIVERSAL_SPACE_CATALOG: Dict[str, SpaceTypeSpec] = {
     ),
     "unit_bath": SpaceTypeSpec(
         id="unit_bath",
-        name="Apartment Bathroom",
+        name="Bathroom",
         typologies=["T2_FAMILY_APARTMENT"],
         function=FunctionType.SANITATION,
         hygiene=HygieneType.FOUL,
@@ -773,7 +1060,7 @@ UNIVERSAL_SPACE_CATALOG: Dict[str, SpaceTypeSpec] = {
     ),
     "unit_balcony": SpaceTypeSpec(
         id="unit_balcony",
-        name="Apartment Private Balcony",
+        name="Private Balcony",
         typologies=["T2_FAMILY_APARTMENT"],
         function=FunctionType.OUTDOOR,
         hygiene=HygieneType.CLEAN,
@@ -799,7 +1086,7 @@ UNIVERSAL_SPACE_CATALOG: Dict[str, SpaceTypeSpec] = {
     ),
     "unit_utility": SpaceTypeSpec(
         id="unit_utility",
-        name="Apartment Utility / Dry Balcony",
+        name="Utility / Dry Balcony",
         typologies=["T2_FAMILY_APARTMENT"],
         function=FunctionType.STORAGE,
         hygiene=HygieneType.WET,
@@ -822,6 +1109,33 @@ UNIVERSAL_SPACE_CATALOG: Dict[str, SpaceTypeSpec] = {
         is_vertical_core=False,
         requires_exterior_wall=True,
         citation="NBC 2016 Pt 3 Cl 12.2.4",
+    ),
+
+    "dead_corner_storage": SpaceTypeSpec(
+        id="dead_corner_storage",
+        name="Dead-Corner Storage",
+        typologies=["T1_SINGLE_FAMILY", "T2_FAMILY_APARTMENT", "T3_LARGE_COMPLEX", "T4_WAREHOUSE"],
+        function=FunctionType.STORAGE,
+        hygiene=HygieneType.NEUTRAL,
+        odor_emit=0, moisture_emit=0, grease_emit=0, noise_emit=0,
+        noise_sensitive=0, acoustic_privacy=0,
+        public_access=PublicAccess.PRIVATE,
+        visitor_depth=VisitorDepth.DEEP,
+        security=SecurityLevel.OPEN,
+        service_side=ServiceSide.BACK_OF_HOUSE,
+        fire_hazard=FireHazard.LOW,
+        egress_role=EgressRole.NONE,
+        floor_load=FloorLoad.NORMAL,
+        daylight_req=False,
+        ventilation_req="mechanical",
+        min_area_sqm=1.0,
+        min_width_m=0.50,
+        max_aspect_ratio=3.00,
+        vastu_zone_weights={"W": 0.4, "SW": 0.3, "S": 0.2},
+        permitted_levels=[0, 1, 2, 3],
+        is_vertical_core=False,
+        requires_exterior_wall=False,
+        citation="LAND-07 residual absorption / NBC 2016 Pt 3 storage",
     ),
 
     # -------------------------------------------------------------------------
@@ -1429,11 +1743,200 @@ UNIVERSAL_SPACE_CATALOG: Dict[str, SpaceTypeSpec] = {
         requires_exterior_wall=True,
         citation="NBC 2016 Pt 3 Cl 12.1",
     ),
+    "pantry": SpaceTypeSpec(
+        id="pantry",
+        name="Pantry / Tea Point",
+        typologies=["T3_LARGE_COMPLEX"],
+        function=FunctionType.AMENITY,
+        hygiene=HygieneType.WET,
+        odor_emit=1, moisture_emit=2, grease_emit=1, noise_emit=1,
+        noise_sensitive=0, acoustic_privacy=0,
+        public_access=PublicAccess.SEMI,
+        visitor_depth=VisitorDepth.MID,
+        security=SecurityLevel.CONTROLLED,
+        service_side=ServiceSide.BACK_OF_HOUSE,
+        fire_hazard=FireHazard.LOW,
+        egress_role=EgressRole.NONE,
+        floor_load=FloorLoad.NORMAL,
+        daylight_req=False,
+        ventilation_req="both",
+        min_area_sqm=6.0,
+        min_width_m=2.00,
+        max_aspect_ratio=2.00,
+        vastu_zone_weights={"SE": 1.0, "NW": 0.8, "NE": -1.0},
+        permitted_levels=[0, 1, 2, 3],
+        is_vertical_core=False,
+        requires_exterior_wall=True,
+        citation="NBC 2016 Pt 9 Sec 1 Table 2 (office pantry/wet point)",
+    ),
+    "washdown_point": SpaceTypeSpec(
+        id="washdown_point",
+        name="Dock Washdown & Wet Point",
+        typologies=["T4_WAREHOUSE"],
+        function=FunctionType.SANITATION,
+        hygiene=HygieneType.WET,
+        odor_emit=1, moisture_emit=3, grease_emit=1, noise_emit=1,
+        noise_sensitive=0, acoustic_privacy=0,
+        public_access=PublicAccess.RESTRICTED,
+        visitor_depth=VisitorDepth.DEEP,
+        security=SecurityLevel.CONTROLLED,
+        service_side=ServiceSide.BACK_OF_HOUSE,
+        fire_hazard=FireHazard.LOW,
+        egress_role=EgressRole.NONE,
+        floor_load=FloorLoad.HEAVY,
+        daylight_req=False,
+        ventilation_req="both",
+        min_area_sqm=2.0,
+        min_width_m=1.20,
+        max_aspect_ratio=2.00,
+        vastu_zone_weights={"W": 1.0, "NW": 0.8, "NE": -1.0},
+        permitted_levels=[0],
+        is_vertical_core=False,
+        requires_exterior_wall=True,
+        citation="NBC 2016 Pt 9 Sec 1 (sanitary wet point) / Industrial washdown practice",
+    ),
+
+    # -------------------------------------------------------------------------
+    # Space identities for solver labels that previously fell through to a
+    # coarser type (the alias table mapped a T4 distribution lobby to a
+    # mezzanine catwalk, and an archive deck to a heavy storage bay).  These
+    # records make the ontology, not the alias, own the semantics and name.
+    # -------------------------------------------------------------------------
+    "master_suite": SpaceTypeSpec(
+        id="master_suite",
+        name="Master Suite",
+        typologies=["T1_SINGLE_FAMILY"],
+        function=FunctionType.SLEEP,
+        hygiene=HygieneType.CLEAN,
+        odor_emit=0, moisture_emit=0, grease_emit=0, noise_emit=0,
+        noise_sensitive=3, acoustic_privacy=3,
+        public_access=PublicAccess.PRIVATE,
+        visitor_depth=VisitorDepth.DEEP,
+        security=SecurityLevel.CONTROLLED,
+        service_side=ServiceSide.FRONT_OF_HOUSE,
+        fire_hazard=FireHazard.LOW,
+        egress_role=EgressRole.NONE,
+        floor_load=FloorLoad.NORMAL,
+        daylight_req=True,
+        ventilation_req="natural",
+        min_area_sqm=14.0,
+        min_width_m=3.40,
+        max_aspect_ratio=1.80,
+        vastu_zone_weights={"SW": 1.0, "S": 0.8, "W": 0.8, "NW": 0.4, "CENTER": 0.0, "SE": -0.5, "E": -0.8, "N": -0.8, "NE": -1.0},
+        permitted_levels=[0, 1, 2],
+        is_vertical_core=False,
+        requires_exterior_wall=True,
+        citation="NBC 2016 Pt 3 Cl 12.2.2 / L5 naming-honesty threshold (>= 14.0 m²)",
+    ),
+    "distribution_lobby": SpaceTypeSpec(
+        id="distribution_lobby",
+        name="Central Distribution Lobby",
+        typologies=["T4_WAREHOUSE"],
+        function=FunctionType.CIRCULATION,
+        hygiene=HygieneType.NEUTRAL,
+        odor_emit=0, moisture_emit=0, grease_emit=0, noise_emit=1,
+        noise_sensitive=0, acoustic_privacy=0,
+        public_access=PublicAccess.SEMI,
+        visitor_depth=VisitorDepth.FRONT,
+        security=SecurityLevel.CONTROLLED,
+        service_side=ServiceSide.BACK_OF_HOUSE,
+        fire_hazard=FireHazard.LOW,
+        egress_role=EgressRole.EXIT,
+        floor_load=FloorLoad.NORMAL,
+        daylight_req=False,
+        ventilation_req="both",
+        min_area_sqm=6.0,
+        min_width_m=1.50,
+        max_aspect_ratio=2.50,
+        vastu_zone_weights={"CENTER": 1.0, "N": 0.6, "E": 0.6},
+        permitted_levels=[0, 1, 2, 3],
+        is_vertical_core=False,
+        requires_exterior_wall=False,
+        citation="NBC 2016 Pt 4 Cl 4.5 (distribution lobby)",
+    ),
+    "archive_deck": SpaceTypeSpec(
+        id="archive_deck",
+        name="Operations & Document Archive Deck",
+        typologies=["T4_WAREHOUSE"],
+        function=FunctionType.STORAGE,
+        hygiene=HygieneType.NEUTRAL,
+        odor_emit=0, moisture_emit=0, grease_emit=0, noise_emit=0,
+        noise_sensitive=1, acoustic_privacy=1,
+        public_access=PublicAccess.PRIVATE,
+        visitor_depth=VisitorDepth.DEEP,
+        security=SecurityLevel.CONTROLLED,
+        service_side=ServiceSide.BACK_OF_HOUSE,
+        fire_hazard=FireHazard.MEDIUM,
+        egress_role=EgressRole.NONE,
+        floor_load=FloorLoad.NORMAL,
+        daylight_req=True,
+        ventilation_req="natural",
+        min_area_sqm=3.0,
+        min_width_m=1.20,
+        max_aspect_ratio=4.00,
+        vastu_zone_weights={"W": 0.6, "NW": 0.5, "N": 0.4},
+        permitted_levels=[1, 2, 3],
+        is_vertical_core=False,
+        requires_exterior_wall=True,
+        citation="NBC 2016 Pt 3 Cl 12.2 storage / T4 mezzanine archive practice",
+    ),
+    "utility_strip": SpaceTypeSpec(
+        id="utility_strip",
+        name="Utility Storage Strip",
+        typologies=["T4_WAREHOUSE"],
+        function=FunctionType.STORAGE,
+        hygiene=HygieneType.WET,
+        odor_emit=1, moisture_emit=2, grease_emit=1, noise_emit=1,
+        noise_sensitive=0, acoustic_privacy=0,
+        public_access=PublicAccess.PRIVATE,
+        visitor_depth=VisitorDepth.DEEP,
+        security=SecurityLevel.OPEN,
+        service_side=ServiceSide.BACK_OF_HOUSE,
+        fire_hazard=FireHazard.LOW,
+        egress_role=EgressRole.NONE,
+        floor_load=FloorLoad.NORMAL,
+        daylight_req=True,
+        ventilation_req="both",
+        min_area_sqm=2.0,
+        min_width_m=1.00,
+        max_aspect_ratio=3.00,
+        vastu_zone_weights={"W": 0.8, "NW": 0.8, "SE": 0.5},
+        permitted_levels=[0, 1, 2, 3],
+        is_vertical_core=False,
+        requires_exterior_wall=True,
+        citation="NBC 2016 Pt 9 Sec 1 (utility wet point) / Industrial service strip",
+    ),
+    "viewing_catwalk": SpaceTypeSpec(
+        id="viewing_catwalk",
+        name="High-Bay Viewing Catwalk",
+        typologies=["T4_WAREHOUSE"],
+        function=FunctionType.CIRCULATION,
+        hygiene=HygieneType.NEUTRAL,
+        odor_emit=0, moisture_emit=0, grease_emit=0, noise_emit=1,
+        noise_sensitive=0, acoustic_privacy=0,
+        public_access=PublicAccess.PRIVATE,
+        visitor_depth=VisitorDepth.MID,
+        security=SecurityLevel.CONTROLLED,
+        service_side=ServiceSide.BACK_OF_HOUSE,
+        fire_hazard=FireHazard.LOW,
+        egress_role=EgressRole.NONE,
+        floor_load=FloorLoad.NORMAL,
+        daylight_req=True,
+        ventilation_req="natural",
+        min_area_sqm=3.0,
+        min_width_m=1.00,
+        max_aspect_ratio=4.00,
+        vastu_zone_weights={"CENTER": 0.5, "N": 0.4},
+        permitted_levels=[1, 2, 3],
+        is_vertical_core=False,
+        requires_exterior_wall=False,
+        citation="NBC 2016 Pt 4 Cl 4.5 (catwalk egress)",
+    ),
 }
 
 
 # =============================================================================
-# 5. TYPOLOGY PROFILES
+# 5. TYPOLOGY PROFILES & PROGRAM CATALOGS
 # =============================================================================
 
 class TypologyProfile(BaseModel):
@@ -1448,6 +1951,107 @@ class TypologyProfile(BaseModel):
     egress_constants: Dict[str, Any]
     occupancy_wc_table: Dict[str, Any]
     parking_table: Dict[str, Any]
+
+
+class UnitDefinition(BaseModel):
+    """One dwelling/suite unit programme (T2/T3 reusable unit pattern)."""
+    unit_id_pattern: str
+    room_ids: List[str]
+    wet_points: List[str] = Field(default_factory=list)
+    min_carpet_area_sqm: float = 0.0
+    citation: str = ""
+
+
+class SharedCoreDefinition(BaseModel):
+    """Shared vertical core / stairs / lift / parking entitlement for a unit typology."""
+    space_ids: List[str]
+    parking_ecs_per_unit: float
+    parking_rule: str
+    visitor_parking_ratio: float = 0.10
+    citation: str = ""
+
+
+class TypologyCatalog(BaseModel):
+    """Program-level catalog: what the typology is made of, independent of geometry."""
+    canonical: str
+    required_spaces: List[str]
+    unit: Optional[UnitDefinition] = None
+    shared_core: Optional[SharedCoreDefinition] = None
+    industrial_chain: List[str] = Field(default_factory=list)
+    wet_points: List[str] = Field(default_factory=list)
+    mezzanine_levels: List[int] = Field(default_factory=list)
+    citation: str = ""
+
+
+TYPOLOGY_CATALOGS: Dict[str, TypologyCatalog] = {
+    "T1_SINGLE_FAMILY": TypologyCatalog(
+        canonical="T1_SINGLE_FAMILY",
+        required_spaces=[
+            "foyer", "living", "dining", "kitchen", "utility", "puja", "bath_1",
+            "central_lobby", "master_bed", "bed_2", "bath_master", "bath_2", "balcony", "study",
+        ],
+        wet_points=["kitchen", "utility", "bath_1", "bath_2", "bath_master"],
+        citation="NBC 2016 Part 3 Table 1 (residential)",
+    ),
+    "T2_FAMILY_APARTMENT": TypologyCatalog(
+        canonical="T2_FAMILY_APARTMENT",
+        required_spaces=[
+            "unit_living", "unit_kitchen", "unit_bed", "unit_bath", "unit_utility",
+            "unit_balcony", "shared_stair", "lift_core", "floor_lobby", "guard_house",
+        ],
+        unit=UnitDefinition(
+            unit_id_pattern="apt_unit_{n}",
+            room_ids=["unit_living", "unit_kitchen", "unit_bed", "unit_bath", "unit_utility", "unit_balcony"],
+            wet_points=["unit_kitchen", "unit_bath", "unit_utility"],
+            min_carpet_area_sqm=41.0,
+            citation="NBC 2016 Part 3 Table 1 / Part 9 Sec 1 Table 1",
+        ),
+        shared_core=SharedCoreDefinition(
+            space_ids=["shared_stair", "lift_core", "floor_lobby"],
+            parking_ecs_per_unit=1.0,
+            parking_rule="1.0 ECS per unit < 100 m2; 1.5 ECS if >= 100 m2",
+            visitor_parking_ratio=0.10,
+            citation="NBC 2016 Part 3 Table 7",
+        ),
+        wet_points=["unit_kitchen", "unit_bath", "unit_utility"],
+        citation="NBC 2016 Part 3/9 multi-family norms",
+    ),
+    "T3_LARGE_COMPLEX": TypologyCatalog(
+        canonical="T3_LARGE_COMPLEX",
+        required_spaces=[
+            "reception_lobby", "visitor_lounge", "conference_room", "commercial_suite",
+            "conference_suite", "sanitary_block", "server_room", "electrical_room",
+            "spine_corridor", "primary_stair", "secondary_stair", "lift_core", "lift_lobby", "mep_room",
+        ],
+        unit=UnitDefinition(
+            unit_id_pattern="commercial_suite_{n}",
+            room_ids=["commercial_suite", "conference_suite"],
+            wet_points=["sanitary_block"],
+            min_carpet_area_sqm=25.0,
+            citation="NBC 2016 Part 3 office occupancy",
+        ),
+        shared_core=SharedCoreDefinition(
+            space_ids=["primary_stair", "secondary_stair", "lift_core", "lift_lobby"],
+            parking_ecs_per_unit=1.5,
+            parking_rule="1.5-2.0 ECS per 100 m2 commercial built-up",
+            visitor_parking_ratio=0.15,
+            citation="NBC 2016 Part 3 Table 7",
+        ),
+        wet_points=["sanitary_block", "pantry"],
+        citation="NBC 2016 Part 3/9 commercial norms",
+    ),
+    "T4_WAREHOUSE": TypologyCatalog(
+        canonical="T4_WAREHOUSE",
+        required_spaces=[
+            "dock_bay", "dispatch", "storage_bay", "worker_amenity", "guard_house",
+            "admin_office", "conf_room", "admin_catwalk", "ind_stair", "washdown_point",
+        ],
+        industrial_chain=["dock_bay", "dispatch", "storage_bay"],
+        wet_points=["worker_amenity", "washdown_point"],
+        mezzanine_levels=[1],
+        citation="NBC 2016 storage occupancy / industrial logistics practice",
+    ),
+}
 
 
 TYPOLOGY_PROFILES: Dict[str, TypologyProfile] = {
@@ -1706,6 +2310,19 @@ def derive_spatial_rules(space_a: SpaceTypeSpec, space_b: SpaceTypeSpec) -> List
             description="High noise emission spaces should be buffered from acoustically sensitive sleeping or study areas."
         ))
 
+    # 4b. QUIET vs SOCIAL (acoustic privacy)
+    # quiet (noise_sensitive >= 2) vs social/meeting/reception -> PREFER_SEPARATE
+    social_functions = {FunctionType.SOCIAL, FunctionType.RECEPTION, FunctionType.MEETING}
+    if (space_a.noise_sensitive >= 2 and space_b.function in social_functions) or \
+       (space_b.noise_sensitive >= 2 and space_a.function in social_functions):
+        rules.append(SpatialRule(
+            rule_id="NOI-02-QUIET-SOCIAL-SEP",
+            relation=RelationType.PREFER_SEPARATE,
+            rationale=RationaleTag.NOISE,
+            citation="NBC 2016 Part 8 Section 4 Sound Insulation & Acoustic Privacy",
+            description="Quiet, acoustically sensitive rooms should be separated from social, reception and meeting spaces."
+        ))
+
     # 5. COOKING vs EATING
     # cooking vs eating -> MUST_ADJACENT
     if (space_a.function == FunctionType.COOKING and space_b.function == FunctionType.EATING) or \
@@ -1822,6 +2439,7 @@ class OntologyRegistry:
         self._spaces: Dict[str, SpaceTypeSpec] = dict(UNIVERSAL_SPACE_CATALOG)
         self._overrides: Dict[Tuple[str, str], List[SpatialRule]] = dict(EXPLICIT_OVERRIDES)
         self._typologies: Dict[str, TypologyProfile] = dict(TYPOLOGY_PROFILES)
+        self._program_catalogs: Dict[str, TypologyCatalog] = dict(TYPOLOGY_CATALOGS)
 
     def register_space(self, spec: SpaceTypeSpec) -> None:
         """Dynamically registers or updates a space type in the ontology."""
@@ -1865,6 +2483,157 @@ class OntologyRegistry:
         return self._typologies["T1_SINGLE_FAMILY"]
 
     get_typology = get_typology_profile
+
+    # Room-id aliases emitted by the placement layer. Kept explicit so the
+    # normalizer never guesses from partial substrings.
+    # Display labels for solver room ids whose canonical type is intentionally
+    # broader than the specific room (three T3 suites share one type).
+    # Downstream surfaces read the resolved identity, so the specific label
+    # lives here with the other naming data instead of in the engine.
+    ROOM_ID_LABEL_OVERRIDES: Dict[str, str] = {
+        "guest_bed": "Guest Bedroom",
+        "t3_suite_n": "North Open Office Suite",
+        "t3_suite_e": "Executive Boardroom Suite",
+        "t3_suite_s": "South Collaborative Work Suite",
+        "t3_suite_w": "West Open Office Suite",
+    }
+    ROOM_ID_LABEL_OVERRIDES_BY_TYPOLOGY: Dict[str, Dict[str, str]] = {
+        "T1_SINGLE_FAMILY": {
+            "core_staircase_primary": "Dogleg Staircase Core",
+        },
+    }
+    ROOM_ID_ALIASES: Dict[str, str] = {
+        "guest_bed": "bed_2",
+        "ensuite_bath": "bath_master",
+        "reception": "reception_lobby",
+        "t3_sanitary": "sanitary_block",
+        "t3_suite_n": "commercial_suite",
+        "t3_suite_e": "commercial_suite",
+        "t3_suite_s": "commercial_suite",
+        "t3_suite_w": "commercial_suite",
+        "t3_conf_n": "conference_suite",
+        "t3_conf_e": "conference_suite",
+        "t3_conf_s": "conference_suite",
+        "t3_conf_w": "conference_suite",
+        "t4_dock_bay": "dock_bay",
+        "t4_dispatch": "dispatch",
+        "t4_storage_bay": "storage_bay",
+        "t4_admin_office": "admin_office",
+        "t4_admin_catwalk": "admin_catwalk",
+        "t4_conf_room": "conf_room",
+        "t4_catwalk": "viewing_catwalk",
+        "t4_deck": "archive_deck",
+        "t4_util_west": "utility_strip",
+    }
+    CORE_ALIASES: Dict[str, str] = {
+        "T1_SINGLE_FAMILY": "t1_stair",
+        "T2_FAMILY_APARTMENT": "shared_stair",
+        "T3_LARGE_COMPLEX": "primary_stair",
+        "T4_WAREHOUSE": "ind_stair",
+    }
+    LOBBY_ALIASES: Dict[str, str] = {
+        "T1_SINGLE_FAMILY": "central_lobby",
+        "T2_FAMILY_APARTMENT": "floor_lobby",
+        "T3_LARGE_COMPLEX": "spine_corridor",
+        "T4_WAREHOUSE": "distribution_lobby",
+    }
+
+    def resolve_space_id(
+        self,
+        room_id: str,
+        typology: Optional[str] = None,
+    ) -> Optional[str]:
+        """Resolve a solver-emitted room id to its canonical ontology id.
+
+        Handles per-floor suffixes (``bath_1_F0``), unit-scoped leaves
+        (``t2_unitA_bath``), T4/T3 prefixes, typology-specific cores/lobbies,
+        and the registered alias table. Returns ``None`` rather than a
+        partial-substring guess when nothing matches.
+        """
+        if not room_id:
+            return None
+        rid = str(room_id).strip().lower()
+        if rid in self._spaces:
+            return rid
+
+        # Residual storage (storage_dead_0_1) is a first-class type.
+        if rid.startswith("storage_dead_"):
+            return "dead_corner_storage"
+
+        # T2's mixed-use amenity is a foyer at ground and a utility/terrace
+        # room above; resolve it before the floor suffix is stripped.
+        if rid == "t2_amenity_f0":
+            return "foyer"
+        if rid.startswith("t2_amenity_f") and rid.rsplit("_f", 1)[-1].isdigit():
+            return "unit_utility"
+
+        # per-floor suffix: bath_1_F0 -> bath_1
+        head, sep, tail = rid.rpartition("_f")
+        if sep and tail.isdigit():
+            rid = head
+            if rid in self._spaces:
+                return rid
+
+        canonical = self.get_typology_profile(typology).canonical if typology else None
+        if rid == "core_staircase_primary" and canonical:
+            return self.CORE_ALIASES.get(canonical)
+        if rid == "lobby_spine" and canonical:
+            return self.LOBBY_ALIASES.get(canonical)
+        if rid == "link_corridor":
+            return self.LOBBY_ALIASES.get(canonical, "central_lobby")
+
+        if rid in self.ROOM_ID_ALIASES:
+            return self.ROOM_ID_ALIASES[rid]
+
+        # t2_unitA_bath / t2_unitB_living -> unit_bath / unit_living
+        if rid.startswith("t2_unita_") or rid.startswith("t2_unitb_"):
+            candidate = "unit_" + rid.split("_", 2)[2]
+            return candidate if candidate in self._spaces else None
+
+        # t4_<id> -> <id>
+        if rid.startswith("t4_") and rid[3:] in self._spaces:
+            return rid[3:]
+
+        return None
+
+    def get_program_catalog(self, typology: str) -> TypologyCatalog:
+        """Returns the declarative programme catalog for a typology."""
+        canonical = self.get_typology_profile(typology).canonical
+        if canonical in self._program_catalogs:
+            return self._program_catalogs[canonical]
+        return self._program_catalogs["T1_SINGLE_FAMILY"]
+
+    def evaluate_typology_chain(
+        self,
+        typology: str,
+        adjacent_pairs: List[Tuple[str, str]],
+    ) -> List[SpatialRule]:
+        """Returns a missing-link rule for each unsatisfied required chain.
+
+        Used by the vertical/horizontal law for T4 loading -> dispatch ->
+        storage. ``adjacent_pairs`` are the observed touching pairs on a floor;
+        both sides are normalized through ``resolve_space_id``.
+        """
+        catalog = self.get_program_catalog(typology)
+        if not catalog.industrial_chain:
+            return []
+        observed = set()
+        for a, b in adjacent_pairs:
+            ra = self.resolve_space_id(a, typology) or a
+            rb = self.resolve_space_id(b, typology) or b
+            observed.add((ra, rb))
+            observed.add((rb, ra))
+        missing: List[SpatialRule] = []
+        for a, b in zip(catalog.industrial_chain, catalog.industrial_chain[1:]):
+            if (a, b) not in observed:
+                missing.append(SpatialRule(
+                    rule_id=f"LOG-03-{a.upper()}-{b.upper()}-CHAIN",
+                    relation=RelationType.MUST_ADJACENT,
+                    rationale=RationaleTag.FUNCTION,
+                    citation="Industrial Logistics Operations Canon",
+                    description=f"Required logistics chain link '{a}' -> '{b}' is missing from the floor adjacency graph.",
+                ))
+        return missing
 
     def get_relations(self, space_id_1: str, space_id_2: str) -> List[SpatialRule]:
         """
@@ -1933,13 +2702,28 @@ class OntologyRegistry:
                 description=f"Space '{upper.name}' has heavy floor load and is strictly restricted to Ground level (Level 0)."
             ))
 
-        # VERT-02: FORBIDDEN_ABOVE wet over sacred, food, sleep, technical, secure
+        # VERT-02: FORBIDDEN_ABOVE wet over sacred, food, sleep, technical, secure.
+        # A wet room stacked over the *same* wet class (kitchen over kitchen,
+        # bath over bath) is the preferred plumbing condition, not a hygiene
+        # violation: the lower space is already wet, so it is not a dry
+        # sensitive room being rained on.  This matters now that T2 emits a
+        # separate kitchen above the kitchen on every repeated unit floor.
+        #
+        # The exemption is deliberately class-scoped, not "lower is wet": foul
+        # drainage above a food-preparation room stays a violation even though
+        # a kitchen is itself wet (HygieneClass.COOKING vs HygieneClass.WET).
         is_upper_wet = (upper.hygiene in (HygieneType.WET, HygieneType.FOUL) or upper.moisture_emit >= 2)
+        is_lower_wet_or_shaft = (lower.hygiene in (HygieneType.WET, HygieneType.FOUL) or "shaft" in lower.id or "mep" in lower.id)
+        same_wet_class = (
+            is_upper_wet
+            and lower.hygiene_class == upper.hygiene_class
+            and upper.hygiene_class in (HygieneClass.WET, HygieneClass.COOKING)
+        )
         lower_sensitive_to_water = (
             lower.hygiene == HygieneType.SACRED or
             lower.function in (FunctionType.COOKING, FunctionType.EATING, FunctionType.SLEEP, FunctionType.TECHNICAL) or
             lower.security == SecurityLevel.SECURE
-        )
+        ) and not same_wet_class
         if is_upper_wet and lower_sensitive_to_water:
             violations.append(SpatialRule(
                 rule_id="VERT-02-NO-WET-OVER-HABITABLE",
@@ -1950,7 +2734,6 @@ class OntologyRegistry:
             ))
 
         # VERT-01: Wet stacks only over wet or shaft
-        is_lower_wet_or_shaft = (lower.hygiene in (HygieneType.WET, HygieneType.FOUL) or "shaft" in lower.id or "mep" in lower.id)
         if is_upper_wet and not is_lower_wet_or_shaft:
             violations.append(SpatialRule(
                 rule_id="VERT-01-WET-STACK",
@@ -1958,6 +2741,16 @@ class OntologyRegistry:
                 rationale=RationaleTag.STRUCTURE,
                 citation="NBC 2016 Part 9 Cl 4.3 (Vertical Drainage Stack Invariant)",
                 description=f"Wet room '{upper.name}' on Level {upper_level} does not align with a lower floor wet room or plumbing shaft."
+            ))
+        elif is_upper_wet and is_lower_wet_or_shaft:
+            # Positive law: a wet room aligned over a wet room (or shaft) is the
+            # preferred plumbing condition; the solver must preserve this stack.
+            violations.append(SpatialRule(
+                rule_id="VERT-01-WET-STACK-ALIGN",
+                relation=RelationType.MUST_STACK,
+                rationale=RationaleTag.STRUCTURE,
+                citation="NBC 2016 Part 9 Cl 4.3 (Vertical Drainage Stack Invariant)",
+                description=f"Wet room '{upper.name}' must remain stacked on wet/shaft space '{lower.name}' for a single plumbing run."
             ))
 
         # VERT-03: Cores always stack
@@ -1968,6 +2761,28 @@ class OntologyRegistry:
                 rationale=RationaleTag.STRUCTURE,
                 citation="NBC 2016 Part 4 Egress Standards Cl 4.4",
                 description=f"Vertical circulation core '{upper.name}' must align continuously over a lower vertical core."
+            ))
+
+        # VERT-06: no wet room directly above an open terrace / sky deck
+        if is_upper_wet and lower.id == "terrace":
+            violations.append(SpatialRule(
+                rule_id="VERT-06-NO-WET-OVER-TERRACE",
+                relation=RelationType.FORBIDDEN_ABOVE,
+                rationale=RationaleTag.HYGIENE,
+                citation="NBC 2016 Part 9 Cl 4.3.2 / RULE-FP-03",
+                description=f"Wet room '{upper.name}' is forbidden directly above open terrace '{lower.name}'."
+            ))
+
+        # VERT-05: T4 mezzanine admin must be fire-separated from storage/loading
+        mezzanine_admin = {"admin_office", "conf_room"}
+        industrial_below = {"storage_bay", "dock_bay", "dispatch"}
+        if upper.id in mezzanine_admin and upper_level > 0 and lower.id in industrial_below:
+            violations.append(SpatialRule(
+                rule_id="VERT-05-MEZZANINE-FIRE-SEPARATION",
+                relation=RelationType.PREFER_SEPARATE,
+                rationale=RationaleTag.FIRE_SAFETY,
+                citation="NBC 2016 Part 4 Cl 4.5 / Part 3 Cl 12.7 (mezzanine fire separation)",
+                description=f"Mezzanine '{upper.name}' must be fire-separated from industrial '{lower.name}' below (rated slab/wall and protected industrial stair)."
             ))
 
         return violations
@@ -1983,6 +2798,10 @@ class OntologyRegistry:
     @property
     def all_typologies(self) -> Dict[str, TypologyProfile]:
         return self._typologies
+
+    @property
+    def all_program_catalogs(self) -> Dict[str, TypologyCatalog]:
+        return self._program_catalogs
 
 
 # Default singleton instance
@@ -2023,7 +2842,7 @@ class MathematicalValidityCertificate(BaseModel):
     l3_fixture_clearances_satisfied: bool = Field(default=True, description="Layer 3: All bathrooms satisfy WC, basin, and shower coded clearances and maintenance access")
     l4_furniture_clearances_satisfied: bool = Field(default=True, description="Layer 4: All habitable rooms satisfy minimum furniture sets and circulation envelopes")
     l8_program_intent_satisfied: bool = Field(default=True, description="Layer 8: Upper-floor bedroom presence, zoning separation, and design intent satisfied")
-    layer_statuses: List[Dict[str, Any]] = Field(default_factory=list, description="Universal validation gate: per-layer L1-L14 status objects (PASS | WARN | FAIL | N/A-with-reason)")
+    layer_statuses: List[Dict[str, Any]] = Field(default_factory=list, description="Universal validation gate: per-layer L1-L15 status objects (PASS | WARN | FAIL | N/A-with-reason)")
     overall_layer_status: str = Field(default="PASS", description="Gate overall status = worst layer (FAIL > WARN > PASS; N/A never gates)")
     certificate_id: str = Field(default="CERT-MATH-VALID-2026", description="Unique identifier for this statutory audit certificate")
     certified_rules: List[str] = Field(default_factory=list, description="Explicit list of rule IDs verified and certified")
