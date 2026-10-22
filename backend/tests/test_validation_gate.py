@@ -199,10 +199,22 @@ def test_l15_t2_12x15_keeps_both_kitchens():
 
 
 def test_l15_missing_kitchen_fails_gate_and_invalidates_certificate():
-    """A plate that cannot hold a kitchen must fail L15, not silently pass."""
+    """A plate that cannot hold a kitchen must never silently pass.
+
+    Since audit F01/F02 a brief the statutory ceiling cannot hold is refused
+    before a plan exists (no certificate can be issued for geometry that was
+    never laid out), so the L15 failure is asserted on the planning path while
+    the refusal itself is asserted as the alternative outcome.
+    """
     req = FloorPlanRequest(plot_width_m=8.0, plot_depth_m=10.0, floors=1,
                            building_typology="T2_FAMILY_APARTMENT")
     b = SoleGeometryEngine(req).solve()
+    if not b.floors:
+        assert b.qa_report["status"] == "failed"
+        reasons = " ".join(u.reason for u in (b.unmet_requirements or []))
+        assert "does not fit the statutory ground plate" in reasons, reasons
+        assert any(str(w).startswith(("T2-UNIT-MINIMA", "GEN-UNFIT")) for w in b.warnings)
+        return
     l15 = next(ld for ld in b.validation_gate["layers"] if ld["layer_id"] == "L15")
     assert l15["status"] == "FAIL"
     assert any("unit_kitchen" in f for f in l15.get("findings") or [])
@@ -227,6 +239,14 @@ def test_l15_catches_multi_wing_typology_fallback():
                                plot_polygon=poly, floors=1,
                                building_typology=typology)
         b = SoleGeometryEngine(req).solve()
+        if not b.floors:
+            # A brief the statutory ceiling cannot host is refused before a
+            # plan exists (audit F01/F02); that refusal must name its reasons,
+            # and no certificate can be issued for geometry that was never laid
+            # out. The L15 path itself is asserted in the sibling test above.
+            assert b.qa_report["status"] == "failed"
+            assert b.unmet_requirements, f"{typology}: refusal without named failures"
+            continue
         l15 = next(ld for ld in b.validation_gate["layers"] if ld["layer_id"] == "L15")
         assert l15["status"] == "FAIL", f"{typology}: {l15}"
         assert any(expected in m for m in l15["details"]["missing"])

@@ -74,12 +74,30 @@ def test_program_aware_footprint_shrinks_to_programme_and_labels_outdoor():
     assert report.certificate.status == "PASS"
 
 
+# Wall-clock provenance keys (when the gate ran / how long the solve took) are
+# measurement metadata, not solver output. Two identical solves legitimately
+# differ by a clock tick, so equality is asserted on everything else at full
+# depth - the same convention as space_engine_baseline.canonical_response and
+# test_validation_gate.test_gate_determinism_seed42.
+_VOLATILE_KEYS = {"solver_timing_ms", "timing_ms", "generated_at", "evaluated_at"}
+
+
+def _without_wall_clock(value):
+    if isinstance(value, dict):
+        return {k: _without_wall_clock(v) for k, v in value.items() if k not in _VOLATILE_KEYS}
+    if isinstance(value, list):
+        return [_without_wall_clock(v) for v in value]
+    return value
+
+
 def test_program_aware_footprint_is_deterministic():
     first = generate_floor_plan(_t1(program_aware_footprint=True, seed="42"))
     second = generate_floor_plan(_t1(program_aware_footprint=True, seed="42"))
     assert first.site_plan.footprint.model_dump() == second.site_plan.footprint.model_dump()
     assert first.land_economics.model_dump() == second.land_economics.model_dump()
-    assert first.multi_storey.floors[0].model_dump() == second.multi_storey.floors[0].model_dump()
+    assert _without_wall_clock(first.multi_storey.floors[0].model_dump()) == _without_wall_clock(
+        second.multi_storey.floors[0].model_dump()
+    ), "two identical solves differ in solver output (wall-clock keys excluded)"
 
 
 def test_program_deficit_is_explicit_never_silent():

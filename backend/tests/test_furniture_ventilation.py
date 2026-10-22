@@ -70,6 +70,17 @@ def _overlap(a: Any, b: Any) -> bool:
 @pytest.mark.parametrize("floors", [1, 3])
 def test_programme_aware_plate_meets_furniture_and_ventilation(typology: str, floors: int):
     response = generate_floor_plan(_request(typology, floors))
+    if response.status == "failed":
+        # Refused brief (audit F01/F02): no furniture can be asserted on a plan
+        # that was never laid out. The refusal names either the ceiling
+        # shortfall or the gate-bearing land check that failed (audit F05).
+        reasons = " ".join(u["reason"] for u in (response.unmet_requirements or []))
+        assert any(k in reasons for k in (
+            "does not fit the statutory ground plate",
+            "programme fits the footprint",
+            "GATE-FAIL",
+        )), reasons
+        return
     furnished = _furnished_rooms(response)
     assert furnished, f"{typology} F{floors}: no furniture was placed"
 

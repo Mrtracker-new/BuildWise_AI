@@ -21,11 +21,7 @@ import pytest
 import pypdf
 
 from app.schemas.floorplan import FloorPlanRequest
-from app.services.floorplan.multi_floor_solver import (
-    MultiFloorSolver,
-    generate_multi_floor_building,
-    solve_multi_floor_plan,
-)
+from app.services.floorplan.engine import SoleGeometryEngine
 from app.services.floorplan.wall_graph import (
     W1_EXTERIOR_THICKNESS_M,
     W2_INTERIOR_THICKNESS_M,
@@ -80,7 +76,7 @@ def test_dimension_chain_sums_within_1mm(typology: str, floors: int):
         vastu_strictness="medium",
         required_rooms=["living", "kitchen", "master_bed", "bath_1", "dining", "stairs"]
     )
-    result = solve_multi_floor_plan(req)
+    result = SoleGeometryEngine(req).solve()
     assert result is not None
     assert len(result.floors) == floors
 
@@ -214,7 +210,7 @@ def test_hosted_openings_rules(typology: str):
         vastu_strictness="medium",
         required_rooms=["living", "kitchen", "master_bed", "bath_1", "dining", "stairs"]
     )
-    result = solve_multi_floor_plan(req)
+    result = SoleGeometryEngine(req).solve()
 
     for fl in result.floors:
         wg = fl.wall_graph
@@ -279,7 +275,7 @@ def test_schedules_completeness_and_deterministic_tags(typology: str):
         vastu_strictness="medium",
         required_rooms=["living", "kitchen", "master_bed", "bath_1", "dining", "stairs"]
     )
-    result = solve_multi_floor_plan(req)
+    result = SoleGeometryEngine(req).solve()
 
     for fl in result.floors:
         wg = fl.wall_graph
@@ -342,7 +338,7 @@ def test_corridor_minimum_clear_widths():
             vastu_strictness="medium",
             required_rooms=["living", "kitchen", "master_bed", "bath_1", "dining", "stairs"]
         )
-        res = solve_multi_floor_plan(req)
+        res = SoleGeometryEngine(req).solve()
         fl0 = res.floors[0]
         # Inspect clear rooms for circulation/corridors if present
         corridors = [r for r in fl0.rooms if "corridor" in r.room_id.lower() or "passage" in r.room_id.lower() or "lobby" in r.room_id.lower()]
@@ -429,7 +425,7 @@ def test_construction_grade_svg_generation():
         vastu_strictness="medium",
         required_rooms=["living", "kitchen", "master_bed", "bath_1", "dining", "stairs"]
     )
-    res_t1 = solve_multi_floor_plan(req_t1)
+    res_t1 = SoleGeometryEngine(req_t1).solve()
     svg_t1 = res_t1.floors[0].svg_blueprint_cad
 
     # Valid XML check
@@ -454,7 +450,7 @@ def test_construction_grade_svg_generation():
         vastu_strictness="medium",
         required_rooms=["living", "kitchen", "master_bed", "bath_1", "dining", "stairs"]
     )
-    res_t3 = solve_multi_floor_plan(req_t3)
+    res_t3 = SoleGeometryEngine(req_t3).solve()
     svg_t3 = res_t3.floors[0].svg_blueprint_cad
     assert "col-bubble" in svg_t3 or "grid-bubble" in svg_t3 or "col-grid" in svg_t3
 
@@ -473,7 +469,7 @@ def test_pdf_report_construction_schedules_rendering():
         vastu_strictness="medium",
         required_rooms=["living", "kitchen", "master_bed", "bath_1", "dining", "stairs"]
     )
-    res = solve_multi_floor_plan(req)
+    res = SoleGeometryEngine(req).solve()
     fl0 = res.floors[0].model_dump()
 
     # Flowables helper test
@@ -535,7 +531,7 @@ def test_regenerate_and_verify_golden_svg_snapshots(tmp_path):
             vastu_strictness="medium",
             required_rooms=["living", "kitchen", "master_bed", "bath_1", "dining", "stairs"]
         )
-        res = solve_multi_floor_plan(req)
+        res = SoleGeometryEngine(req).solve()
         svg_content = res.floors[0].svg_blueprint_cad
 
         # Verify valid SVG XML

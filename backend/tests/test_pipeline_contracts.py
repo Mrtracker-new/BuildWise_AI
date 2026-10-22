@@ -1,5 +1,5 @@
 """
-BuildWise Pipeline Contracts & Buildability Invariants Test Suite (Phase 2 & 3).
+BuildWise Pipeline Contracts & Buildability Invariants Test Suite.
 Verifies:
 1. Producer->Consumer DTO contract completeness across all API and internal interfaces.
 2. Buildability invariants:
@@ -14,7 +14,7 @@ import pytest
 import math
 from app.schemas.floorplan import FloorPlanRequest
 from app.services.floorplan.floorplan_service import generate_floor_plan
-from app.services.floorplan.multi_floor_solver import MultiFloorSolver
+from app.services.floorplan.engine import SoleGeometryEngine
 from app.services.floorplan.wall_graph import (
     build_constructible_wall_graph,
     compute_stair_geometry,
@@ -79,11 +79,11 @@ def test_api_response_frontend_contract():
 
 def test_internal_wall_graph_dto_contract():
     """
-    Verifies the contract between MultiFloorSolver / wall_graph and svg_generator / report_service:
+    Verifies the contract between SoleGeometryEngine / wall_graph and svg_generator / report_service:
     - wall_graph must have walls, openings, rooms, stair_geometry,
       dim_chains_x, dim_chains_y, door_schedule, window_schedule, room_schedule.
     """
-    solver = MultiFloorSolver(FloorPlanRequest(
+    solver = SoleGeometryEngine(FloorPlanRequest(
         plot_width_m=14.0,
         plot_depth_m=12.0,
         building_typology="T1_SINGLE_FAMILY",
@@ -117,7 +117,7 @@ def test_dimension_chain_sum_invariant(typology, plot_w, plot_d):
     INVARIANT: Every dimension chain must equal the overall envelope dimension within 1mm (0.001m).
     envelope = sum(clear_room_dimensions) + sum(wall_thicknesses).
     """
-    solver = MultiFloorSolver(FloorPlanRequest(
+    solver = SoleGeometryEngine(FloorPlanRequest(
         plot_width_m=plot_w,
         plot_depth_m=plot_d,
         building_typology=typology,
@@ -126,7 +126,12 @@ def test_dimension_chain_sum_invariant(typology, plot_w, plot_d):
         ai_provider="mock"
     ))
     building = solver.solve()
-    assert building is not None and len(building.floors) > 0
+    if not building.floors:
+        # Refused brief: the statutory ceiling cannot hold the
+        # programme, and the refusal names the shortfall rather than squeezing.
+        assert building.qa_report.get("status") == "failed"
+        assert any(str(w).startswith(("GEN-UNFIT", "LAND-01")) for w in building.warnings), building.warnings
+        return
 
     for fl in building.floors:
         wg = fl.wall_graph
@@ -179,7 +184,7 @@ def test_hosted_openings_and_schedules():
     INVARIANT: Hosted doors and windows must have deterministic tags (D1..Dn, W1..Wn),
     valid lintel and sill heights, and appear in the respective schedules.
     """
-    solver = MultiFloorSolver(FloorPlanRequest(
+    solver = SoleGeometryEngine(FloorPlanRequest(
         plot_width_m=15.0,
         plot_depth_m=12.0,
         building_typology="T1_SINGLE_FAMILY",
@@ -325,6 +330,18 @@ def test_sidebar_single_source_contract_all_combinations(sidebar_typology, expec
 
     # Invariant 3: Solver executes and produces the exact number of levels
     res = generate_floor_plan(req)
+    if res.status == "failed":
+        # An over-programmed brief cannot fit a 14 x 12 m plot at 60 % coverage;
+        # refusing it is the honest answer, and the refusal must
+        # carry the numbers - either the ceiling shortfall or the gate-bearing
+        # land check that failed.
+        reasons = " ".join(u["reason"] for u in (res.unmet_requirements or []))
+        assert any(k in reasons for k in (
+            "does not fit the statutory ground plate",
+            "programme fits the footprint",
+            "GATE-FAIL",
+        )), reasons
+        return
     assert res.status in ("optimal", "compromise"), f"Generation failed for {sidebar_typology} {sidebar_storeys} storeys: {res.warnings}"
 
     if sidebar_storeys > 1:

@@ -331,8 +331,9 @@ def test_pdf_report_multi_storey_dossier():
     reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
     num_pages = len(reader.pages)
     # Minimal payload (1 page) + Sheet 10.0 (dossier incl. universal gate layer
-    # table, +1 page since Phase 2) + 4 floor sheets = exactly 7 pages
-    assert num_pages == 7, f"Expected exactly 7 pages (1 base + 6 floorplan sheets), got {num_pages}"
+    # table) + the land-economics certificate page (kept together with
+    # the legal advisory so neither orphans) + 4 floor sheets = exactly 8 pages
+    assert num_pages == 8, f"Expected exactly 8 pages (1 base + 7 floorplan pages), got {num_pages}"
 
     pages_text = [page.extract_text() for page in reader.pages]
     full_text = "\n--- PAGE ---\n".join(pages_text)
@@ -350,6 +351,11 @@ def test_pdf_report_multi_storey_dossier():
     assert "10.4" in full_text
     assert "Ground Floor" in full_text or "GROUND FLOOR" in full_text
     assert "Elevation" in full_text
+
+    # 2b. The land-economics certificate is a content layer on the
+    # dossier, with its own verdict, not a browser-side re-derivation.
+    assert "LAND ECONOMICS" in full_text
+    assert "SPACE-EFFICIENCY" in full_text
 
     # 3. Verify running footer consistency on all pages
     for idx, pt in enumerate(pages_text):

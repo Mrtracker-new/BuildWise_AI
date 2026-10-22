@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Tuple
 import pytest
 
 from app.schemas.floorplan import FloorPlanRequest
-from app.services.floorplan.multi_floor_solver import MultiFloorSolver
+from app.services.floorplan.engine import SoleGeometryEngine
 
 
 def extract_text_and_badge_bboxes(svg_str: str) -> List[Dict[str, Any]]:
@@ -164,7 +164,7 @@ def test_svg_zero_pairwise_text_collisions(typology_key: str, typology_name: str
         building_typology=typology_key,
         ground_coverage_ratio=0.60,
     )
-    solver = MultiFloorSolver(req)
+    solver = SoleGeometryEngine(req)
     building = solver.solve()
 
     for f_idx, floor in enumerate(building.floors):
@@ -207,7 +207,7 @@ def test_ground_floor_main_entrance_annotation(typology_key: str, typology_name:
         floors=2,
         building_typology=typology_key,
     )
-    solver = MultiFloorSolver(req)
+    solver = SoleGeometryEngine(req)
     building = solver.solve()
 
     gf = building.floors[0]
@@ -242,7 +242,7 @@ def test_title_block_lines_non_intersecting(typology_key: str, typology_name: st
         floors=floors_count,
         building_typology=typology_key,
     )
-    solver = MultiFloorSolver(req)
+    solver = SoleGeometryEngine(req)
     building = solver.solve()
 
     for floor in building.floors:
@@ -286,7 +286,7 @@ def test_worst_case_small_plot_legibility():
         floors=2,
         building_typology="T1_SINGLE_FAMILY",
     )
-    solver = MultiFloorSolver(req)
+    solver = SoleGeometryEngine(req)
     building = solver.solve()
 
     for f_idx, floor in enumerate(building.floors):
@@ -314,7 +314,7 @@ def test_core_anchor_badge_outside_core_with_leader():
         floors=3,
         building_typology="T1_SINGLE_FAMILY",
     )
-    solver = MultiFloorSolver(req)
+    solver = SoleGeometryEngine(req)
     building = solver.solve()
 
     # Upper floors must contain F0 CORE ANCHOR badge and leader line
@@ -341,7 +341,7 @@ def test_unit_entry_door_badges_t2_t3(typology_key: str):
         floors=2,
         building_typology=typology_key,
     )
-    solver = MultiFloorSolver(req)
+    solver = SoleGeometryEngine(req)
     building = solver.solve()
 
     for floor in building.floors:

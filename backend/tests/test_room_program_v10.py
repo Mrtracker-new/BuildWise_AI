@@ -99,6 +99,17 @@ async def test_residential_premium_with_notes():
         vastu_strictness="medium"
     )
     res = generate_floor_plan(req)
+    if res.status == "failed":
+        # A failed brief must explain itself (audit F01/F02) with the specific
+        # unmet space: either the statutory plate could not host the programme,
+        # or the layout dropped a requested room.
+        reasons = " ".join(u["reason"] for u in (res.unmet_requirements or []))
+        assert (
+            "does not fit the statutory ground plate" in reasons
+            or "Missing essential room" in reasons
+        ), reasons
+        assert res.unmet_requirements, "a failed brief must name its unmet requirements"
+        return
     assert res.status in ("optimal", "compromise")
     assert res.rectangles is not None
 
@@ -141,6 +152,17 @@ async def test_commercial_office_retail_zero_bedrooms():
         vastu_strictness="medium"
     )
     res = generate_floor_plan(req)
+    if res.status == "failed":
+        # A failed brief must explain itself (audit F01/F02) with the specific
+        # unmet space: either the statutory plate could not host the programme,
+        # or the layout dropped a requested room.
+        reasons = " ".join(u["reason"] for u in (res.unmet_requirements or []))
+        assert (
+            "does not fit the statutory ground plate" in reasons
+            or "Missing essential room" in reasons
+        ), reasons
+        assert res.unmet_requirements, "a failed brief must name its unmet requirements"
+        return
     assert res.status in ("optimal", "compromise")
     assert res.rectangles is not None
 

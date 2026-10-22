@@ -4,11 +4,7 @@ from app.schemas.multi_floor_plan import (
     MultiStoreyBuildingModel,
     ExtractedClientConstraints,
 )
-from app.services.floorplan.multi_floor_solver import (
-    MultiFloorSolver,
-    generate_multi_floor_building,
-    GracefulDegradationManager,
-)
+from app.services.floorplan.engine import SoleGeometryEngine
 
 
 # =====================================================================
@@ -28,7 +24,7 @@ def test_stacking_invariant_vertical_core(floors_count):
         building_typology="T1_SINGLE_FAMILY",
         ground_coverage_ratio=0.60,
     )
-    solver = MultiFloorSolver(req)
+    solver = SoleGeometryEngine(req)
     building = solver.solve()
 
     assert building.total_storeys == floors_count
@@ -62,7 +58,7 @@ def test_stacking_invariant_shared_cores_and_ducts():
         plot_depth_m=18.0,
         floors=3,
     )
-    building = generate_multi_floor_building(req)
+    building = SoleGeometryEngine(req).solve()
     assert len(building.vertical_cores) >= 1
     assert len(building.duct_shafts) >= 1
 
@@ -88,7 +84,7 @@ def test_graph_reachability_all_floors(floors_count):
         plot_depth_m=15.0,
         floors=floors_count,
     )
-    building = generate_multi_floor_building(req)
+    building = SoleGeometryEngine(req).solve()
 
     for z, floor in enumerate(building.floors):
         assert floor.circulation_status == "connected", f"Floor {z} circulation is disconnected!"
@@ -114,7 +110,7 @@ def test_plumbing_wet_stack_alignment():
         plot_depth_m=15.0,
         floors=2,
     )
-    building = generate_multi_floor_building(req)
+    building = SoleGeometryEngine(req).solve()
     assert len(building.floors) == 2
 
     # Check plumbing alignment metric on upper floor
@@ -139,7 +135,7 @@ def test_graceful_degradation_ec03_subminimum_plot():
         floors=2,
         ground_coverage_ratio=0.60,
     )
-    solver = MultiFloorSolver(req)
+    solver = SoleGeometryEngine(req)
     building = solver.solve()
 
     assert building.qa_report["status"] == "failed"
@@ -159,7 +155,7 @@ def test_graceful_degradation_ec01_narrow_deep_plot():
         plot_depth_m=24.0,
         floors=2,
     )
-    solver = MultiFloorSolver(req)
+    solver = SoleGeometryEngine(req)
     building = solver.solve()
 
     assert building.qa_report["status"] == "pass"
@@ -178,7 +174,7 @@ def test_solver_performance_and_svg_generation():
         plot_depth_m=16.0,
         floors=3,
     )
-    solver = MultiFloorSolver(req)
+    solver = SoleGeometryEngine(req)
     building = solver.solve()
 
     assert building.solver_timing_ms < 1500.0
@@ -246,7 +242,7 @@ def test_typology_matrix(typology, floors_count, strictness):
         vastu_strictness=strictness,
         ground_coverage_ratio=0.60,
     )
-    solver = MultiFloorSolver(req)
+    solver = SoleGeometryEngine(req)
     building = solver.solve()
 
     assert building.total_storeys == floors_count
@@ -301,7 +297,7 @@ def test_ec04_conflicting_constraints_kitchen_ne_override():
         vastu_strictness="high",
         extracted_constraints=constraints,
     )
-    solver = MultiFloorSolver(req)
+    solver = SoleGeometryEngine(req)
     building = solver.solve()
 
     assert any("EC-04 Vastu rule override" in w for w in building.warnings)
@@ -333,7 +329,7 @@ def test_ec04_conflicting_constraints_master_bed_ne_override():
         vastu_strictness="high",
         extracted_constraints=constraints,
     )
-    solver = MultiFloorSolver(req)
+    solver = SoleGeometryEngine(req)
     building = solver.solve()
 
     assert any("EC-04 Vastu rule override" in w for w in building.warnings)
@@ -361,7 +357,7 @@ def test_ec04_low_strictness_lenient_handling():
         vastu_strictness="low",
         extracted_constraints=constraints,
     )
-    solver = MultiFloorSolver(req)
+    solver = SoleGeometryEngine(req)
     building = solver.solve()
 
     # In low strictness, EC-04 override warning is suppressed
@@ -418,7 +414,7 @@ def test_t4_warehouse_subminimum_plot_ec03():
         floors=1,
         building_typology="T4_WAREHOUSE",
     )
-    solver = MultiFloorSolver(req)
+    solver = SoleGeometryEngine(req)
     building = solver.solve()
     assert building.qa_report["status"] == "failed"
     assert any("EC-03" in w for w in building.warnings)

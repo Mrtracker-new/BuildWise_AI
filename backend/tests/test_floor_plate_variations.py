@@ -349,7 +349,13 @@ def test_golden_rectangular_terrace_band_g2_level2_north_3m():
 
     # 6. Certificate validations
     cert = model.mathematical_certificate
-    assert cert.get("is_valid") is True
+    # Audit F04: the ground-floor living room is 2.71 m CLEAR against a 3.60 m
+    # catalogue minimum - below even the 0.80 terrace-band tolerance. The old
+    # certificate only measured the 3.00 m gross face against the tolerance and
+    # printed a PASS; the clear-face measurement exposes the real shortfall.
+    # The geometry gap is solver work, but the certificate must not lie about it.
+    assert cert.get("is_valid") is False
+    assert any("NBC-01" in failure for failure in cert.get("failures", []))
     assert cert.get("core_continuity_valid") is True
     assert cert.get("no_wet_over_terrace_valid") is True
     assert cert.get("terrace_far_exempt") is True
@@ -452,25 +458,29 @@ def test_mask_terrace_on_single_rectangle_plate_materializes_band():
     3. No overlap between the terrace band and any conditioned room.
     4. Gate layer L11 reports PASS with a real terrace count.
     """
-    l_shape_verts = [
+    # Fixture note (audit F01/F02): the original 148 m² L-shape admitted only a
+    # 47 m² rectangular plate, while a 3-storey residential_multi brief expands
+    # to two 4-room units per floor (~123 m²). That brief is statutorily
+    # impossible on the plate and is now REFUSED with the numbers instead of
+    # being squashed into 3.4 m² bedrooms, so this contract (the terrace-band
+    # translation) is pinned on a plate that can actually host it.
+    plot_verts = [
         [0.0, 0.0],
-        [14.0, 0.0],
-        [14.0, 6.0],
-        [8.0, 6.0],
-        [8.0, 14.0],
-        [0.0, 14.0],
+        [20.0, 0.0],
+        [20.0, 20.0],
+        [0.0, 20.0],
     ]
     poly = PlotPolygonModel(
-        vertices=l_shape_verts,
-        shape_type="l_shape",
-        area_sqm=148.0,
-        perimeter_m=56.0,
-        bounding_box=[0.0, 0.0, 14.0, 14.0],
-        is_regular_rectangle=False,
+        vertices=plot_verts,
+        shape_type="rectangle",
+        area_sqm=400.0,
+        perimeter_m=80.0,
+        bounding_box=[0.0, 0.0, 20.0, 20.0],
+        is_regular_rectangle=True,
     )
     req = FloorPlanRequest(
-        plot_width_m=14.0,
-        plot_depth_m=14.0,
+        plot_width_m=20.0,
+        plot_depth_m=20.0,
         required_rooms=["living", "kitchen", "master_bed", "bath_1", "dining", "stairs"],
         building_typology="residential_multi",
         floors=3,
