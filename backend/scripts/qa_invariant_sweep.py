@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """qa_invariant_sweep.py - adversarial invariant sweep for the space engine.
 
-Runs the live public entry point (``generate_floor_plan``) across the Phase 2
+Runs the live public entry point (``generate_floor_plan``) across the adversarial
 matrix and checks the eight invariants independently of the engine's own
 certificate:
 
@@ -488,6 +488,58 @@ def _svg_schedule_rows(svg: str) -> List[str]:
     return names
 
 
+def check_decline(case_id: str, resp: Any) -> Dict[str, Any]:
+    """Invariants for a REFUSED generation (no geometry was solved).
+
+    A refusal cannot be judged on rooms it never drew - running the structural
+    invariants against an empty plate reports "no T1 programme" as a violation
+    when the engine in fact refused the brief honestly. The invariant that DOES
+    apply is honesty: a surfaced reason, nothing claiming compliance, and a
+    gate that exists, says FAIL, and marks every layer un-run WITH its reason.
+    """
+    ms = resp.multi_storey
+    out: Dict[str, Any] = {"declined": True}
+    warnings = dedup_warnings(resp)
+    out["warnings"] = len(warnings)
+    if not warnings:
+        add("I10-DECLINE-SILENT", "CRITICAL", case_id,
+            "refused with no surfaced warning")
+    unmet = list(getattr(ms, "unmet_requirements", []) or [])
+    out["unmet"] = len(unmet)
+    if not unmet:
+        add("I10-DECLINE-NO-REASON", "CRITICAL", case_id,
+            "refused with an empty unmet-requirements ledger")
+    silent = [u.room_id for u in unmet if not str(getattr(u, "reason", "") or "").strip()]
+    if silent:
+        add("I10-DECLINE-EMPTY-REASON", "MAJOR", case_id,
+            f"{len(silent)} unmet requirement(s) carry no reason", rooms=silent[:6])
+
+    gate = getattr(ms, "validation_gate", None) or {}
+    layers = gate.get("layers") or []
+    out["gate"] = gate.get("overall_status")
+    if len(layers) != len(LAYER_IDS):
+        add("I10-DECLINE-NO-GATE", "CRITICAL", case_id,
+            f"refusal carries {len(layers)} gate layers; the L1-L15 contract must still exist")
+    if str(gate.get("overall_status") or "").upper() != "FAIL":
+        add("I10-DECLINE-GATE-NOT-FAIL", "CRITICAL", case_id,
+            f"refusal gate overall={gate.get('overall_status')!r}; a refusal is never a pass")
+    fake_pass = [l.get("layer_id") for l in layers if str(l.get("status")) == "PASS"]
+    if fake_pass:
+        add("I10-DECLINE-FAKE-PASS", "CRITICAL", case_id,
+            f"refusal claims {len(fake_pass)} passing layer(s)", layers=fake_pass)
+    no_reason = [l.get("layer_id") for l in layers
+                 if str(l.get("status")) == "N/A" and not str(l.get("reason") or "").strip()]
+    if no_reason:
+        add("I10-DECLINE-NA-NO-REASON", "MAJOR", case_id,
+            f"N/A layers without a reason: {', '.join(no_reason)}")
+
+    cert = getattr(ms, "mathematical_certificate", None) or {}
+    if cert and bool(cert.get("is_valid")):
+        add("I10-DECLINE-FALSE-CERT", "CRITICAL", case_id,
+            "refusal carries a mathematically valid certificate")
+    return out
+
+
 def check_identity(case_id: str, resp: Any) -> Dict[str, Any]:
     ms = resp.multi_storey
     out: Dict[str, Any] = {}
@@ -725,15 +777,26 @@ def run_case(typ_key: str, typology: str, plot: Dict[str, Any], floors: int,
         warns = dedup_warnings(resp)
         row["warning_count"] = len(warns)
         row["warnings_sample"] = warns[:8]
-        row["land"] = check_land(case_id, resp, row, warns)
-        row["minima"] = check_minima(case_id, resp, row, warns)
-        row["relations"] = check_relations(case_id, resp)
-        row["egress"] = check_egress(case_id, resp, row)
-        row["layers"] = check_layers(case_id, resp, row, warns)
-        row["identity"] = check_identity(case_id, resp)
-        row["typology_programme"] = check_typology(case_id, resp, typ_key)
+        ms = resp.multi_storey
+        declined = bool(
+            ms is not None
+            and str(row.get("status") or "").lower() in {"failed", "refused", "rejected"}
+            and not any(f.rooms for f in ms.floors)
+        )
+        row["declined"] = declined
+        if declined:
+            # No geometry exists: judge the refusal, not the rooms it never drew.
+            row["decline"] = check_decline(case_id, resp)
+        else:
+            row["land"] = check_land(case_id, resp, row, warns)
+            row["minima"] = check_minima(case_id, resp, row, warns)
+            row["relations"] = check_relations(case_id, resp)
+            row["egress"] = check_egress(case_id, resp, row)
+            row["layers"] = check_layers(case_id, resp, row, warns)
+            row["identity"] = check_identity(case_id, resp)
+            row["typology_programme"] = check_typology(case_id, resp, typ_key)
 
-        if strictness == "high" and not quick:
+        if strictness == "high" and not quick and not declined:
             # I6 determinism (same seed, same request) and seed provenance on sheets
             try:
                 again = generate_floor_plan(make_request(typology, plot, floors, strictness, seed))
@@ -751,12 +814,14 @@ def run_case(typ_key: str, typology: str, plot: Dict[str, Any], floors: int,
                 row["deterministic"] = None
                 add("I6-ERROR", "MAJOR", case_id, f"determinism re-solve failed: {exc}")
 
-        if strictness == "high":
+        if strictness == "high" and not declined:
             try:
                 sresp = generate_floor_plan(make_request(typology, plot, floors, strictness, seed, schemes=True))
                 row["schemes"] = check_schemes(case_id, sresp)
             except Exception as exc:
                 add("I7-ERROR", "MAJOR", case_id, f"scheme generation failed: {exc}")
+        elif declined:
+            row["schemes"] = {"declined": True}
     except Exception as exc:
         row["status"] = "CRASH"
         row["error"] = f"{type(exc).__name__}: {exc}"
@@ -804,20 +869,24 @@ def main() -> int:
             "checked": sum(1 for r in case_rows if r.get("deterministic") is not None),
             "mismatches": [r["case_id"] for r in case_rows if r.get("deterministic") is False],
         },
+        "declined_cases": [r["case_id"] for r in case_rows if r.get("declined")],
         "scheme_cases": sum(1 for r in case_rows if "schemes" in r),
         "case_rows": case_rows,
         "violation_register": violations,
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     suffix = f"-{args.suffix}" if args.suffix else ""
-    json_path = OUT_DIR / f"qa-phase-2-sweep{suffix}.json"
+    json_path = OUT_DIR / f"qa-sweep{suffix}.json"
     json_path.write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
 
     lines = [
-        "# QA Sweep — Phase 2 invariant register",
+        "# QA Sweep — Invariant register",
         "",
         f"Cases: {len(case_rows)} · violations: {len(violations)} "
         f"({', '.join(f'{k}={v}' for k, v in by_sev.items()) or 'none'}).",
+        "",
+        f"Declined (refused, no geometry): {len(summary['declined_cases'])} — judged "
+        "by the refusal-honesty invariants (I10), not on rooms they never drew.",
         "",
         "| Code | Severity | Count | First reproductions |",
         "|:--|:--|--:|:--|",
@@ -834,7 +903,7 @@ def main() -> int:
     md_path = OUT_DIR / f"qa-phase-2-sweep{suffix}.md"
     md_path.write_text("\n".join(lines), encoding="utf-8")
 
-    print(json.dumps({k: summary[k] for k in ("cases", "violations", "by_severity", "by_code")}, indent=2))
+    print(json.dumps({k: summary[k] for k in ("cases", "declined_cases", "violations", "by_severity", "by_code")}, indent=2))
     print(f"Wrote {json_path}")
     print(f"Wrote {md_path}")
     return 1 if violations else 0
