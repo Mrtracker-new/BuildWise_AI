@@ -225,6 +225,26 @@
   scroll-snap-align: start;
 }
 
+/* Report section nav: fade only the edges that are actually hiding pills.
+   SectionNav writes --bw-nav-fade-l/-r from its scroll metrics, so a tray that
+   fits at desktop width shows no fade at all (audit F29). */
+.bw-section-nav-scroll {
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    black var(--bw-nav-fade-l, 0px),
+    black calc(100% - var(--bw-nav-fade-r, 0px)),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    black var(--bw-nav-fade-l, 0px),
+    black calc(100% - var(--bw-nav-fade-r, 0px)),
+    transparent 100%
+  );
+}
+
 /* Edge fade for horizontal strips (mask, not gradient overlays, so the
    fade works over any surface incl. vibrancy). Pair with .bw-tab-strip. */
 .bw-fade-x {
@@ -1096,7 +1116,20 @@ body.bw-landing-open {
   overflow-y: auto;
   overflow-x: hidden;
   height: auto;
-  background-color: #eef2f7;
+}
+
+/* Paint the landing ground on both the document and the page root. The body
+   already carries the app's `bg-slate-50 text-slate-800` classes from
+   index.html, and an unlayered app rule won the background cascade in dark
+   mode even though the body's --bw-porcelain-1 resolved dark (audit F32).
+   `html.bw-landing-open body` outranks any single class, and .bw-landing
+   covers the viewport so the two agree at every scroll position. */
+html.bw-landing-open,
+html.bw-landing-open body {
+  background-color: var(--bw-porcelain-1) !important;
+}
+.bw-landing {
+  background-color: var(--bw-porcelain-1);
 }
 html.bw-landing-open {
   overflow-y: auto;
@@ -1144,6 +1177,9 @@ html.bw-landing-open.lenis body {
   --bw-line-soft: rgba(11, 18, 32, 0.055);
   --bw-glass: rgba(255, 255, 255, 0.55);
   --bw-glass-strong: rgba(255, 255, 255, 0.72);
+  --bw-cta-bg: #0b1220;
+  --bw-cta-ink: #ffffff;
+  --bw-cta-bg-hover: #1b2436;
   --bw-ease-apple: cubic-bezier(0.32, 0.72, 0, 1);
   /* One shadow vocabulary, three elevations: resting card, floating nav,
      window shell. Every landing surface picks one of these — no one-off
@@ -1158,7 +1194,13 @@ html.bw-landing-open.lenis body {
   --bw-radius-panel: 11px;
 }
 
-/* Landing focus ring (visible on light porcelain) */
+/* The landing is a fixed white/porcelain surface. It deliberately does NOT
+   follow prefers-color-scheme: the marketing page is a printed-sheet metaphor
+   (drawings, plot samples, dossiers) and inverting it turned the floating nav
+   into a near-white pill over a dark page. Only the product app offers a dark
+   theme, through its own explicit toggle. */
+
+/* Landing focus ring (visible on porcelain) */
 .bw-landing :focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px #eef2f7, 0 0 0 4px var(--bw-accent-a);
@@ -1219,9 +1261,12 @@ html.bw-landing-open.lenis body {
    style recalc of one element.
 
    HALF THE MATERIAL IS ANTI-ALIASED LIGHT. Three cheap declarations do most of
-   the glass work and none of them are a blur: a vertical white ramp (light
+   the glass work and none of them are a blur: a vertical light ramp (light
    falls on the top edge), a 1px inner highlight, and a 1px outer ring so the
-   pill keeps an edge where the page behind it is already near-white. The blur
+   pill keeps an edge where the page behind it is already near-white. The ramp,
+   edge, highlight and ring are --bw-nav-* tokens: they re-point with the
+   palette, so the same pill is white glass on porcelain and navy glass on the
+   dark ground. The blur
    itself uses the APP's radius (--glass-blur / --glass-saturate), so the pill
    and the product's panels are the same material at the same radius rather
    than two blur values that drift.

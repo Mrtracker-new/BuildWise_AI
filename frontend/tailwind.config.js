@@ -42,6 +42,13 @@ export default {
           line: 'var(--bw-line)',
           'line-soft': 'var(--bw-line-soft)',
           glass: 'var(--bw-glass)',
+          /* Primary CTA pair. It must invert with the palette: "ink on
+             porcelain" is dark-on-light in light mode and light-on-dark in
+             dark mode, so a button that reuses --bw-ink as a FILL would turn
+             light-on-light (audit F32 axe contrast 1.07:1). */
+          cta: 'var(--bw-cta-bg)',
+          'cta-ink': 'var(--bw-cta-ink)',
+          'cta-hover': 'var(--bw-cta-bg-hover)',
         },
         apple: {
           panel: 'var(--panel)',

@@ -145,35 +145,6 @@ export const APP_INK: Record<ThemeMode, InkPair> = {
   dark: { name: 'App Dark', bg: '#000000', ink: '#F5F5F7', inkSecondary: '#A1A1A6' },
 };
 
-/**
- * Text-safe counterparts of the bright semantic hues (mirrors the `*-ink`
- * custom properties in index.css). The bright --semantic-* / --accent values
- * are fill and stroke tokens: as SMALL TEXT they measured 1.8–4.0:1 on the
- * app's light surfaces. These pass AA (>= 4.5:1) against the darkest surface
- * each lands on, so the -ink custom property is the ink form and the bright
- * hues stay for fills, borders and graphic use.
- */
-export const SEMANTIC_INK = {
-  light: {
-    accent: '#0055B8',
-    green: '#0F6E31',
-    amber: '#8A5300',
-    red: '#B3261E',
-  },
-  dark: {
-    accent: '#0A84FF',
-    green: '#34C759',
-    amber: '#FF9F0A',
-    red: '#FF453A',
-  },
-} as const satisfies Record<ThemeMode, Record<string, string>>;
-
-/** The muted text ramp, mirrored from index.css --text-2 / --text-3. */
-export const TEXT_INK = {
-  light: { secondary: '#6A6A6F', tertiary: '#5F5F64' },
-  dark: { secondary: '#A1A1A6', tertiary: '#86868B' },
-} as const satisfies Record<ThemeMode, Record<string, string>>;
-
 /** Mirrors backend/app/services/floorplan/drawing_ir.py:2359–2370. */
 export const SHEET_INK: Record<SheetTheme, InkPair> = {
   cad: { name: 'Sheet CAD', bg: '#0B132B', ink: '#F8FAFC', inkSecondary: '#94A3B8' },

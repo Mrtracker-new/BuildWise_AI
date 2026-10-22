@@ -22,9 +22,6 @@ export const BP = {
 
 export type ViewportClass = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 
-/** Ordered narrow→wide; index = class index. */
-export const VIEWPORT_CLASS_ORDER: readonly ViewportClass[] = ['xs', 'sm', 'md', 'lg', 'xl'];
-
 /** Width → viewport class (pure; also unit-testable). */
 export function viewportClassFor(width: number): ViewportClass {
   if (width < BP.sm) return 'xs';

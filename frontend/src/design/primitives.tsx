@@ -1128,12 +1128,15 @@ export const Select: React.FC<SelectProps> = ({
       }
     };
     const handleReposition = () => updateCoords();
-    window.addEventListener('keydown', onKey);
+    // CAPTURE phase: an open menu owns Escape before any page-level handler can
+    // consume it. In bubble phase a trusted Escape never reached this listener
+    // (the menu stayed open, with no way back but clicking outside).
+    window.addEventListener('keydown', onKey, true);
     document.addEventListener('mousedown', onDown);
     window.addEventListener('resize', handleReposition);
     window.addEventListener('scroll', handleReposition, true);
     return () => {
-      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onKey, true);
       document.removeEventListener('mousedown', onDown);
       window.removeEventListener('resize', handleReposition);
       window.removeEventListener('scroll', handleReposition, true);
@@ -1153,6 +1156,18 @@ export const Select: React.FC<SelectProps> = ({
         aria-label={ariaLabel}
         disabled={disabled}
         onClick={toggle}
+        // Escape is handled on the trigger as well as window-wide: a page-level
+        // handler that consumes the trusted keydown (the report sheet, a modal
+        // scrim, an app shortcut) used to leave the menu open with no visible
+        // way back except clicking outside. A combobox must always close on
+        // Escape, whatever else is listening.
+        onKeyDown={(e) => {
+          if (e.key === 'Escape' && open) {
+            e.stopPropagation();
+            setOpen(false);
+            triggerRef.current?.focus();
+          }
+        }}
         className={`inline-flex h-8 w-full items-center justify-between gap-1.5 rounded-[10px] border border-[var(--hairline)] bg-[var(--fill)] px-2.5 text-[12.5px] font-medium text-[var(--text-1)] hover:bg-[var(--fill-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:opacity-40 ${ui('base')} ${className}`}
       >
         <span className="truncate">{selected?.label ?? ''}</span>
