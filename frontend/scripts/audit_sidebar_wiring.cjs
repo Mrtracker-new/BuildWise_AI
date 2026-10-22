@@ -313,6 +313,40 @@ async function setRangeValue(page, selector, value) {
   await sleep(220);
 }
 
+/**
+ * Pick a select option with a REAL mouse click and wait for the menu to close.
+ *
+ * The menu used to be driven with a synthetic `option.click()`: the value changed
+ * but the listbox stayed open and swallowed the NEXT click in the tile (the brief
+ * chips), so the audit failed on a "flaky" chip that was never clicked at all.
+ * A real click is what a user does, and the wait proves the menu really closed.
+ */
+async function pickSelectOption(page, pattern) {
+  const handles = await page.$$('[role="option"]');
+  for (const handle of handles) {
+    const text = (await handle.evaluate((node) => (node.textContent || '').trim())) || '';
+    if (!pattern.test(text)) continue;
+    await handle.click();
+    await page
+      .waitForFunction(() => document.querySelectorAll('[role="listbox"]').length === 0, { timeout: 3000 })
+      .catch(() => {});
+    return true;
+  }
+  return false;
+}
+
+/** Poll a page expression until it satisfies `ok` (or time out). */
+async function waitFor(page, expression, ok, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  let value = null;
+  while (Date.now() < deadline) {
+    value = await page.evaluate(expression);
+    if (ok(value)) return value;
+    await sleep(120);
+  }
+  return value;
+}
+
 async function uiChecks(page, shots) {
   console.log('\n[B] Live UI checks');
 
@@ -488,19 +522,11 @@ async function uiChecks(page, shots) {
   record(/^0\.6/.test(covSnapped), 'coverage slider snaps to the 60% preset', `raw 0.59 -> ${covSnapped}`);
 
   // B8. Typology caption + storeys disabled-with-reason per typology cap
-  const typoChange = await page.evaluate(() => {
-    const sel = document.querySelector('#typology-select');
-    sel.click();
-    return true;
-  });
-  void typoChange;
+  await page.click('#typology-select');
   await sleep(250);
-  await page.evaluate(() => {
-    const opt = Array.from(document.querySelectorAll('[role="option"]')).find((o) =>
-      /Industrial|Warehouse/i.test(o.textContent || '')
-    );
-    if (opt) opt.click();
-  });
+  const choseWarehouse = await pickSelectOption(page, /Industrial|Warehouse/i);
+  const menuClosed = await page.evaluate(() => document.querySelectorAll('[role="listbox"]').length === 0);
+  record(choseWarehouse && menuClosed, 'typology menu closes on the chosen option', `closed=${menuClosed}`);
   await sleep(400);
   const captions = await page.evaluate(() => ({
     typology: document.querySelector('[data-testid="typology-caption"]')?.innerText || '',
@@ -527,24 +553,21 @@ async function uiChecks(page, shots) {
   await page.keyboard.press('Escape');
   await sleep(200);
   // restore the default typology
-  await page.evaluate(() => {
-    const sel = document.querySelector('#typology-select');
-    sel.click();
-  });
+  await page.click('#typology-select');
   await sleep(250);
-  await page.evaluate(() => {
-    const opt = Array.from(document.querySelectorAll('[role="option"]')).find((o) =>
-      /Single-Family/i.test(o.textContent || '')
-    );
-    if (opt) opt.click();
-  });
+  const restored = await pickSelectOption(page, /Single-Family/i);
+  const restoredClosed = await page.evaluate(() => document.querySelectorAll('[role="listbox"]').length === 0);
+  record(restored && restoredClosed, 'typology menu re-closes when the default is restored', `closed=${restoredClosed}`);
   await sleep(350);
 
   // B9. Brief: click-to-insert example, live counter, parse preview
+  // Each chip is asserted on its own: a swallowed click must name the chip it
+  // lost instead of surfacing as a wrong final string.
   await page.click('[data-testid="brief-example-2-baths"]');
-  await sleep(250);
+  const afterFirst = await waitFor(page, () => document.querySelector('#client-requirements-input').value, (v) => /2 baths/.test(v));
+  record(/2 baths/.test(afterFirst || ''), 'first example chip inserts into the brief', `"${afterFirst}"`);
   await page.click('[data-testid="brief-example-north-facing-study"]');
-  await sleep(300);
+  await waitFor(page, () => document.querySelector('#client-requirements-input').value, (v) => /north-facing study/.test(v));
   const brief = await page.evaluate(() => ({
     value: document.querySelector('#client-requirements-input').value,
     counter: document.querySelector('[data-testid="brief-counter"]').innerText.trim(),
@@ -558,6 +581,22 @@ async function uiChecks(page, shots) {
     brief.counter === `${brief.value.length}/240`,
     'brief counter tracks the live length',
     `counter ${brief.counter} vs length ${brief.value.length}`
+  );
+  // Two chips inside one task: the handler must append to the LATEST brief, not
+  // to the text captured by the last render (that race dropped the first one).
+  await page.evaluate(() => {
+    document.querySelector('[data-testid="brief-example-open-kitchen"]').click();
+    document.querySelector('[data-testid="brief-example-puja-room"]').click();
+  });
+  const sameTask = await waitFor(
+    page,
+    () => document.querySelector('#client-requirements-input').value,
+    (v) => /open kitchen, puja room/.test(v),
+  );
+  record(
+    /open kitchen, puja room/.test(sameTask || ''),
+    'two example chips clicked in one task both land',
+    `"${sameTask}"`
   );
   // Wait for a parse that reflects the FULL brief (the preview first shows the
   // synchronous fallback for the previous text, which is not the settled state).

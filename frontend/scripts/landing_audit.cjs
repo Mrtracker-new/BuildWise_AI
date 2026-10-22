@@ -470,12 +470,18 @@ const VITALS_BOOTSTRAP = () => {
     await page.close();
   }
 
-  // ---- dark-theme parity pass (the landing declares no dark palette) --------
+  // ---- OS-dark-preference pass ---------------------------------------------
+  // The landing is a deliberately fixed porcelain sheet (see the note in
+  // index.css): a reader whose OS prefers dark STILL gets the white page. The
+  // marketing page is a printed-document metaphor and the floating nav is
+  // white glass; re-pointing the palette turned that nav into a near-white pill
+  // over a dark page. This pass proves the fixed-light contract rather than an
+  // inversion.
   {
     const page = await browser.newPage();
     const collectors = await attachCollectors(page);
     await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
-    await page.evaluateOnNewDocument(() => document.documentElement.setAttribute('data-theme', 'dark'));
+    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }]);
     await page.goto(BASE_URL, { waitUntil: 'networkidle0', timeout: 60000 });
     await page.waitForSelector('.bw-landing');
     await sleep(1200);
@@ -498,7 +504,7 @@ const VITALS_BOOTSTRAP = () => {
     });
     await shoot(page, 'v1440-dark-theme', false);
     out.darkThemePass = { collectors, paints };
-    console.log(`[dark]  bodyBg=${paints.body.bg} bw-ink=${paints.ink} (theme token override present: ${paints.ink !== '#0b1220' ? 'yes' : 'no'})`);
+    console.log(`[dark-preference] bodyBg=${paints.body.bg} bw-ink=${paints.ink} (landing stays porcelain)`);
     await page.close();
   }
 
@@ -546,8 +552,40 @@ const VITALS_BOOTSTRAP = () => {
     await page.close();
   }
 
+  // ---- gate ----------------------------------------------------------------
+  // This file used to write evidence and exit 0 whatever it found, so a
+  // console error, an axe violation or 6/10 undersized tap targets could ship
+  // under a green "audit". The hard failures are now exit status.
+  const failures = [];
+  for (const v of out.viewports) {
+    const where = `${v.name}px`;
+    if (v.collectors.consoleErrors.length) failures.push(`${where}: ${v.collectors.consoleErrors.length} console error(s)`);
+    if (v.collectors.pageErrors.length) failures.push(`${where}: ${v.collectors.pageErrors.length} page error(s)`);
+    if (v.axe.violationCount) failures.push(`${where}: ${v.axe.violationCount} axe violation(s) / ${v.axe.nodeCount} node(s)`);
+    if (v.layout.tapTargets.under44Count) failures.push(`${where}: ${v.layout.tapTargets.under44Count}/${v.layout.tapTargets.total} tap target(s) under 44px`);
+    if (v.layout.docOverflow.diff > 1) failures.push(`${where}: document overflows by ${v.layout.docOverflow.diff}px`);
+  }
+  if (out.darkThemePass.collectors.pageErrors.length || out.darkThemePass.collectors.consoleErrors.length) {
+    failures.push('dark pass: console/page errors');
+  }
+  const rgb = (s) => (s.match(/\d+/g) || []).slice(0, 3).map(Number);
+  const [dr, dg, db] = rgb(out.darkThemePass.paints.body.bg);
+  const groundLum = (0.2126 * dr + 0.7152 * dg + 0.0722 * db) / 255;
+  const [ir, ig, ib] = rgb(out.darkThemePass.paints.landing.color);
+  const inkLum = (0.2126 * ir + 0.7152 * ig + 0.0722 * ib) / 255;
+  if (!(groundLum > 0.8 && inkLum < 0.2)) {
+    failures.push(`dark-preference pass: landing left porcelain (ground ${out.darkThemePass.paints.body.bg}, ink ${out.darkThemePass.paints.landing.color})`);
+  }
+
   fs.writeFileSync(path.join(OUT_DIR, 'landing-audit.json'), JSON.stringify(out, null, 2));
   console.log(`\nWrote ${path.relative(process.cwd(), path.join(OUT_DIR, 'landing-audit.json'))} and ${out.screenshots.length} screenshots.`);
+  if (failures.length) {
+    console.log(`GATE FAIL — ${failures.length} finding(s):`);
+    for (const f of failures) console.log(`  - ${f}`);
+    process.exitCode = 1;
+  } else {
+    console.log('GATE PASS — no console/page errors, no axe violations, no tap target under 44px, no document overflow, landing stays porcelain under a dark preference.');
+  }
   await browser.close();
 })().catch(async (e) => {
   console.error('AUDIT FAILED:', e);

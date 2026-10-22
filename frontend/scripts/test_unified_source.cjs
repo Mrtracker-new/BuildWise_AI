@@ -45,6 +45,51 @@ assert(cardCode.includes('Edit in Project Parameters'), 'FloorPlanGeneratorCard 
 console.log('  -> PASS: FloorPlanGeneratorCard contains NO editable storeys/typology inputs.');
 console.log('  -> PASS: Read-only summary chips (typology, storeys, coverage) and edit hint verified.');
 
+// 1b. Single gate renderer (audit F28): the generator card and the report sheet
+// must both mount CertificatePanel. Neither may re-implement the layer table,
+// warn chips or N/A rows - two renderers drift, one cannot.
+console.log('\n[Check 1b] Single gate renderer: CertificatePanel is the only gate table...');
+const reportSheetFile = path.join(__dirname, '../src/components/ReportSheet.tsx');
+const reportSheetCode = fs.readFileSync(reportSheetFile, 'utf8');
+
+for (const [file, code] of [
+  ['FloorPlanGeneratorCard.tsx', cardCode],
+  ['ReportSheet.tsx', reportSheetCode],
+]) {
+  assert(code.includes('CertificatePanel'), `${file} does not mount CertificatePanel!`);
+  assert(!code.includes('groupGateLayers'), `${file} still builds its own gate grouping!`);
+  assert(!code.includes('qaRowText'), `${file} still renders its own gate row text!`);
+  assert(!code.includes('data-testid="validation-gate-layer-table"'),
+    `${file} still renders a duplicate gate layer table!`);
+  assert(!code.includes('Zero Relaxations'),
+    `${file} hardcodes a relaxation claim instead of deriving it from the plan!`);
+}
+assert(reportSheetCode.includes('variant="sheet"'),
+  'ReportSheet must render the compact sheet variant of CertificatePanel.');
+console.log('  -> PASS: one gate renderer (CertificatePanel), mounted by card and sheet.');
+
+// 1c. Plot-area provenance (audit F07/F22): the hero tile and the land card may
+// only call the number a "captured boundary" when the server says it came from
+// one, and the captured boundary must be rendered, not merely returned.
+console.log('\n[Check 1c] Plot-area provenance is derived, never assumed...');
+const heroFile = path.join(__dirname, '../src/components/report/ReportHeroHeader.tsx');
+const heroCode = fs.readFileSync(heroFile, 'utf8');
+const landFile = path.join(__dirname, '../src/components/LandValueCard.tsx');
+const landCode = fs.readFileSync(landFile, 'utf8');
+
+assert(heroCode.includes('plot_area_source'), 'ReportHeroHeader does not read plot_area_source!');
+assert(!heroCode.includes("'sq ft (captured boundary)'"),
+  'ReportHeroHeader still hardcodes the captured-boundary label!');
+assert(heroCode.includes('boundary-provenance'),
+  'ReportHeroHeader does not render the boundary provenance line!');
+assert(heroCode.includes('boundary_summary'),
+  'ReportHeroHeader ignores the server boundary_summary!');
+assert(landCode.includes('plot_area_source'), 'LandValueCard does not read plot_area_source!');
+assert(landCode.includes('plot-area-basis'), 'LandValueCard does not print the plot-area basis!');
+assert(landCode.includes('plot_area_warnings'),
+  'LandValueCard drops the plot-area reconciliation warnings!');
+console.log('  -> PASS: plot-area basis is derived on both surfaces.');
+
 // 2. BlueprintViewer Inspection: Verify Stale Plan Guard integration
 const viewerFile = path.join(__dirname, '../src/components/BlueprintViewer.tsx');
 const viewerCode = fs.readFileSync(viewerFile, 'utf8');

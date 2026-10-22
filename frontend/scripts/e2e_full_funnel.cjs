@@ -20,6 +20,8 @@
  */
 const puppeteer = require('puppeteer-core');
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const URL = process.env.E2E_URL || 'http://localhost:5173/app';
 const CHROME_CANDIDATES = [
@@ -64,6 +66,57 @@ async function clickByLabel(page, label) {
  * step. The preset seeds a CLOSED 4-vertex ring, which still has to be finished
  * before the wizard hands over to the frontage step.
  */
+/*
+ * Deterministic upstream fixtures for the capture-side surfaces the audit
+ * listed as UNVERIFIED. These stub the PROVIDERS, not the app: the request/
+ * response shapes are the ones the frontend actually consumes, so the wiring,
+ * payload and rendering are real.
+ */
+const GEOCODE_FIXTURE = {
+  results: [
+    { display_name: 'E2E Locality, Bengaluru, Karnataka, India', lat: 12.9716, lon: 77.5946, source: 'nominatim' },
+  ],
+  provider: 'nominatim',
+  cached: false,
+  error: null,
+};
+
+const KML_FIXTURE = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark><name>E2E KML plot</name>
+<Polygon><outerBoundaryIs><LinearRing><coordinates>
+77.5946,12.9716,0 77.5950,12.9716,0 77.5950,12.9719,0 77.5946,12.9719,0 77.5946,12.9716,0
+</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark></Document></kml>`;
+
+const VISION_FIXTURE = {
+  mode: 'index-only',
+  scene_metadata: { id: 'S2B_E2E', datetime: '2026-10-01T05:20:00Z', cloud_cover_pct: 3.1, source: 'Sentinel-2' },
+  green_cover_pct: 37.5,
+  water_cover_pct: 1.2,
+  built_up_pct: 18.4,
+  tree_clusters: {
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [[[77.5946, 12.9716], [77.59465, 12.9716], [77.59465, 12.97165], [77.5946, 12.97165], [77.5946, 12.9716]]] },
+        properties: { cluster_id: 'T1', area_sqm: 120.5, mean_ndvi: 0.61, rank: 'preserve' },
+      },
+      {
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [[[77.5948, 12.9717], [77.59485, 12.9717], [77.59485, 12.97175], [77.5948, 12.97175], [77.5948, 12.9717]]] },
+        properties: { cluster_id: 'T2', area_sqm: 44.0, mean_ndvi: 0.42, rank: 'monitor' },
+      },
+    ],
+  },
+  water_bodies: { type: 'FeatureCollection', features: [] },
+  preservation_plan: [
+    { cluster_id: 'T1', area_sqm: 120.5, centroid: [77.59462, 12.97162], mean_ndvi: 0.61, overlap_footprint: false, rank: 'preserve', action: 'Retain and protect during construction' },
+    { cluster_id: 'T2', area_sqm: 44.0, centroid: [77.59482, 12.97172], mean_ndvi: 0.42, overlap_footprint: false, rank: 'monitor', action: 'Monitor during works' },
+  ],
+  warnings: [],
+  timing_ms: { total_ms: 812 },
+};
+
 async function traceRectPreset(page) {
   await page.click('[data-testid="trace-toolbar-presets"]');
   await page.waitForSelector('[data-testid="preset-menu"]', { timeout: 8000 });
@@ -274,6 +327,18 @@ async function main() {
       () => /Review boundary/.test(document.body.innerText || ''),
       { timeout: 15000 },
     );
+    // an edge indexes TWO vertices. The old label interpolated
+    // (index % n) + 1, so edge 1 read P2–P2. Assert the pair is distinct and
+    // wraps correctly for every ring size the capture can produce.
+    const frontageLabel = await page.evaluate(() => {
+      const m = (document.body.innerText || '').match(/Frontage: edge P(\d+)–P(\d+)/);
+      return m ? { a: Number(m[1]), b: Number(m[2]) } : null;
+    });
+    check(
+      Boolean(frontageLabel) && frontageLabel.a !== frontageLabel.b,
+      'F31: frontage label names two distinct vertices',
+      JSON.stringify(frontageLabel),
+    );
     await page.waitForFunction(
       () => {
         const btn = Array.from(document.querySelectorAll('button')).find((b) => (b.textContent || '').includes('Use this boundary'));
@@ -289,6 +354,20 @@ async function main() {
     );
     check(true, 'boundary committed; CTA enabled for analysis');
 
+    // F30: bbox-derived width/depth are differences of geodesic floats.
+    // They must reach the inputs at centimetre precision, not as
+    // 89.05499999999999.
+    const numberValues = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('input[type="number"]'))
+        .map((el) => el.value)
+        .filter((v) => v !== ''),
+    );
+    check(
+      numberValues.every((v) => /^-?\d+(\.\d{1,2})?$/.test(v)),
+      'F30: numeric inputs carry no float residue',
+      numberValues.filter((v) => !/^-?\d+(\.\d{1,2})?$/.test(v)).join(', '),
+    );
+
     // 3. site feasibility
     console.log('- running site feasibility analysis');
     await clickByLabel(page, 'Run Site Feasibility Analysis');
@@ -299,6 +378,69 @@ async function main() {
     );
     await sleep(1500);
     check(true, 'site feasibility report opened (Cost & Plan reachable)');
+
+    // at 390 the report section tray scrolls, and the fade is a
+    // measurement: the right edge fades before scrolling, the left edge
+    // after. A permanent fade (or none at all) fails this.
+    //
+    // Resize only — no isMobile emulation: that swaps the capture flow's
+    // layout and resets the page state under the rest of the funnel. CSS
+    // breakpoints are width-driven, which is exactly what F29 measured.
+    await page.setViewport({ width: 390, height: 844 });
+    await sleep(900);
+    // Park the tray at its start so the measurement is deterministic: the
+    // funnel may already have scrolled it while navigating sections.
+    await page.evaluate(() => {
+      const tray = document.querySelector('[data-testid="section-nav"] .bw-section-nav-scroll');
+      if (tray) tray.scrollLeft = 0;
+    });
+    await sleep(350);
+    const navStart = await page.evaluate(() => {
+      const tray = document.querySelector('[data-testid="section-nav"] .bw-section-nav-scroll');
+      if (!tray) return null;
+      return {
+        overflow: tray.getAttribute('data-overflow'),
+        fadeR: getComputedStyle(tray).getPropertyValue('--bw-nav-fade-r').trim(),
+        fadeL: getComputedStyle(tray).getPropertyValue('--bw-nav-fade-l').trim(),
+        scrollable: tray.scrollWidth > tray.clientWidth + 1,
+      };
+    });
+    check(
+      Boolean(navStart) && navStart.scrollable,
+      'F29: report section nav scrolls at 390px',
+      JSON.stringify(navStart),
+    );
+    // The fade must agree with the measured edges, whichever side the funnel
+    // left the tray on: no fade on a side with nothing behind it, 18px on a
+    // side that is clipping pills.
+    const fadesAgree =
+      Boolean(navStart) &&
+      navStart.overflow !== 'none' &&
+      navStart.fadeR === (navStart.overflow === 'end' || navStart.overflow === 'both' ? '18px' : '0px') &&
+      navStart.fadeL === (navStart.overflow === 'start' || navStart.overflow === 'both' ? '18px' : '0px');
+    check(fadesAgree, 'F29: each clipped edge carries the fade affordance', JSON.stringify(navStart));
+    await page.evaluate(() => {
+      const tray = document.querySelector('[data-testid="section-nav"] .bw-section-nav-scroll');
+      if (tray) tray.scrollLeft = tray.scrollWidth;
+    });
+    await sleep(350);
+    const navEnd = await page.evaluate(() => {
+      const tray = document.querySelector('[data-testid="section-nav"] .bw-section-nav-scroll');
+      if (!tray) return null;
+      return {
+        overflow: tray.getAttribute('data-overflow'),
+        fadeR: getComputedStyle(tray).getPropertyValue('--bw-nav-fade-r').trim(),
+        fadeL: getComputedStyle(tray).getPropertyValue('--bw-nav-fade-l').trim(),
+      };
+    });
+    check(
+      Boolean(navEnd) && (navEnd.overflow === 'start' || navEnd.overflow === 'none') && navEnd.fadeR === '0px',
+      'F29: the fade follows the scroll position instead of staying fixed',
+      JSON.stringify(navEnd),
+    );
+    await page.setViewport({ width: 1600, height: 1000 });
+    await sleep(700);
+
 
     // 3.2 One site. The plot owns the location, so the body the analysis ran on,
     // the boundary inside it and the coordinate card must be the same place —
@@ -324,7 +466,7 @@ async function main() {
       );
       check(
         Math.abs(analyze.latitude - Number(coordCard.lat)) < 5e-5 &&
-          Math.abs(analyze.longitude - Number(coordCard.lon)) < 5e-5,
+        Math.abs(analyze.longitude - Number(coordCard.lon)) < 5e-5,
         'the coordinate card shows the site that was analysed',
         `card ${coordCard.lat},${coordCard.lon} vs request ${analyze.latitude},${analyze.longitude}`,
       );
@@ -427,6 +569,21 @@ async function main() {
     await sleep(4000);
     check(Boolean(serverGenerationId), 'server returned a generation_id', serverGenerationId || 'none');
 
+    // The report sheet skips layout/paint for off-screen sections
+    // (`content-visibility: auto`), and `innerText` of a skipped subtree is
+    // empty. That is a paint optimisation, not behaviour: force it visible so
+    // the assertions read the whole dossier no matter where the page is
+    // scrolled after the plan expands.
+    await page.evaluate(() => {
+      if (document.getElementById('e2e-show-all-sections')) return;
+      const style = document.createElement('style');
+      style.id = 'e2e-show-all-sections';
+      style.textContent =
+        '.report-sheet-content [data-report-section]{content-visibility: visible !important;}';
+      document.head.appendChild(style);
+    });
+    await sleep(300);
+
     // 5. viewer assertions
     const ui = await page.evaluate(() => {
       const text = document.body.innerText || '';
@@ -494,6 +651,194 @@ async function main() {
       'the fitted sheet keeps its drawing aspect ratio',
       sheetFit.found ? `sheet ${sheetFit.sheetRatio.toFixed(3)} vs rendered ${sheetFit.renderedRatio.toFixed(3)}` : 'no sheet',
     );
+
+    // 5c. Scheme & land economics surfaces: the land-economics certificate panel and the scheme
+    // picker are mounted from the response, and picking a profile asks the
+    // server to re-solve (it is not a local relabel).
+    const schemeSurfaces = await page.evaluate(() => ({
+      landPanel: Boolean(document.querySelector('[data-testid="land-economics-panel"]')),
+      landChecks: document.querySelectorAll('[data-testid="land-economics-checks"] li').length,
+      landKpis: document.querySelectorAll('[data-testid="land-economics-kpis"] > div').length,
+      picker: Boolean(document.querySelector('[data-testid="scheme-picker"]')),
+      options: Array.from(document.querySelectorAll('[data-testid^="scheme-option-"]')).map((b) =>
+        b.getAttribute('data-testid'),
+      ),
+    }));
+    check(schemeSurfaces.landPanel, 'land economics panel rendered from the certificate');
+    check(schemeSurfaces.landChecks > 0, 'land economics lists its certificate checks', `${schemeSurfaces.landChecks} checks`);
+    check(schemeSurfaces.landKpis >= 4, 'land economics shows its KPI tiles', `${schemeSurfaces.landKpis} tiles`);
+    check(schemeSurfaces.picker, 'scheme picker rendered');
+    check(
+      schemeSurfaces.options.length === 3,
+      'scheme picker offers all three profiles',
+      schemeSurfaces.options.join(', ') || 'none',
+    );
+
+    if (schemeSurfaces.options.length === 3) {
+      const targetProfile = 'max_vastu';
+      const pickPromise = page.waitForResponse(
+        (res) => res.url().includes('/api/generate-floorplan') && res.request().method() === 'POST',
+        { timeout: 60000 },
+      );
+      await page.click(`[data-testid="scheme-option-${targetProfile}"]`);
+      const pickResponse = await pickPromise;
+      const pickBody = pickResponse.request().postData() || '';
+      let pickReq = {};
+      try { pickReq = JSON.parse(pickBody); } catch (e) { /* leave empty */ }
+      const pickJson = await pickResponse.json().catch(() => ({}));
+      await sleep(2500);
+
+      check(
+        pickReq.selected_scheme_id === targetProfile,
+        'picking a profile sends it as selected_scheme_id',
+        pickReq.selected_scheme_id || 'missing',
+      );
+      check(
+        pickReq.include_scheme_alternatives === true,
+        'the re-solve keeps the portfolio attached',
+      );
+      const status = (pickJson.params_snapshot || {}).scheme_selection_status;
+      check(
+        status === 'applied',
+        'the backend applied the selected profile',
+        String(status),
+      );
+      const badge = await page.evaluate(() => {
+        const el = document.querySelector('[data-testid="scheme-selection-status"]');
+        return el ? (el.textContent || '').trim() : null;
+      });
+      check(Boolean(badge), 'picker states what the backend did', badge || 'no badge');
+    }
+
+    // 5d. SVG export (audit surface: UNVERIFIED). The viewer's download must be
+    // a real file carrying the server generation id, not a silent no-op.
+    console.log('- export SVG from the viewer');
+    const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bw-svg-'));
+    const cdp = await page.createCDPSession();
+    await cdp.send('Browser.setDownloadBehavior', {
+      behavior: 'allow',
+      downloadPath: downloadDir,
+      eventsEnabled: true,
+    });
+    // The dossier is a drawer and the export toolbar lives in the expanded
+    // sheet modal, so both have to be open before the button exists.
+    await page.evaluate(() => {
+      const toggle = Array.from(document.querySelectorAll('button'))
+        .find((b) => /^View (Results|Panel)$/.test((b.textContent || '').trim()));
+      if (toggle) toggle.click();
+    });
+    await sleep(600);
+    const modalOpened = await page.evaluate(() => {
+      const btn = document.querySelector('button[aria-label="Open Fullscreen Blueprint"]');
+      if (!btn) return false;
+      btn.click();
+      return true;
+    });
+    check(modalOpened, 'the blueprint modal can be opened from the card');
+    await sleep(700);
+    let exportState = 'missing';
+    for (let i = 0; i < 40; i += 1) {
+      exportState = await page.evaluate(() => {
+        const btn = Array.from(document.querySelectorAll('button'))
+          .find((b) => /Export SVG/.test(b.textContent || ''));
+        if (!btn) return 'missing';
+        if (btn.disabled) return 'disabled';
+        btn.click();
+        return 'clicked';
+      });
+      if (exportState !== 'missing') break;
+      await sleep(250);
+    }
+    let svgPath = null;
+    for (let i = 0; i < 40 && !svgPath; i += 1) {
+      await sleep(250);
+      const hit = fs.readdirSync(downloadDir).find((f) => f.toLowerCase().endsWith('.svg'));
+      if (hit) svgPath = path.join(downloadDir, hit);
+    }
+    const svgBody = svgPath ? fs.readFileSync(svgPath, 'utf8') : '';
+    check(exportState === 'clicked', 'Export SVG is enabled on a solved plan', exportState);
+    check(
+      Boolean(svgPath) && /GEN-/.test(path.basename(svgPath)),
+      'Export SVG writes an .svg named with the generation id',
+      svgPath ? path.basename(svgPath) : 'no file',
+    );
+    check(
+      svgBody.length > 5000 && /<svg[\s>]/.test(svgBody.slice(0, 600)),
+      'the exported file is a real drawing',
+      `${svgBody.length} bytes`,
+    );
+
+    // 5e. Satellite vision (audit surface: UNVERIFIED). Upstream imagery is
+    // stubbed so the run is deterministic; what is exercised is the real card,
+    // the real POST and the real rendering of the measured response.
+    console.log('- satellite vision scan');
+    let visionRequest = null;
+    const visionHandler = (req) => {
+      if (req.url().includes('/api/site-vision') && req.method() === 'POST') {
+        try { visionRequest = JSON.parse(req.postData() || '{}'); } catch (e) { visionRequest = {}; }
+        req.respond({
+          status: 200,
+          contentType: 'application/json',
+          headers: { 'access-control-allow-origin': '*' },
+          body: JSON.stringify(VISION_FIXTURE),
+        });
+        return;
+      }
+      req.continue();
+    };
+    await page.setRequestInterception(true);
+    page.on('request', visionHandler);
+    const ecologyClicked = await page.evaluate(() => {
+      const btn = Array.from(document.querySelectorAll('button'))
+        .find((b) => (b.textContent || '').trim() === 'Ecology');
+      if (!btn) return false;
+      btn.click();
+      return true;
+    });
+    await sleep(900);
+    const scanOffered = await page.evaluate(() => {
+      const sec = document.querySelector('[data-report-section="vision"]');
+      if (!sec) return 'no-section';
+      // The analysis auto-runs a scan, so by the time the tab opens the card
+      // may be showing its retry affordance rather than the first-run CTA.
+      const btn = Array.from(sec.querySelectorAll('button'))
+        .find((b) => /Scan satellite canopy|Retry scan|Rescan satellite/.test(b.textContent || ''));
+      if (!btn) return 'missing';
+      if (btn.disabled) return 'disabled';
+      btn.click();
+      return 'clicked';
+    });
+    await page.waitForFunction(
+      () => /Tree clusters detected/.test(document.body.innerText || '') && /\bT1\b/.test(document.body.innerText || ''),
+      { timeout: 20000 },
+    ).catch(() => { });
+    const visionUi = await page.evaluate(() => {
+      const sec = document.querySelector('[data-report-section="vision"]');
+      const text = sec ? (sec.innerText || '') : '';
+      return {
+        canopy: /37\.5%/.test(text),
+        clusters: /Tree clusters detected/.test(text),
+        plan: /\bT1\b/.test(text) && /\bT2\b/.test(text),
+      };
+    });
+    check(ecologyClicked, 'Ecology tab opens');
+    check(scanOffered === 'clicked', 'the vision card offers a scan for a located site', scanOffered);
+    check(
+      Boolean(visionRequest) && typeof visionRequest.latitude === 'number' && typeof visionRequest.longitude === 'number',
+      'the scan posts the located site coordinates',
+      JSON.stringify(visionRequest || {}),
+    );
+    check(visionUi.canopy && visionUi.clusters, 'the card renders the measured canopy and cluster count', JSON.stringify(visionUi));
+    check(visionUi.plan, 'the preservation plan lists the detected clusters', JSON.stringify(visionUi));
+    page.off('request', visionHandler);
+    await page.setRequestInterception(false);
+    // Restore the tab the rest of the run expects.
+    await page.evaluate(() => {
+      const btn = Array.from(document.querySelectorAll('button'))
+        .find((b) => (b.textContent || '').trim() === 'Cost & Plan');
+      if (btn) btn.click();
+    });
+    await sleep(500);
 
     // 6. Moving the site after generation ASKS FIRST: with a plot captured, the
     // move is not applied until the user chooses, and whichever choice is made
@@ -614,8 +959,8 @@ async function main() {
       );
       check(
         !siteMove.afterCancel.dialog &&
-          JSON.stringify(siteMove.afterCancel.preview) === JSON.stringify(siteMove.start.preview) &&
-          siteMove.afterCancel.latInput === siteMove.start.latInput,
+        JSON.stringify(siteMove.afterCancel.preview) === JSON.stringify(siteMove.start.preview) &&
+        siteMove.afterCancel.latInput === siteMove.start.latInput,
         'keep: plot, preview and coordinates all stay as they were',
         JSON.stringify(siteMove.afterCancel)
       );
@@ -838,6 +1183,125 @@ async function main() {
       mobileConsole.concat(mobilePageErrors).slice(0, 3).join(' | '),
     );
     await mobilePage.close();
+
+    // 10. Capture-side surfaces the audit listed as UNVERIFIED: address search,
+    //     presets, undo/redo and KML import. A second tab keeps them isolated
+    //     from the funnel state asserted above; the providers are stubbed, the
+    //     app is not.
+    console.log('- capture surfaces: search, presets, undo/redo, KML import');
+    const aux = await browser.newPage();
+    const auxConsole = [];
+    const auxErrors = [];
+    aux.on('console', (m) => {
+      if (m.type() === 'error') auxConsole.push(m.text().slice(0, 200));
+    });
+    aux.on('pageerror', (e) => auxErrors.push(String((e && e.message) || e)));
+    await aux.setViewport({ width: 1600, height: 1000 });
+    await aux.setRequestInterception(true);
+    aux.on('request', (req) => {
+      if (req.url().includes('/api/geocode')) {
+        req.respond({
+          status: 200,
+          contentType: 'application/json',
+          headers: { 'access-control-allow-origin': '*' },
+          body: JSON.stringify(GEOCODE_FIXTURE),
+        });
+        return;
+      }
+      req.continue();
+    });
+    await aux.goto(URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    await sleep(2000);
+
+    // Address search -> pin.
+    const searchInput = 'input[aria-label="Search for a location"]';
+    await aux.waitForSelector(searchInput, { timeout: 15000 });
+    await aux.click(searchInput);
+    await aux.type(searchInput, 'E2E Locality 4471', { delay: 25 });
+    await aux.waitForSelector('#geocode-suggestion-0', { timeout: 15000 });
+    await aux.click('#geocode-suggestion-0');
+    await sleep(1500);
+    const located = await aux.evaluate(() => ({
+      lat: (document.getElementById('lat-input') || {}).value,
+      lon: (document.getElementById('lon-input') || {}).value,
+    }));
+    check(
+      Math.abs(Number(located.lat) - 12.9716) < 0.0002 && Math.abs(Number(located.lon) - 77.5946) < 0.0002,
+      'address search fills the pin from the geocode result',
+      JSON.stringify(located),
+    );
+
+    // Presets -> 4 vertices; undo -> 0; redo -> 4.
+    await clickByLabel(aux, 'Select Location on Map to Begin');
+    await aux.waitForFunction(() => /Locate the site/.test(document.body.innerText || ''), { timeout: 15000 });
+    await clickByLabel(aux, 'Trace boundary');
+    await sleep(700);
+    const vertexCount = () => aux.evaluate(() => {
+      const m = window.__maplibreMap;
+      const s = m && m.getSource('bw-capture-vertices');
+      const d = s && s.serialize().data;
+      return d && d.features ? d.features.length : -1;
+    });
+    await aux.click('[data-testid="trace-toolbar-presets"]');
+    await aux.waitForSelector('[data-testid="preset-menu"]', { timeout: 10000 });
+    await aux.click('[data-testid="preset-item-rect"]');
+    await sleep(500);
+    const presetCount = await vertexCount();
+    await aux.click('[data-testid="trace-toolbar-undo"]');
+    await sleep(400);
+    const undoCount = await vertexCount();
+    await aux.click('[data-testid="trace-toolbar-redo"]');
+    await sleep(400);
+    const redoCount = await vertexCount();
+    check(presetCount === 4, 'a preset applies a closed rectangle to the trace', `vertices=${presetCount}`);
+    check(
+      undoCount === 0 && redoCount === 4,
+      'undo and redo walk the vertex history',
+      `${presetCount} -> ${undoCount} -> ${redoCount}`,
+    );
+
+    // KML import -> frontage with 4 edges.
+    await aux.evaluate(() => {
+      const d = document.querySelector('[data-testid="import-disclosure"]');
+      if (d) d.open = true;
+    });
+    await aux.waitForSelector('[data-testid="import-disclosure"] textarea', { timeout: 10000 });
+    await aux.evaluate((kml) => {
+      const ta = document.querySelector('[data-testid="import-disclosure"] textarea');
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+      setter.call(ta, kml);
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    }, KML_FIXTURE);
+    await sleep(200);
+    const importClicked = await aux.evaluate(() => {
+      const d = document.querySelector('[data-testid="import-disclosure"]');
+      const btn = d ? Array.from(d.querySelectorAll('button')).find((b) => /Import/.test(b.textContent || '')) : null;
+      if (!btn) return false;
+      btn.click();
+      return true;
+    });
+    await aux
+      .waitForFunction(() => /Confirm the frontage/.test(document.body.innerText || ''), { timeout: 20000 })
+      .catch(() => { });
+    const kml = await aux.evaluate(() => ({
+      onFrontage: /Confirm the frontage/.test(document.body.innerText || ''),
+      rows: document.querySelectorAll('[data-testid^="edge-row-"]').length,
+      error: (document.querySelector('[data-testid="import-disclosure"]') || {}).innerText || '',
+    }));
+    check(importClicked, 'KML import control is present and enabled');
+    check(kml.onFrontage && kml.rows === 4, 'KML import lands on the frontage step with 4 edges', `rows=${kml.rows}`);
+    check(
+      !/Unsupported boundary|No polygon geometry|Import failed/i.test(kml.error),
+      'KML import reports no parse error',
+      kml.error.slice(0, 120),
+    );
+    check(
+      auxConsole.length === 0 && auxErrors.length === 0,
+      'capture surfaces: zero console and page errors',
+      auxConsole.concat(auxErrors).slice(0, 3).join(' | '),
+    );
+    await aux.close();
+
   } catch (err) {
     check(false, 'E2E aborted', String(err && err.message || err));
     try {
