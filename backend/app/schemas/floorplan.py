@@ -17,8 +17,13 @@ class TerraceBandSpec(BaseModel):
 
 
 class FloorPlanRequest(BaseModel):
-    plot_width_m: Optional[float] = Field(default=None, ge=6.0, le=60.0, description="Plot frontage width in meters")
-    plot_depth_m: Optional[float] = Field(default=None, ge=6.0, le=60.0, description="Plot depth in meters")
+    # A captured boundary is authoritative: its bounding box can legitimately be
+    # far wider than a single residential plot (an audited 108.5 x 89.1 m site
+    # was silently clamped to 60 x 60 m). The upper bound therefore only guards
+    # against absurd/typo input; coverage - not a dimension clamp - limits the
+    # building footprint.
+    plot_width_m: Optional[float] = Field(default=None, ge=6.0, le=2000.0, description="Plot frontage width in meters (bounding box of a captured boundary)")
+    plot_depth_m: Optional[float] = Field(default=None, ge=6.0, le=2000.0, description="Plot depth in meters (bounding box of a captured boundary)")
     plot_polygon: Optional[PlotPolygonModel] = Field(
         default=None,
         description="Optional canonical plot polygon [(x_m, y_m)] in local tangent plane"
@@ -85,7 +90,7 @@ class FloorPlanRequest(BaseModel):
     )
     program_aware_footprint: Optional[bool] = Field(
         default=False,
-        description="Programme-aware footprint: size the rectangular footprint from the ontology programme (plus walls/circulation) instead of coverage alone; explicit programme deficit warns when the envelope cannot fit"
+        description="Deprecated provenance flag. The footprint is ALWAYS sized from the ontology programme (plus walls/circulation/core) and only CAPPED by the coverage ratio and the setback buildable, so programme-aware sizing is no longer optional. Retained so persisted requests stay valid; report.footprint_source names the binding constraint."
     )
     selected_scheme_id: Optional[str] = Field(
         default=None,
@@ -261,9 +266,15 @@ class FloorPlanQA(BaseModel):
     peripheral_service: bool = Field(default=True, description="Whether service rooms touch exterior walls and avoid central 40% box")
     catalog: bool = Field(default=True, description="Whether room areas satisfy catalog bounds (e.g. bath 3.5-6 m2, puja min width 2.4m)")
     aspect: bool = Field(default=True, description="Whether aspect ratios are <= 1:2.2")
-    critic: str = Field(default="pass", description="LLM layout critic verdict: pass, fail, or skipped")
-    violations: int = Field(default=0, description="Count of rule violations")
+    critic: str = Field(default="skipped", description="Architect-critic verdict: pass, fail, or skipped (skipped when no critic ran - never a fabricated pass)")
+    violations: int = Field(default=0, description="Count of FAILing validation-gate layers")
     critic_notes: Optional[List[str]] = Field(default_factory=list, description="Critic identified architectural concerns if any")
+    # The universal gate is part of the QA contract (audit F23): it used to be
+    # attached to the response but silently dropped by this model's schema.
+    validation_gate: Optional[Dict[str, Any]] = Field(default=None, description="Universal validation gate L1-L15 report")
+    validation_gate_status: Optional[str] = Field(default=None, description="Gate overall status: PASS | WARN | FAIL")
+    invariants_verified: Optional[int] = Field(default=None, description="Certificate invariants that passed")
+    invariants_total: Optional[int] = Field(default=None, description="Certificate invariants evaluated")
 
 class RectanglesModel(BaseModel):
     envelope: EnvelopeRect
@@ -288,12 +299,15 @@ class RoomPlacement(BaseModel):
     identity: Optional[SpaceIdentity] = None
 
 class FloorPlanMetrics(BaseModel):
-    vastu_compliance_pct: float = Field(..., ge=0.0, le=100.0)
-    plumbing_adjacency_score: float = Field(..., ge=0.0, le=100.0)
-    space_utilization_pct: float = Field(..., ge=0.0, le=100.0)
+    # Every percentage here is measured from the placed geometry (audit F04).
+    # ``None`` means "not evaluable on this plan" and renders as “—”; it never
+    # stands in for a pass.
+    vastu_compliance_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    plumbing_adjacency_score: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    space_utilization_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
     plot_coverage_pct: float = Field(default=0.0, ge=0.0, le=100.0)
     total_built_up_sqm: float
-    circulation_efficiency_pct: float
+    circulation_efficiency_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
     circulation_status: Optional[str] = Field(default="connected", description="Circulation connectivity status")
 
 class FloorPlanResponse(BaseModel):

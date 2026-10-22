@@ -7,10 +7,16 @@ reportlab>=4.0.0
 pytest>=8.0.0
 pytest-asyncio>=0.24.0
 numpy>=2.0.0
-scipy>=1.14.0
-rasterio>=1.4.0
 shapely>=2.0.0
+pypdf>=5.0.0
+
+# Optional satellite-vision stack (app/services/vision/*). Imported lazily and
+# guarded: torch + transformers run SegFormer-B0, rasterio reads windowed COG
+# tiles, scipy.ndimage provides the resize interpolation. Removing any of these
+# silently disables /api/site-vision's model path (audit F26 checked with a
+# column-0 grep and missed the indented imports).
 torch>=2.2.0
 transformers>=4.40.0
-pypdf>=5.0.0
+scipy>=1.14.0
+rasterio>=1.4.0
 

@@ -11,7 +11,10 @@ from pydantic import BaseModel, ValidationError
 
 from app.config import settings
 
-from app.utils.geo_utils import polygon_is_self_intersecting
+from app.services.boundary_service import (
+    BoundaryValidationError,
+    summarize_boundary,
+)
 
 logger = logging.getLogger(__name__)
 from app.schemas.request import AnalysisRequest, ReportRequest
@@ -286,49 +289,18 @@ async def analyze_site(req: AnalysisRequest, request: Request):
     # area/perimeter recomputed here are authoritative).
     boundary_summary = None
     if req.boundary is not None:
-        b = req.boundary
-        n = len(b.vertices)
-        shoelace = 0.0
-        perim = 0.0
-        for i in range(n):
-            p1 = b.vertices[i]
-            p2 = b.vertices[(i + 1) % n]
-            shoelace += p1.x * p2.y - p2.x * p1.y
-            perim += ((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2) ** 0.5
-        area = round(abs(shoelace) / 2.0, 2)
-        if area < 36.0:
-            raise HTTPException(status_code=422, detail=f"Boundary area {area} m² is below the statutory minimum 36 m².")
-        min_edge = min(
-            ((b.vertices[(i + 1) % n].x - b.vertices[i].x) ** 2 + (b.vertices[(i + 1) % n].y - b.vertices[i].y) ** 2) ** 0.5
-            for i in range(n)
-        )
-        if min_edge < 1.0:
-            raise HTTPException(status_code=422, detail=f"Boundary edge {min_edge:.2f} m is below the statutory minimum 1.00 m.")
-        # Reject bow-tie/self-intersecting outlines -
-        # the shoelace formula yields a meaningless area for them, which would
-        # silently corrupt plot area, land value, and footprint calculations.
-        verts_xy = [(v.x, v.y) for v in b.vertices]
-        if polygon_is_self_intersecting(verts_xy):
-            raise HTTPException(
-                status_code=422,
-                detail="Boundary polygon is self-intersecting (bow-tie outline). Re-capture a simple, non-crossing plot boundary.",
+        try:
+            boundary_summary = summarize_boundary(req.boundary)
+        except BoundaryValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        if boundary_summary["area_delta_pct"] is not None and boundary_summary["area_delta_pct"] > 1.0:
+            warnings.append(
+                f"BOUNDARY-AREA: the client reported "
+                f"{boundary_summary['client_area_sqm']:,.1f} m² but the server shoelace "
+                f"area is {boundary_summary['area_sqm']:,.1f} m² "
+                f"({boundary_summary['area_delta_pct']:.1f}% apart); the server area is "
+                "authoritative."
             )
-        boundary_summary = {
-            "vertex_count": n,
-            "area_sqm": area,
-            "perimeter_m": round(perim, 2),
-            "shape_type": b.shape_type,
-            "source": b.source,
-            "frontage_edge_index": b.frontage_edge_index,
-            "frontage_annotation": "VERIFIED" if b.frontage_edge_index is not None else None,
-            "origin": {"lat": b.origin_lat, "lon": b.origin_lon},
-            "winding": "ccw" if shoelace > 0 else "cw",
-            "provenance": {
-                "boundary_source": b.source,
-                "projection": "local tangent plane (E/N, equirectangular, cos(lat))",
-                "origin": {"lat": b.origin_lat, "lon": b.origin_lon},
-            },
-        }
 
     # 1. Fetch geospatial, elevation, and climate data with fallback tracking
     now_utc = datetime.now(timezone.utc)
@@ -478,10 +450,18 @@ async def analyze_site(req: AnalysisRequest, request: Request):
         total_construction_cost_inr=cost_estimate.total_estimated_cost_inr,
         override_rate_per_sqft=req.override_land_rate_per_sqft,
         plot_area_sqft=req.plot_area_sqft,
-        ground_coverage_ratio=req.ground_coverage_ratio or 0.60
+        ground_coverage_ratio=req.ground_coverage_ratio or 0.60,
+        # The captured boundary - not a coverage-derived estimate - is the
+        # plot area the report and the valuation must share (audit F07).
+        boundary_area_sqm=(
+            boundary_summary["area_sqm"] if boundary_summary is not None else None
+        ),
     )
     if land_value.confidence_warning and land_value.confidence_warning not in warnings:
         warnings.append(land_value.confidence_warning)
+    for _plot_warning in land_value.plot_area_warnings:
+        if _plot_warning not in warnings:
+            warnings.append(_plot_warning)
 
     # 5. Module 3: Vastu & Functional Planning Advisory
     vastu_advisory, vastu_warnings = await evaluate_vastu_advisory(
@@ -713,18 +693,48 @@ async def create_generative_floorplan(
             total_floors = req.multi_storey.total_storeys
             built_up_sqft = req.built_up_area_sqft or (req.multi_storey.total_built_up_area_sqm * 10.764)
             first_floor = ms_dict["floors"][0] if ms_dict.get("floors") else {}
+            # Metrics for a re-exported model are MEASURED from that model, not
+            # copied from constants (audit F04). A metric the floormodel does not
+            # carry stays None and prints as “—”.
+            _ms_floors = ms_dict.get("floors") or []
+            _ms_rooms = [r for _f in _ms_floors for r in (_f.get("rooms") or [])]
+            _ms_usable = sum(
+                float(r.get("area_sqm") or 0.0) for r in _ms_rooms
+                if r.get("zone_category") not in ("circulation", "terrace")
+            )
+            _ms_circulation = sum(
+                float(r.get("area_sqm") or 0.0) for r in _ms_rooms
+                if r.get("zone_category") == "circulation"
+            )
+            _ms_util_num = sum(float(_f.get("built_up_area_sqm") or 0.0) for _f in _ms_floors)
+            _ms_util_den = sum(
+                float((_f.get("envelope") or {}).get("area_sqm") or 0.0) for _f in _ms_floors
+            )
+            _ms_vastu = [
+                float(_f["vastu_score_pct"]) for _f in _ms_floors
+                if isinstance(_f.get("vastu_score_pct"), (int, float))
+            ]
+            _ms_plumb = [
+                float(_f["plumbing_stack_alignment_pct"]) for _f in _ms_floors
+                if isinstance(_f.get("plumbing_stack_alignment_pct"), (int, float))
+            ]
             fp_payload = {
                 "multi_storey": ms_dict,
                 "plot_width_m": req.plot_width_m or (req.multi_storey.plot_width_m if req.multi_storey else None),
                 "plot_depth_m": req.plot_depth_m or (req.multi_storey.plot_depth_m if req.multi_storey else None),
                 "seed": str(req.multi_storey.seed if req.multi_storey else "GEN-F01"),
                 "metrics": {
-                    "vastu_compliance_pct": ms_dict.get("vastu_compliance_pct", 85.0),
-                    "plumbing_adjacency_score": ms_dict.get("plumbing_stack_alignment_pct", 90.0),
-                    "space_utilization_pct": 85.0,
+                    "vastu_compliance_pct": (round(sum(_ms_vastu) / len(_ms_vastu), 1) if _ms_vastu else None),
+                    "plumbing_adjacency_score": (round(sum(_ms_plumb) / len(_ms_plumb), 1) if _ms_plumb else None),
+                    "space_utilization_pct": (
+                        round(100.0 * _ms_util_num / _ms_util_den, 1) if _ms_util_den > 0 else None
+                    ),
                     "plot_coverage_pct": (req.ground_coverage_ratio or 0.6) * 100,
                     "total_built_up_sqm": req.multi_storey.total_built_up_area_sqm,
-                    "circulation_efficiency_pct": 88.0,
+                    "circulation_efficiency_pct": (
+                        round(100.0 * _ms_usable / (_ms_usable + _ms_circulation), 1)
+                        if (_ms_usable + _ms_circulation) > 0 else None
+                    ),
                 },
                 "rectangles": {
                     "envelope": first_floor.get("envelope", {}),

@@ -172,9 +172,11 @@ class SingleFloorPlanModel(BaseModel):
     doors: List[MultiFloorDoorGeometry] = Field(default_factory=list)
     windows: List[MultiFloorWindowGeometry] = Field(default_factory=list)
     circulation_status: Literal["connected", "disconnected"] = "connected"
-    vastu_score_pct: float = 0.0
-    vastu_compliance_pct: float = 0.0
-    plumbing_stack_alignment_pct: float = 100.0
+    # Measured by derived_metrics from the placed rectangles; ``None`` means the
+    # floor carries nothing to measure (e.g. no wet room), never a silent pass.
+    vastu_score_pct: Optional[float] = None
+    vastu_compliance_pct: Optional[float] = None
+    plumbing_stack_alignment_pct: Optional[float] = None
     built_up_area_sqm: float = 0.0
     carpet_area_sqm: float = 0.0
     svg_blueprint_cad: Optional[str] = Field(default="", description="CAD-theme blueprint SVG; rendered after the universal validation gate so sheets carry the layer table and stamp")

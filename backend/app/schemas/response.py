@@ -1,5 +1,5 @@
 from typing import List, Dict, Optional, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class FactorScore(BaseModel):
     factor_id: str
@@ -113,6 +113,16 @@ class LandValueEstimate(BaseModel):
     locality_multiplier: float = 1.0
     multiplier_breakdown: MultiplierBreakdown
     plot_area_sqft: float
+    # Provenance of plot_area_sqft (audit F07): the report may only call the
+    # number a "captured boundary" when it actually came from one.
+    plot_area_source: str = Field(
+        "derived_from_coverage",
+        description="captured_boundary | client_plot_area | derived_from_coverage",
+    )
+    boundary_area_sqft: Optional[float] = Field(
+        None, description="Shoelace area of the captured boundary, in sq ft"
+    )
+    plot_area_warnings: List[str] = Field(default_factory=list)
     ground_coverage_ratio_applied: float = 0.60
     land_cost_inr: Optional[float] = None
     construction_cost_inr: float
@@ -189,6 +199,43 @@ class DataSourceProvenance(BaseModel):
     is_fallback: bool = False
 
 
+# --- Map-first capture: server-validated boundary echo (audit F22) ---
+class BoundaryOrigin(BaseModel):
+    lat: float
+    lon: float
+
+
+class BoundaryProvenance(BaseModel):
+    boundary_source: str
+    projection: str
+    origin: BoundaryOrigin
+    area_method: str
+
+
+class BoundarySummaryResponse(BaseModel):
+    """Server-validated echo of the captured plot boundary.
+
+    `area_sqm`/`area_sqft` are the server's shoelace result (authoritative);
+    `client_area_sqm` and `area_delta_pct` record what the client claimed, so
+    the report can disclose a disagreement instead of silently picking one.
+    """
+    vertex_count: int
+    area_sqm: float
+    area_sqft: float
+    perimeter_m: float
+    shape_type: str
+    source: str
+    frontage_edge_index: Optional[int] = None
+    frontage_annotation: Optional[str] = None
+    origin: BoundaryOrigin
+    winding: str
+    captured: bool = True
+    authoritative: bool = True
+    client_area_sqm: Optional[float] = None
+    area_delta_pct: Optional[float] = None
+    provenance: BoundaryProvenance
+
+
 # --- Master Analysis Response ---
 class AnalysisResponse(BaseModel):
     request_id: str
@@ -222,7 +269,7 @@ class AnalysisResponse(BaseModel):
     vastu_compliance: Optional[Dict[str, Any]] = None
     # Map-first capture: read-only echo of the captured boundary,
     # validated server-side (shoelace area, perimeter, winding, statutory minima).
-    boundary_summary: Optional[Dict[str, Any]] = None
+    boundary_summary: Optional[BoundarySummaryResponse] = None
 
 class HealthResponse(BaseModel):
     status: str
