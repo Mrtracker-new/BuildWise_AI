@@ -330,12 +330,18 @@ def _forbidden_pairs(rooms: Sequence[ProgramRoom]) -> set:
 # 3. Plate context and band search
 # ---------------------------------------------------------------------------
 
-def build_plate_context(engine: Any) -> Optional[PlateContext]:
-    """Return a rectangular plate context, or None when RULE-FP geometry is needed."""
+def build_plate_context(engine: Any, envelope: Optional[Dict[str, Any]] = None) -> Optional[PlateContext]:
+    """Return a rectangular plate context, or None when RULE-FP geometry is needed.
+
+    ``envelope`` lets a caller that has already computed the envelope (the
+    engine's own solve, when a scheme profile is selected) reuse it instead of
+    recomputing solver state.
+    """
     request: FloorPlanRequest = engine.req
-    ok, _deg, envelope, _warnings = engine._compute_envelope()
-    if not ok:
-        return None
+    if envelope is None:
+        ok, _deg, envelope, _warnings = engine._compute_envelope()
+        if not ok:
+            return None
     # Multi-wing and terrace-band plates keep the fully validated RULE-FP path.
     site_plan = engine.site_plan
     if site_plan is not None:
@@ -344,8 +350,20 @@ def build_plate_context(engine: Any) -> Optional[PlateContext]:
             return None
     if getattr(request, "terrace_bands", None):
         return None
-    if getattr(request, "floor_plate_masks", None):
-        return None
+    masks = getattr(request, "floor_plate_masks", None)
+    if masks:
+        # A mask that is 'present' everywhere does not change the plate: it is
+        # the full envelope, which the band solver partitions. Treating ANY
+        # mask as unsupported meant every captured (map) boundary silently fell
+        # back to RULE-FP and the picker could never apply a profile there.
+        carved = any(
+            str(value).strip().lower() not in ("present", "none", "")
+            for per_floor in masks.values()
+            if isinstance(per_floor, dict)
+            for value in per_floor.values()
+        )
+        if carved:
+            return None
 
     width = float(envelope["width"])
     depth = float(envelope["depth"])
@@ -399,15 +417,27 @@ def _required_width_cached(spec_id: str, depth: float) -> float:
 
 
 def _required_width(room: ProgramRoom, depth: float) -> float:
-    """Hard width floor: minimum width and minimum area at this depth.
+    """Hard width floor: minimum width, minimum area, and proportion.
 
-    Aspect ratio is deliberately *not* folded in here.  In a two-band plate a
-    room spanning the full band depth would otherwise force an absurd width
-    (a 3.5 m² bath in a 6.8 m deep band would need 4.5 m of frontage).  Aspect
-    is scored as a soft advisory and reported in the metrics; land economics owns the
-    dimensional audit that trades frontage against depth.
+    Aspect is folded in only where it can be satisfied *inside* the room's
+    comfort envelope (``depth / limit`` must not inflate the room past three
+    times its catalogue area).  A 3.5 m² bath in a 3.3 m band needs 1.67 m of
+    frontage to stay inside 1:2.0 - that is a real requirement and was the
+    reason 1:2.17 baths kept appearing on otherwise generous plates.  In a
+    10.9 m band the same rule would demand 5.5 m of frontage and 59 m², which is
+    not a repair; there the band depth is the defect and ``ROOM-MAX`` discloses
+    it instead.
     """
-    return _required_width_cached(room.spec.id, round(float(depth), 3))
+    base = _required_width_cached(room.spec.id, round(float(depth), 3))
+    if base == float("inf"):
+        return base
+    limit = float(getattr(room.spec, "max_aspect_ratio", 0.0) or 0.0)
+    if limit <= 0.0 or depth <= 0.05:
+        return base
+    proportional = depth / limit
+    if proportional * depth <= float(room.spec.min_area_sqm) * 3.0:
+        base = max(base, round(proportional + 0.01, 4))
+    return base
 
 
 def _block_width(block: Sequence[ProgramRoom], depth: float) -> float:
@@ -470,13 +500,40 @@ def _forbidden_free_order_exists(blocks: Sequence[List[ProgramRoom]]) -> bool:
     return _forbidden_free_order(blocks) is not None
 
 
+def _band_capacity(blocks: Sequence[Sequence[ProgramRoom]], depth: float) -> float:
+    """Frontage a band's programme can legitimately occupy at this depth.
+
+    The sum of each room's aspect ceiling: beyond it, extra frontage would make
+    the rooms disproportionate.  ``inf`` means at least one space carries no
+    proportion bound (circulation, industrial bays), so the band can always be
+    filled.
+    """
+    total = 0.0
+    for block in blocks:
+        for room in block:
+            ceiling = _aspect_ceiling(room, depth)
+            if ceiling == float("inf"):
+                return float("inf")
+            total += ceiling
+    return total
+
+
 def _band_assignment(
     ctx: PlateContext,
     blocks: Sequence[List[ProgramRoom]],
     band_depth: float,
     profile_id: str = "max_area",
 ) -> Optional[Tuple[set, set]]:
-    """Choose the best front/rear split at a fixed band depth."""
+    """Choose the best front/rear split at a fixed band depth.
+
+    A split is legal when both bands can physically hold their blocks (minimum
+    width / area / furniture) *and* their frontage is within what those rooms
+    can occupy in proportion.  Without the second test a wide plate could park a
+    lone bathroom in an 18.7 m band and stretch it to 102 m² (audit: 1:4.8
+    rooms).  Splits that cannot fill a band proportionally are still offered as
+    a ranked fallback so the solver always returns geometry — the caller sees
+    the overrun as a violation instead of an exception.
+    """
     n = len(blocks)
     if n > 14:
         return None
@@ -500,19 +557,85 @@ def _band_assignment(
         if not _blocks_fit(north, north_depth, north_avail):
             continue
         score = sum(_south_affinity(b, profile_id) for b in south)
+        shortfall = max(0.0, south_avail - _band_capacity(south, band_depth))
+        shortfall += max(0.0, north_avail - _band_capacity(north, north_depth))
         south_set = {i for i, bit in enumerate(bits) if bit == 0}
         north_set = set(range(n)) - south_set
-        candidates.append((score, tuple(sorted(south_set)), south_set, north_set))
+        candidates.append((round(shortfall, 2), score, tuple(sorted(south_set)), south_set, north_set))
 
-    # Highest preference first, then deterministic block-order tie break.  Only
-    # the few best candidates need the (more expensive) ordering feasibility test.
-    candidates.sort(key=lambda item: (-item[0], item[1]))
-    for _score, _key, south_set, north_set in candidates:
+    # Proportion-filling splits first, then highest preference, then a
+    # deterministic block-order tie break.  Only the best candidates need the
+    # (more expensive) ordering feasibility test.
+    candidates.sort(key=lambda item: (item[0], -item[1], item[2]))
+    for _shortfall, _score, _key, south_set, north_set in candidates:
         south_blocks = [blocks[i] for i in sorted(south_set)]
         north_blocks = [blocks[i] for i in sorted(north_set)]
         if _forbidden_free_order_exists(south_blocks) and _forbidden_free_order_exists(north_blocks):
             return south_set, north_set
     return None
+
+
+def _all_floor_proportion_cost(
+    ctx: PlateContext,
+    blocks_by_floor: Dict[int, List[List[ProgramRoom]]],
+    assignments: Dict[int, Tuple[set, set]],
+    depth: float,
+    area_bias: Dict[str, float],
+) -> Tuple[int, float]:
+    """Sum ``_band_proportion_cost`` over every storey at one band depth."""
+    violations = 0
+    overflow = 0.0
+    for z in sorted(blocks_by_floor):
+        south_idx, north_idx = assignments[z]
+        v, o = _band_proportion_cost(
+            ctx, blocks_by_floor[z], south_idx, north_idx, depth, area_bias,
+        )
+        violations += v
+        overflow += o
+    return violations, round(overflow, 2)
+
+
+def _band_proportion_cost(
+    ctx: PlateContext,
+    blocks: Sequence[List[ProgramRoom]],
+    south_idx: set,
+    north_idx: set,
+    depth: float,
+    area_bias: Dict[str, float],
+) -> Tuple[int, float]:
+    """How many rooms a proportional allocation cannot fit at this band depth.
+
+    Counted per band before any ordering is chosen: frontage allocation depends
+    on the room set and its ceilings, not on the left-to-right order, so this is
+    a cheap proxy for the geometry ``_local_bands`` will build.
+    """
+    violations = 0
+    overflow = 0.0
+    rear_depth = round(ctx.depth - depth - ctx.corridor_depth, 4)
+    for idx, band_depth_, available in (
+        (sorted(south_idx), depth, ctx.south_width),
+        (sorted(north_idx), rear_depth, ctx.width),
+    ):
+        rooms = [r for i in idx for r in blocks[i]]
+        if not rooms or band_depth_ < MIN_ROOM_DEPTH:
+            continue
+        widths, over_cap = _band_allocation(rooms, available, band_depth_, area_bias)
+        if widths is None:
+            return violations + len(rooms), 1e6
+        violations += len(over_cap)
+        # A deep band can also break proportion the other way: a 1.2 m wide bath
+        # in a 10.7 m band is 1:8.9 even though its frontage was never capped.
+        for room in rooms:
+            limit = float(getattr(room.spec, "max_aspect_ratio", 0.0) or 0.0)
+            if limit <= 0.0:
+                continue
+            width = widths[room.instance_id]
+            if width <= 0.05:
+                continue
+            if max(band_depth_ / width, width / band_depth_) > limit + 0.02:
+                violations += 1
+        overflow += max(0.0, available - sum(widths.values()))
+    return violations, round(overflow, 2)
 
 
 def _search_band_layout(
@@ -539,6 +662,7 @@ def _search_band_layout(
         step = 0.10
         depth = lower
         best_candidate = None
+        area_bias = _profile_area_bias(profile_id)
         while depth <= upper + EPS:
             assignments: Dict[int, Tuple[set, set]] = {}
             ok = True
@@ -557,11 +681,21 @@ def _search_band_layout(
                 assignments[z] = chosen
                 preference += sum(_south_affinity(blocks[i], profile_id) for i in chosen[0])
             if ok:
-                if profile_id == "max_area":
-                    # Max Area buys the compactest spine and the shallowest band.
-                    return round(depth, 2), assignments, working, dropped
-                if best_candidate is None or preference > best_candidate[0] + 1e-9:
-                    best_candidate = (preference, round(depth, 2), assignments)
+                # Proportion first: a shallow band gives every room a wide
+                # frontage, which is what produced 1:4.8 bedrooms on a 23 m
+                # plate.  Depth is scanned ascending and the first depth whose
+                # allocation keeps every room inside its catalogue bound wins,
+                # so the shallowest *proportional* band is chosen.  Preference
+                # (Vastu / daylight) breaks ties between depths that are both
+                # proportional, and Max Area takes the shallowest of those.
+                violations, overflow = _all_floor_proportion_cost(
+                    ctx, blocks_by_floor, assignments, depth, area_bias,
+                )
+                key = (violations, overflow, -preference, round(depth, 2))
+                if best_candidate is None or key < best_candidate[0]:
+                    best_candidate = (key, round(depth, 2), assignments)
+                if violations == 0 and overflow <= 0.0:
+                    break
             depth = round(depth + step, 2)
 
         if best_candidate is not None:
@@ -607,27 +741,84 @@ def _search_band_layout(
 # 4. Width allocation and geometry
 # ---------------------------------------------------------------------------
 
-def _allocate_widths(
+def _aspect_ceiling(room: ProgramRoom, depth: float) -> float:
+    """Widest frontage this room may take at ``depth`` and stay in proportion.
+
+    ``max_aspect_ratio`` is the catalogue's hard bound (1:2.2 for a habitable
+    room, 1:2.0 for a bath).  A room may never be squeezed below its required
+    frontage to satisfy proportion — minimum width, area and furniture still
+    win — so the ceiling is floored at ``_required_width``.
+    """
+    limit = float(getattr(room.spec, "max_aspect_ratio", 0.0) or 0.0)
+    floor_width = _required_width(room, depth)
+    if limit <= 0.0 or depth <= 0.05:
+        return float("inf")
+    return max(depth * limit, floor_width)
+
+
+def _band_allocation(
     rooms: Sequence[ProgramRoom],
     total: float,
     depth: float,
     area_bias: Dict[str, float],
-) -> Optional[Dict[str, float]]:
+) -> Tuple[Optional[Dict[str, float]], List[str]]:
+    """Allocate frontage inside one band, capped by each room's proportion.
+
+    Extra frontage is water-filled up to each room's aspect ceiling instead of
+    being dumped on the room with the largest catalogue area (which used to turn
+    a 23 m wide, 3.3 m deep band into a 1:4.8 bedroom).  When every room is at
+    its ceiling and frontage is still left over, the band is wider than a
+    proportional programme can use: the surplus is spread proportionally rather
+    than left as unlabelled void, and the rooms that crossed their bound are
+    returned so the caller can disclose them.
+
+    Returns ``(widths, over_cap_room_ids)``; ``widths`` is ``None`` only when the
+    hard floors (minimum width / area / furniture) cannot fit at this depth.
+    """
     required = {r.instance_id: _required_width(r, depth) for r in rooms}
     if sum(required.values()) > total + EPS:
-        return None
-    extra = total - sum(required.values())
+        return None, []
+    ceilings = {r.instance_id: _aspect_ceiling(r, depth) for r in rooms}
     weights = {
         r.instance_id: max(0.01, float(r.spec.min_area_sqm) * area_bias.get(r.spec.id, 1.0))
         for r in rooms
     }
-    wsum = sum(weights.values()) or 1.0
-    raw = {rid: required[rid] + extra * weights[rid] / wsum for rid in required}
-    rounded = {rid: round(w, 2) for rid, w in raw.items()}
+    widths = dict(required)
+    extra = round(total - sum(required.values()), 4)
+    for _ in range(len(rooms) + 2):
+        if extra <= 1e-6:
+            break
+        slack = {
+            rid: ceilings[rid] - widths[rid]
+            for rid in widths
+            if ceilings[rid] - widths[rid] > 1e-6
+        }
+        if not slack:
+            break
+        wsum = sum(weights[rid] for rid in slack) or 1.0
+        granted = 0.0
+        for rid in sorted(slack):
+            move = min(extra * weights[rid] / wsum, slack[rid])
+            widths[rid] += move
+            granted += move
+        extra = round(extra - granted, 6)
+        if granted <= 1e-9:
+            break
+    if extra > 1e-6:
+        # Wider than the programme's proportional capacity: spread the surplus
+        # so the band stays filled (no void), and own the overrun.
+        scale = total / max(sum(widths.values()), 0.01)
+        widths = {rid: w * scale for rid, w in widths.items()}
+        extra = 0.0
+    rounded = {rid: round(w, 2) for rid, w in widths.items()}
     delta = round(total - sum(rounded.values()), 2)
     if rounded:
-        last = rooms[-1].instance_id
-        rounded[last] = round(rounded[last] + delta, 2)
+        # Give rounding residue to the room with the most proportional slack.
+        target = max(
+            rounded,
+            key=lambda rid: (ceilings[rid] - rounded[rid], rounded[rid], rid),
+        )
+        rounded[target] = round(rounded[target] + delta, 2)
     # Repair rounding shortfalls without changing the total.
     for room in rooms:
         rid = room.instance_id
@@ -640,10 +831,25 @@ def _allocate_widths(
                 rounded[widest] = round(rounded[widest] - move, 2)
                 rounded[rid] = round(rounded[rid] + move, 2)
     if abs(sum(rounded.values()) - total) > 0.02:
-        return None
+        return None, []
     if any(rounded[r.instance_id] + 0.005 < required[r.instance_id] for r in rooms):
-        return None
-    return rounded
+        return None, []
+    over_cap = [
+        r.instance_id for r in rooms
+        if ceilings[r.instance_id] != float("inf")
+        and rounded[r.instance_id] > ceilings[r.instance_id] + 0.02
+    ]
+    return rounded, over_cap
+
+
+def _allocate_widths(
+    rooms: Sequence[ProgramRoom],
+    total: float,
+    depth: float,
+    area_bias: Dict[str, float],
+) -> Optional[Dict[str, float]]:
+    widths, _over_cap = _band_allocation(rooms, total, depth, area_bias)
+    return widths
 
 
 def _zone_for(x: float, y: float, w: float, d: float, width: float, depth: float) -> str:
@@ -927,6 +1133,7 @@ def _local_bands(
     band_depth: float,
     floor_name: str,
     dropped: Sequence[ProgramRoom],
+    forced_order: Optional[Dict[str, List[List[ProgramRoom]]]] = None,
 ) -> FloorPlanResult:
     result = FloorPlanResult(
         floor_index=floor_index,
@@ -943,7 +1150,11 @@ def _local_bands(
         return result
 
     area_bias = _profile_area_bias(profile_id)
-    if profile_id in ("max_vastu", "max_light_vent"):
+    if forced_order is not None:
+        # Wet-stack repair pinned this band order; see _align_wet_stacks.
+        south_ordered = [list(b) for b in forced_order.get("south", south_blocks)]
+        north_ordered = [list(b) for b in forced_order.get("north", north_blocks)]
+    elif profile_id in ("max_vastu", "max_light_vent"):
         south_ordered = _optimize_order(
             south_blocks, depth=band_depth, total_width=ctx.south_width,
             start_x=ctx.core_column_width + ctx.lobby_width, y=0.0,
@@ -963,14 +1174,17 @@ def _local_bands(
     north_rooms = [r for b in north_ordered for r in b]
     result.south_rooms = south_rooms
     result.north_rooms = north_rooms
-    south_w = _allocate_widths(south_rooms, ctx.south_width, band_depth, area_bias) if south_rooms else {}
-    north_w = _allocate_widths(north_rooms, ctx.width, north_depth, area_bias) if north_rooms else {}
+    south_w, _south_over = _band_allocation(
+        south_rooms, ctx.south_width, band_depth, area_bias,
+    ) if south_rooms else ({}, [])
+    north_w, _north_over = _band_allocation(
+        north_rooms, ctx.width, north_depth, area_bias,
+    ) if north_rooms else ({}, [])
     if south_w is None or north_w is None:
         result.warnings.append(
             f"Scheme floor {floor_index}: width allocation failed at band depth {band_depth:.2f}m."
         )
         return result
-
     # Core column (all locked cores, enlarged to the shared band depth).
     x = 0.0
     core_rooms: List[MultiFloorRoomRectangle] = []
@@ -1083,6 +1297,31 @@ def _local_bands(
         for w in warns:
             if w not in result.warnings:
                 result.warnings.append(w)
+
+    # Proportion is measured on the FINAL rectangles: furniture rebalancing and
+    # the forced wet-stack order move frontage after the allocation, so a band
+    # that was legal at allocation time can end up stretched. Disclosing from the
+    # rooms themselves keeps the warning tied to the geometry on the sheet.
+    for band_label, band_y in (("front", 0.0), ("rear", north_y)):
+        offenders = []
+        for room in rooms:
+            if abs(room.y - band_y) > 0.05 or room.zone_category in ("circulation", "terrace"):
+                continue
+            spec = ONTOLOGY.get_space(room.space_type_id) if room.space_type_id else None
+            if spec is None or spec.max_aspect_ratio <= 0:
+                continue
+            if room.aspect_ratio > spec.max_aspect_ratio + 0.02:
+                offenders.append(
+                    f"{room.room_id} {room.width_m:.2f}x{room.depth_m:.2f} m "
+                    f"= 1:{room.aspect_ratio:.2f} (limit 1:{spec.max_aspect_ratio:.2f})"
+                )
+        if offenders:
+            result.warnings.append(
+                f"ROOM-MAX: floor {floor_index} {band_label} band cannot keep "
+                f"{'; '.join(offenders)} inside the catalogue proportion at this "
+                f"plate; the band is still filled so no frontage is left as void, "
+                f"and the overrun is disclosed rather than hidden."
+            )
 
     for room in dropped:
         result.warnings.append(
@@ -1197,6 +1436,274 @@ def _floor_name(index: int) -> str:
     return names[index] if index < len(names) else f"Floor {index}"
 
 
+# ---------------------------------------------------------------------------
+# 5. Wet-stack alignment (VERT-01)
+# ---------------------------------------------------------------------------
+
+def _wet_intervals(rooms: Sequence[MultiFloorRoomRectangle]) -> List[Tuple[float, float]]:
+    """Frontage intervals occupied by wet rooms on one storey."""
+    spans: List[Tuple[float, float]] = []
+    for room in rooms:
+        spec = ONTOLOGY.get_space(room.space_type_id) if room.space_type_id else None
+        if spec is not None and spec.is_wet:
+            spans.append((float(room.x), float(room.x) + float(room.width_m)))
+    return spans
+
+
+def _band_wet_span(
+    ordered_blocks: Sequence[Sequence[ProgramRoom]],
+    widths: Dict[str, float],
+    start_x: float,
+    lower_wet: Sequence[Tuple[float, float]],
+) -> Tuple[float, float]:
+    """(wet frontage, frontage sitting over a wet room below) for one band."""
+    wet = 0.0
+    covered = 0.0
+    x = start_x
+    for block in ordered_blocks:
+        for room in block:
+            width = widths.get(room.instance_id, 0.0)
+            if width <= 0.0:
+                continue
+            if getattr(room.spec, "is_wet", False):
+                wet += width
+                covered += sum(
+                    max(0.0, min(x + width, b) - max(x, a)) for a, b in lower_wet
+                )
+            x += width
+    return wet, covered
+
+
+def _forbidden_boundary(ordered_blocks: Sequence[Sequence[ProgramRoom]]) -> bool:
+    """True when two adjacent blocks would share a forbidden wall."""
+    for left, right in zip(ordered_blocks, list(ordered_blocks)[1:]):
+        if not left or not right:
+            continue
+        if any(
+            rule.relation == RelationType.FORBIDDEN_WALL
+            for rule in _rel_rules(left[-1], right[0])
+        ):
+            return True
+    return False
+
+
+def _swap_orders(
+    blocks: Sequence[List[ProgramRoom]], budget: int = 20,
+) -> List[List[List[ProgramRoom]]]:
+    """Identity plus every single swap of two blocks, forbidden-free only."""
+    base = [list(b) for b in blocks]
+    orders: List[List[List[ProgramRoom]]] = [base]
+    for i in range(len(base)):
+        for j in range(i + 1, len(base)):
+            if len(orders) > budget:
+                return orders
+            candidate = [list(b) for b in base]
+            candidate[i], candidate[j] = candidate[j], candidate[i]
+            if _forbidden_boundary(candidate):
+                continue
+            orders.append(candidate)
+    return orders
+
+
+def _align_wet_stacks(
+    ctx: PlateContext,
+    results: List[FloorPlanResult],
+    working: Dict[int, List[ProgramRoom]],
+    assignments: Dict[int, Tuple[set, set]],
+    band_depth: float,
+    profile_id: str,
+) -> None:
+    """Re-order a storey's bands so its wet rooms sit over the storey below.
+
+    Sharing one band depth and one programme made this hold by accident; a
+    programme that differs by storey (a study added upstairs, a bathroom moved)
+    could put an upstairs ensuite over a bedroom while the certificate still
+    claimed VERT-01. The repair is a bounded, deterministic block swap inside
+    the band that improves frontage coverage, and it is disclosed when used.
+    """
+    if len(results) < 2:
+        return
+    area_bias = _profile_area_bias(profile_id)
+    rear_depth = round(ctx.depth - band_depth - ctx.corridor_depth, 4)
+    south_start = ctx.core_column_width + ctx.lobby_width
+
+    for z in range(1, len(results)):
+        lower, current = results[z - 1], results[z]
+        if not lower.rooms or not current.rooms:
+            continue
+        lower_wet = _wet_intervals(lower.rooms)
+        if not lower_wet:
+            continue
+        current_wet = _wet_intervals(current.rooms)
+        if not current_wet:
+            continue
+
+        def coverage(rooms: Sequence[MultiFloorRoomRectangle]) -> float:
+            wet = covered = 0.0
+            for room in rooms:
+                spec = ONTOLOGY.get_space(room.space_type_id) if room.space_type_id else None
+                if spec is None or not spec.is_wet:
+                    continue
+                wet += float(room.width_m)
+                covered += sum(
+                    max(0.0, min(room.x + room.width_m, b) - max(room.x, a))
+                    for a, b in lower_wet
+                )
+            return covered / wet if wet > 0 else 1.0
+
+        baseline = coverage(current.rooms)
+        if baseline >= 0.999:
+            continue
+
+        blocks = _must_components(working.get(z, []))
+        south_idx, north_idx = assignments.get(z, (set(), set()))
+        south_blocks = [blocks[i] for i in sorted(south_idx)]
+        north_blocks = [blocks[i] for i in sorted(north_idx)]
+        south_rooms = [r for b in south_blocks for r in b]
+        north_rooms = [r for b in north_blocks for r in b]
+        south_widths, _ = _band_allocation(
+            south_rooms, ctx.south_width, band_depth, area_bias,
+        ) if south_rooms else ({}, [])
+        north_widths, _ = _band_allocation(
+            north_rooms, ctx.width, rear_depth, area_bias,
+        ) if north_rooms else ({}, [])
+        if south_widths is None or north_widths is None:
+            continue
+
+        base_south = [list(b) for b in south_blocks]
+        base_north = [list(b) for b in north_blocks]
+        candidates: List[Dict[str, List[List[ProgramRoom]]]] = []
+        for order in _swap_orders(base_south):
+            candidates.append({"south": order, "north": [list(b) for b in base_north]})
+        for order in _swap_orders(base_north):
+            candidates.append({"south": [list(b) for b in base_south], "north": order})
+        # A wet room can also be on the wrong SIDE of the spine: only a
+        # cross-band move puts it over the storey below.
+        for i in range(len(base_south)):
+            for j in range(len(base_north)):
+                crossed_s = [list(b) for b in base_south]
+                crossed_n = [list(b) for b in base_north]
+                crossed_s[i], crossed_n[j] = crossed_n[j], crossed_s[i]
+                if _forbidden_boundary(crossed_s) or _forbidden_boundary(crossed_n):
+                    continue
+                candidates.append({"south": crossed_s, "north": crossed_n})
+
+        best_covered = baseline
+        best_forced: Optional[Dict[str, List[List[ProgramRoom]]]] = None
+        for forced in candidates:
+            candidate_south = [r for b in forced["south"] for r in b]
+            candidate_north = [r for b in forced["north"] for r in b]
+            c_south_w, _ = _band_allocation(
+                candidate_south, ctx.south_width, band_depth, area_bias,
+            ) if candidate_south else ({}, [])
+            c_north_w, _ = _band_allocation(
+                candidate_north, ctx.width, rear_depth, area_bias,
+            ) if candidate_north else ({}, [])
+            if c_south_w is None or c_north_w is None:
+                continue
+            s_wet, s_cov = _band_wet_span(forced["south"], c_south_w, south_start, lower_wet)
+            n_wet, n_cov = _band_wet_span(forced["north"], c_north_w, 0.0, lower_wet)
+            total_wet = s_wet + n_wet
+            if total_wet <= 0.0:
+                continue
+            score = (s_cov + n_cov) / total_wet
+            if score <= best_covered + 1e-6:
+                continue
+            best_covered = score
+            best_forced = forced
+
+        if best_forced is None:
+            continue
+        rebuilt = _local_bands(
+            ctx, z, profile_id, south_blocks, north_blocks, band_depth,
+            current.floor_name, current.dropped, forced_order=best_forced,
+        )
+        after = coverage(rebuilt.rooms) if rebuilt.rooms else 0.0
+        if after <= coverage(current.rooms) + 1e-6:
+            continue
+        rebuilt.warnings.insert(
+            0,
+            f"WET-STACK-ALIGN: floor {z} bands re-ordered so its wet rooms sit over "
+            f"the floor below (frontage over wet: {baseline * 100:.0f}% -> "
+            f"{after * 100:.0f}%).",
+        )
+        results[z] = rebuilt
+
+
+def _stamp_room_max_claims(results: Sequence[FloorPlanResult]) -> None:
+    """Disclose any final room a band could not keep in proportion.
+
+    ``_local_bands`` already discloses from the rectangles it built, but a floor
+    can be rebuilt for wet-stack alignment afterwards. This second pass reads the
+    final geometry and adds a line only for rooms nothing has named yet.
+    """
+    for floor in results:
+        if not floor.rooms:
+            continue
+        named = " ".join(
+            line for line in floor.warnings if line.startswith("ROOM-MAX")
+        )
+        offenders = []
+        for room in floor.rooms:
+            if room.zone_category in ("circulation", "terrace"):
+                continue
+            spec = ONTOLOGY.get_space(room.space_type_id) if room.space_type_id else None
+            if spec is None or spec.max_aspect_ratio <= 0:
+                continue
+            if room.aspect_ratio <= spec.max_aspect_ratio + 0.02:
+                continue
+            if room.room_id in named:
+                continue
+            offenders.append(
+                f"{room.room_id} {room.width_m:.2f}x{room.depth_m:.2f} m "
+                f"= 1:{room.aspect_ratio:.2f} (limit 1:{spec.max_aspect_ratio:.2f})"
+            )
+        if offenders:
+            floor.warnings.append(
+                f"ROOM-MAX: floor {floor.floor_index} keeps "
+                f"{'; '.join(offenders)} outside the catalogue proportion at this "
+                f"plate; the geometry is final and the overrun is disclosed here "
+                f"rather than hidden."
+            )
+
+
+def _stamp_wet_stack_claims(results: Sequence[FloorPlanResult]) -> None:
+    """Only label a wet room VERT-01 when the geometry actually stacks it.
+
+    Every wet room used to carry ``VERT-01-WET-STACK-ALIGN`` unconditionally, so
+    a bathroom hanging over a bedroom still read as aligned. The rule is now
+    stamped from the measured frontage coverage, and a room that stays
+    unaligned loses the claim and gains a numbered warning instead.
+    """
+    for z, floor in enumerate(results):
+        if z == 0 or not floor.rooms:
+            continue
+        lower_wet = _wet_intervals(results[z - 1].rooms)
+        if not lower_wet:
+            continue
+        for room in floor.rooms:
+            spec = ONTOLOGY.get_space(room.space_type_id) if room.space_type_id else None
+            if spec is None or not spec.is_wet:
+                continue
+            span = max(float(room.width_m), 0.01)
+            covered = sum(
+                max(0.0, min(room.x + room.width_m, b) - max(room.x, a))
+                for a, b in lower_wet
+            )
+            coverage = min(covered, span) / span
+            if coverage >= 0.5:
+                continue
+            room.applied_rules = [
+                rule for rule in room.applied_rules
+                if rule != "VERT-01-WET-STACK-ALIGN"
+            ]
+            floor.warnings.append(
+                f"WET-STACK: floor {z} {room.room_id} sits {coverage * 100:.0f}% over a "
+                f"wet room on floor {z - 1}; the VERT-01 alignment claim is withdrawn "
+                f"for this room rather than asserted."
+            )
+
+
 def solve_rectangular_plate(
     ctx: PlateContext,
     *,
@@ -1245,6 +1752,11 @@ def solve_rectangular_plate(
             _floor_name(z), dropped,
         )
         out.append(result)
+    # VERT-01: an upper-storey wet room must sit over one below. Programmes
+    # differ by storey, so the shared band depth alone does not guarantee it.
+    _align_wet_stacks(ctx, out, working, assignments, band_depth, profile_id)
+    _stamp_wet_stack_claims(out)
+    _stamp_room_max_claims(out)
     return out
 
 

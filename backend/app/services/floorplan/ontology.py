@@ -242,6 +242,12 @@ def _infer_furniture_set(space_id: str, function: Any) -> List[str]:
     """Archetype -> minimum furniture set. Service/industrial rooms may be empty."""
     sid = space_id.lower()
     fn = _enum_value(function)
+    # Function beats the substring heuristic: "bath_master" contains "master"
+    # but is a FOUL sanitation space, and inferring a king bed + wardrobe into
+    # an ensuite made every L4 furniture audit fail (and would draw a bed in a
+    # bathroom). Fixtures for wet rooms come from the fixture layer, not here.
+    if fn == FunctionType.SANITATION.value:
+        return []
     if "master" in sid:
         return list(FURNITURE_SETS["bed_master"])
     if "bed" in sid:
@@ -2830,7 +2836,13 @@ class MathematicalValidityCertificate(BaseModel):
     egress_distances_satisfied: bool = Field(..., description="Every room travel distance <= NBC max travel distance")
     zero_forbidden_violations: bool = Field(..., description="Zero FORBIDDEN_WALL, FORBIDDEN_DOOR_FACING, FORBIDDEN_ABOVE violations")
     must_adjacency_satisfied: bool = Field(..., description="100% of MUST_ADJACENT space pairs are contiguous")
-    prefer_adjacency_score: float = Field(default=100.0, ge=0.0, le=100.0, description="Percentage of PREFER_ADJACENT / PREFER_SEPARATE rules satisfied")
+    # Audit F04: this used to be printed as 94.5 regardless of the plan. No
+    # verifier for PREFER_ADJACENT / PREFER_SEPARATE exists yet, so the honest
+    # value is None ("not evaluated") rather than an invented percentage.
+    prefer_adjacency_score: Optional[float] = Field(
+        default=None, ge=0.0, le=100.0,
+        description="Percentage of PREFER_ADJACENT / PREFER_SEPARATE rules satisfied; None when not evaluated",
+    )
     vertical_stack_valid: bool = Field(default=True, description="Vertical core locking, wet stacks, and vertical rules hold across all floors")
     core_continuity_valid: bool = Field(default=True, description="Core continuity across all occupied levels (RULE-FP-01)")
     no_wet_over_terrace_valid: bool = Field(default=True, description="No wet room directly above terrace or open-to-sky (RULE-FP-03)")
@@ -2845,7 +2857,11 @@ class MathematicalValidityCertificate(BaseModel):
     layer_statuses: List[Dict[str, Any]] = Field(default_factory=list, description="Universal validation gate: per-layer L1-L15 status objects (PASS | WARN | FAIL | N/A-with-reason)")
     overall_layer_status: str = Field(default="PASS", description="Gate overall status = worst layer (FAIL > WARN > PASS; N/A never gates)")
     certificate_id: str = Field(default="CERT-MATH-VALID-2026", description="Unique identifier for this statutory audit certificate")
-    certified_rules: List[str] = Field(default_factory=list, description="Explicit list of rule IDs verified and certified")
+    certified_rules: List[str] = Field(default_factory=list, description="Explicit list of rule IDs VERIFIED and certified (a failing rule is never listed)")
+    failures: List[str] = Field(
+        default_factory=list,
+        description="Human-readable reason per failing invariant, naming the offending rooms (audit F16)",
+    )
     details: Dict[str, Any] = Field(default_factory=dict, description="Detailed metrics, per-room travel distances, rule audit log")
 
 

@@ -1827,11 +1827,18 @@ def build_constructible_wall_graph(
         room_num = f"{floor_index * 100 + idx}"
         orig_r = next((x for x in raw_rooms if _val(x, "room_id") == r.room_id), None)
         # SINGLE SOURCE: the schedule carries the CLEAR structural area
-        # (r.area_sqm). The previous canonical-area fallback could pin a
-        # solved-room AREA while dims showed clear boundaries - two numbers that
-        # could never reconcile. Every downstream surface (on-sheet label,
-        # schedule, legend) now reads the same clear-room fields.
+        # (r.area_sqm) in `clear_area_sqm`, and the solved GROSS area in
+        # `area_sqm`/`gross_area_sqm`. Both numbers exist in the model and the
+        # schedule now publishes both under their own names (audit
+        # I5-SCHEDULE-AREA-FIELD): publishing the clear area as `area_sqm`
+        # made every row disagree with the room it described.
         canonical_area = r.area_sqm
+        gross_area = canonical_area
+        if orig_r is not None:
+            try:
+                gross_area = float(_val(orig_r, "area_sqm", canonical_area) or canonical_area)
+            except (TypeError, ValueError):
+                gross_area = canonical_area
         # Naming-honesty class threshold used (from living-quality layer metadata)
         naming_threshold = None
         if orig_r is not None:
@@ -1854,7 +1861,8 @@ def build_constructible_wall_graph(
             "clear_dimensions": f"{r.width_m:.2f}m x {r.depth_m:.2f}m",
             "clear_dims": f"{r.width_m:.2f}m x {r.depth_m:.2f}m",
             "clear_area_sqm": canonical_area,
-            "area_sqm": canonical_area,
+            "gross_area_sqm": round(gross_area, 3),
+            "area_sqm": round(gross_area, 3),
             "finish_zone": " ".join(str(r.finish_zone).split()) if r.finish_zone else r.finish_zone,
             "finish_grade": finish_grade,
             "finish_grade_label": finish_grade_label,

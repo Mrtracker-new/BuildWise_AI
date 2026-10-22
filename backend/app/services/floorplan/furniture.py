@@ -430,15 +430,22 @@ def repair_room_envelopes_for_furniture(rooms: Sequence[object]) -> List[str]:
     warnings: List[str] = []
     proportion_shortfalls: List[str] = []
     rows: dict[Tuple[float, float], List[object]] = {}
+    # Circulation spines, cores and terraces are STRUCTURE, not furniture
+    # clients: they keep their width and are re-laid out only as fixed spacers
+    # so a row rebalance can never slide a bedroom across the service spine
+    # (which produced a real 3.21 m² overlap; audit F03's re-enabled hard
+    # verifier caught it).
+    fixed_ids: set = set()
     for room in rooms:
-        if getattr(room, "zone_category", "") in ("circulation", "terrace"):
-            continue
-        if getattr(room, "is_vertical_core", False):
-            continue
         if float(getattr(room, "width_m", 0.0)) <= 0.01 or float(getattr(room, "depth_m", 0.0)) <= 0.01:
             continue
         key = (round(float(getattr(room, "y", 0.0)), 2), round(float(getattr(room, "depth_m", 0.0)), 2))
         rows.setdefault(key, []).append(room)
+        if (
+            getattr(room, "zone_category", "") in ("circulation", "terrace")
+            or getattr(room, "is_vertical_core", False)
+        ):
+            fixed_ids.add(id(room))
 
     for _key, row in rows.items():
         if len(row) < 2:
@@ -449,8 +456,19 @@ def repair_room_envelopes_for_furniture(rooms: Sequence[object]) -> List[str]:
         soft_mins: List[float] = []
         furniture_widths: List[float] = []
         width_floors: List[float] = []
+        flexible = [room for room in row if id(room) not in fixed_ids]
+        if not flexible:
+            continue
         for room in row:
             depth = float(getattr(room, "depth_m", 0.0))
+            if id(room) in fixed_ids:
+                # Fixed spacer: its current width IS its demand.
+                current = round(float(getattr(room, "width_m", 0.0)), 2)
+                furniture_widths.append(current)
+                width_floors.append(current)
+                hard_mins.append(current)
+                soft_mins.append(current)
+                continue
             sid = getattr(room, "space_type_id", None)
             rid = str(getattr(room, "room_id", ""))
             if not sid:
@@ -543,14 +561,21 @@ def repair_room_envelopes_for_furniture(rooms: Sequence[object]) -> List[str]:
             continue
 
         extra = total - sum(needs)
-        weights = [max(0.01, float(getattr(room, "width_m", 0.0)) - need)
-                   for room, need in zip(row, needs)]
-        wsum = sum(weights) or 1.0
+        weights = [
+            (0.0 if id(room) in fixed_ids
+             else max(0.01, float(getattr(room, "width_m", 0.0)) - need))
+            for room, need in zip(row, needs)
+        ]
+        wsum = sum(weights)
+        if wsum <= 0.0:
+            continue
         widths = [round(need + extra * weight / wsum, 2)
                   for need, weight in zip(needs, weights)]
         delta = round(total - sum(widths), 2)
-        if widths:
-            widths[-1] = round(widths[-1] + delta, 2)
+        # Absorb rounding in a FLEXIBLE room, never in a fixed spacer.
+        flexible_idx = next((i for i, room in enumerate(row) if id(room) not in fixed_ids), None)
+        if flexible_idx is not None:
+            widths[flexible_idx] = round(widths[flexible_idx] + delta, 2)
         if abs(sum(widths) - total) > 0.02:
             continue
 

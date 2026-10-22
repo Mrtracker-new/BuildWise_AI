@@ -2676,6 +2676,13 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
     margin_x = 75.0
     margin_y = 75.0
     schedules_panel_h = 282.0
+    # The ROOM SCHEDULE prints EVERY solved room - a table that stops at six
+    # rows silently drops rooms off the sheet (audit I5-SVG-SCHEDULE-TRUNCATED).
+    # Extra rows extend the schedule panel and push every later anchor down by
+    # the same amount, so nothing overlaps the canvas edge.
+    _room_row_count = len(ir.room_schedule or [])
+    _room_tbl_h = 29.0 + (_room_row_count * 10.5)
+    _room_extra_px = max(0.0, (_room_row_count - 6) * 10.5)
     content_w = ir.envelope_w * scale
     content_h = ir.envelope_d * scale
     svg_w = int(content_w + 2.0 * margin_x)
@@ -2689,6 +2696,7 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
     _narrow = svg_w < 560
     if getattr(getattr(ir, "header", None), "layer_statuses", None):
         schedules_panel_h += 470.0 if _narrow else 356.0
+    schedules_panel_h += _room_extra_px
     # Banner gap planned UPFRONT: schedules_y must clear the REAL banner
     # bottom (name + typology + wrapped stamp + entrance/NBC + policy).
     if ir.header.floor_index >= 0:
@@ -2739,7 +2747,9 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
         # when the schedule tables are laid out below (door -> window -> room
         # -> stair -> gate), then the legend block + its wrapped lines.
         _lt_y_plan = schedules_y + (
-            (54.0 + 88.0 + 88.0 + 152.0 + 112.0) if _narrow else (54.0 + 82.0 + 205.0)
+            (54.0 + 88.0 + 88.0 + (_room_tbl_h + 60.0) + 112.0)
+            if _narrow
+            else (54.0 + 82.0 + (113.0 + _room_tbl_h))
         )
         _legend_start = 29.0 + (15 * 10.5) + (16.0 if _warn_present else 4.0)
         scale_strip_y = _lt_y_plan + _legend_start + max(0, len(legend_lines) - 1) * 9.0 + 24.0
@@ -3319,17 +3329,19 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
         svg.append(f'  <g transform="translate({margin_x}, {room_tbl_y})">')
         svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">ROOM SCHEDULE</text>')
         r_cols = [24.0, 80.0, 40.0, 56.0]
-        r_heads = ["NO", "ROOM NAME", "AREA", "CLEAR W x D"]
+        r_heads = ["NO", "ROOM NAME", "CLEAR AREA", "CLEAR W x D"]
         cx = 0.0
         for h_txt, cw in zip(r_heads, r_cols):
             svg.append(f'    <text x="{cx:.1f}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">{h_txt}</text>')
             cx += cw
 
-        for r_idx, r_row in enumerate(ir.room_schedule[:6]):
+        for r_idx, r_row in enumerate(ir.room_schedule):
             ry_pos = 29.0 + (r_idx * 10.5)
             r_num = str(r_row.get("room_number", r_row.get("room_no", r_row.get("no", r_idx + 1))))
             r_name = _ellipsize_str(r_row.get("room_name", "Room"), 18)
-            area_val = r_row.get("area_sqm", r_row.get("clear_area_sqm", r_row.get("clear_area_m2", r_row.get("area", 0.0))))
+            # The AREA column is CLEAR interior area, so it reads the clear
+            # field by name and never falls back to the gross `area_sqm`.
+            area_val = r_row.get("clear_area_sqm", r_row.get("clear_area_m2", r_row.get("area_sqm", r_row.get("area", 0.0))))
             r_area = f"{_safe_float(area_val, 0.0):.1f}m²"
             r_dims = r_row.get("clear_dimensions", r_row.get("clear_dims"))
             if not r_dims:
@@ -3344,7 +3356,7 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
         # margin_x/room_tbl_y) - the old absolute naming_y double-translated and
         # pushed this block off-canvas.
         naming_rows = [rr for rr in ir.room_schedule if rr.get("naming_threshold_used")]
-        naming_rel_y = 29.0 + (6 * 10.5) + 8.0
+        naming_rel_y = 29.0 + (_room_row_count * 10.5) + 8.0
         svg.append(f'  <g transform="translate(0, {naming_rel_y:.1f})">')
         thresholds_line = "ROOM CLASS THRESHOLDS (NAMING HONESTY): Master Suite >= 14.0m² incl. wardrobe zone | Master Bedroom >= 11.5m² | Bedroom >= 9.5m²"
         thresholds_max = int((svg_w - margin_x - 12.0) / (6.0 * 0.60))
@@ -3362,7 +3374,7 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
         # first column always clears the ROOM SCHEDULE area on narrow plots.
         if _narrow_stack:
             stair_tbl_x = margin_x
-            stair_tbl_y = room_tbl_y + 152.0
+            stair_tbl_y = room_tbl_y + _room_tbl_h + 60.0
         else:
             stair_tbl_x = max(margin_x + 200.0, win_tbl_x)
             stair_tbl_y = room_tbl_y
@@ -3416,7 +3428,8 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
             # can anchor below the legend's true end. Nothing is recomputed
             # here; lt_x/lt_y come from the table anchors built just above.
             lt_x = margin_x
-            lt_y = (stair_tbl_y + 112.0) if _narrow_stack else (room_tbl_y + 205.0)
+            lt_y = ((stair_tbl_y + 112.0) if _narrow_stack
+                    else (room_tbl_y + 113.0 + _room_tbl_h))
             status_fill = {"PASS": "#047857", "WARN": "#B45309", "FAIL": "#DC2626", "N/A": "#64748B"}
             svg.append(f'  <g transform="translate({lt_x}, {lt_y})">')
             svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">VALIDATION GATE - LAYERS L1-L15 (OVERALL: {html.escape(str(getattr(ir.header, "overall_layer_status", "PASS")))})</text>')

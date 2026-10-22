@@ -22,12 +22,13 @@ Layer map:
   L14 Fire & egress                     (engineering)
   L15 Programme completeness            (essential rooms present per typology/unit)
 
-Overall status = worst layer (FAIL > WARN > N/A > PASS > N/A is never worse
-than WARN unless no other signal exists...). Concretely:
+Overall status = worst layer (FAIL > WARN > N/A > PASS). Concretely:
   overall = FAIL if any FAIL
   else WARN if any WARN
   else PASS
-N/A layers never gate validity: they are recorded with explicit reasons.
+A layer that genuinely does not apply is recorded N/A WITH AN EXPLICIT REASON
+and never counts as a pass. A layer whose evaluator DID NOT RUN is a FAIL: an
+absent evaluator is not evidence of compliance (audit F20).
 """
 
 import logging
@@ -65,6 +66,27 @@ STATUS_ORDER = {"PASS": 0, "N/A": 1, "WARN": 2, "FAIL": 3}
 # Layers whose FAIL invalidates the whole certificate (hard layers).
 HARD_FAIL_LAYERS = {"L1", "L2", "L8", "L14", "L15"}
 
+# Land-economics checks that a plan can DISPROVE (geometry/statutory facts).
+# These are L1-bearing: a PASS gate beside a failing land certificate is a
+# contradiction (audit F05). Planning ratios are advisory (WARN), not provable
+# violations of a law.
+_LAND_ADVISORY_CHECKS = {"circulation_within_12_20", "footprint_utilization_90"}
+
+_LAND_CHECK_LABELS = {
+    "site_plan_present": "site plan present",
+    "site_plan": "site plan present",
+    "geometry": "land geometry readable",
+    "footprint_contained_in_buildable": "footprint inside the setback buildable",
+    "coverage_within_limit": "ground coverage within the statutory limit",
+    "program_fits_footprint": "programme fits the footprint",
+    "interior_dead_corners_zero": "no interior dead corner >= 1 m²",
+    "residuals_labelled": "every residual labelled",
+    "anonymous_outdoor_zero": "no anonymous outdoor sliver",
+    "circulation_within_12_20": "circulation ratio within the 12-20% band",
+    "footprint_utilization_90": "footprint utilisation >= 90%",
+    "furniture_fit": "furniture sets fit their rooms",
+}
+
 
 @dataclass
 class LayerStatus:
@@ -96,6 +118,17 @@ class LayerStatus:
         return d
 
 
+def crash_status(layer_id: str) -> str:
+    """Status for a layer whose evaluator CRASHED.
+
+    A crashed evaluator verified nothing. For a hard layer that is a FAIL (the
+    plan cannot be certified on an unverified claim); for an advisory layer the
+    gate records a WARN so the crash stays visible without voiding a geometry
+    the other layers did verify (audit F20).
+    """
+    return "FAIL" if layer_id in HARD_FAIL_LAYERS else "WARN"
+
+
 def make_layer(layer_id: str, status: str, summary: str = "",
                reason: Optional[str] = None, findings: Optional[List[str]] = None,
                citation: Optional[str] = None,
@@ -112,6 +145,24 @@ def make_layer(layer_id: str, status: str, summary: str = "",
         findings = [summary]
     return LayerStatus(layer_id, LAYER_TITLES.get(layer_id, layer_id), st,
                        summary, reason, findings, citation, details)
+
+
+def ensure_all_layers(layers: List[LayerStatus]) -> List[LayerStatus]:
+    """Append a FAIL row for every declared layer that nobody evaluated.
+
+    The gate may NEVER return fewer layers than its contract declares: a
+    missing evaluator is an unverified claim, and an unverified claim fails
+    (audit F20).
+    """
+    present = {l.layer_id for l in layers}
+    for lid in LAYER_IDS:
+        if lid not in present:
+            layers.append(make_layer(
+                lid, "FAIL",
+                summary=f"{LAYER_TITLES.get(lid, lid)} was not evaluated",
+                findings=["Layer evaluator did not run - an absent evaluator cannot pass"],
+            ))
+    return layers
 
 
 def overall_status(layers: List[LayerStatus]) -> str:
@@ -311,6 +362,7 @@ def build_gate_layers(
     pi_warns: List[str],
     statutory_audit: Dict[str, Any],
     plate_masks: Any = None,
+    land_cert: Any = None,
 ) -> List[Dict[str, Any]]:
     """
     Runs the universal gate over ALL layers L1-L15 and returns the serialized
@@ -371,12 +423,57 @@ def build_gate_layers(
             + ", ".join(str(z) for z in chain_audit["floors_without_chains"])
             + " - dimension set-out not machine-verified (silent-skip guard)"
         )
+    # LAND IS GATE-BEARING (audit F05): the space-efficiency certificate used
+    # to be a side panel, so a generation could report PASS beside a FAILing
+    # land certificate. Geometry/statutory land checks now decide L1.
+    _land_fail: List[str] = []
+    _land_advisory: List[str] = []
+    if land_cert is not None:
+        # Accept either the report or its certificate.
+        _land_report = land_cert
+        _land_cert = getattr(land_cert, "certificate", land_cert)
+        _need = float(getattr(_land_report, "program_needed_area_m2", 0.0) or 0.0)
+        _deficit = float(getattr(_land_report, "program_deficit_sqm", 0.0) or 0.0)
+        _deficit_ratio = (_deficit / _need) if _need > 0 else 0.0
+        for _name, _ok in (getattr(_land_cert, "checks", {}) or {}).items():
+            if _ok:
+                continue
+            _label = _LAND_CHECK_LABELS.get(_name, _name.replace("_", " "))
+            # A SMALL programme deficit is a tight-but-legal plate: the rooms
+            # are disclosed by name, the gate WARNs, and the status is
+            # "compromise". Only a material deficit (>15 %, the same threshold
+            # that refuses a collapsed brief) is a land FAIL. The certificate
+            # itself still reports the check as failed either way (audit F05).
+            _small_deficit = (
+                _name == "program_fits_footprint" and 0.0 < _deficit_ratio <= 0.15
+            )
+            if _name in _LAND_ADVISORY_CHECKS or _small_deficit:
+                _land_advisory.append(
+                    f"LAND: {_label} failed"
+                    + (f" ({_deficit:.1f} m² short, {_deficit_ratio * 100.0:.1f}%)"
+                       if _name == "program_fits_footprint" else "")
+                )
+            else:
+                _land_fail.append(f"LAND: {_label} failed")
+        if _land_fail:
+            l1_status = "FAIL"
+            l1_findings.extend(_land_fail)
+        elif _land_advisory:
+            if l1_status == "PASS":
+                l1_status = "WARN"
+            l1_findings.extend(_land_advisory)
+    _land_note = ""
+    if _land_fail:
+        _land_note = f"; {len(_land_fail)} land check(s) failed"
+    elif _land_advisory:
+        _land_note = f"; {len(_land_advisory)} land advisory"
     n_chains = int(chain_audit.get("chains_checked", 0) or 0)
     layers.append(make_layer(
         "L1", l1_status,
         summary=("All geometric & statutory invariants hold" if l1_status == "PASS"
                  else (min_dim_note or aspect_note or "Degraded but within tolerances"))
-        + (f"; {n_chains} dimension chains verified within 1mm" if n_chains else ""),
+        + (f"; {n_chains} dimension chains verified within 1mm" if n_chains else "")
+        + _land_note,
         findings=l1_findings,
         citation="NBC 2016 Part 3 / Part 8; engine invariants REL-01, CONT-01, DIM-01, CIRC-01, VERT-01..05",
     ))
@@ -467,7 +564,9 @@ def build_gate_layers(
         ))
     except Exception as exc:  # defensive: a layer engine bug must never kill the gate
         logger.exception("L9 ventilation layer crashed")
-        layers.append(make_layer("L9", "WARN", summary=f"Layer evaluation error: {exc}",
+        layers.append(make_layer("L9", crash_status("L9"),
+                                 summary=f"Layer evaluation error: {exc} - not verified",
+                                 findings=["Evaluator crashed; this layer is unverified"],
                                  reason=None, citation=None))
 
     try:
@@ -483,7 +582,9 @@ def build_gate_layers(
         ))
     except Exception as exc:
         logger.exception("L10 wet-core layer crashed")
-        layers.append(make_layer("L10", "WARN", summary=f"Layer evaluation error: {exc}"))
+        layers.append(make_layer("L10", crash_status("L10"),
+                                 summary=f"Layer evaluation error: {exc} - not verified",
+                                 findings=["Evaluator crashed; this layer is unverified"]))
 
     try:
         terr = compute_terrace_drainage(floors)
@@ -511,7 +612,9 @@ def build_gate_layers(
         ))
     except Exception as exc:
         logger.exception("L11 terrace-drainage layer crashed")
-        layers.append(make_layer("L11", "WARN", summary=f"Layer evaluation error: {exc}"))
+        layers.append(make_layer("L11", crash_status("L11"),
+                                 summary=f"Layer evaluation error: {exc} - not verified",
+                                 findings=["Evaluator crashed; this layer is unverified"]))
 
     try:
         struct = compute_structural_model(floors, typology,
@@ -535,7 +638,9 @@ def build_gate_layers(
         ))
     except Exception as exc:
         logger.exception("L12 structural layer crashed")
-        layers.append(make_layer("L12", "WARN", summary=f"Layer evaluation error: {exc}"))
+        layers.append(make_layer("L12", crash_status("L12"),
+                                 summary=f"Layer evaluation error: {exc} - not verified",
+                                 findings=["Evaluator crashed; this layer is unverified"]))
 
     try:
         acc = compute_accessibility_audit(floors, typology)
@@ -552,7 +657,9 @@ def build_gate_layers(
         ))
     except Exception as exc:
         logger.exception("L13 accessibility layer crashed")
-        layers.append(make_layer("L13", "WARN", summary=f"Layer evaluation error: {exc}"))
+        layers.append(make_layer("L13", crash_status("L13"),
+                                 summary=f"Layer evaluation error: {exc} - not verified",
+                                 findings=["Evaluator crashed; this layer is unverified"]))
 
     try:
         occ = int(statutory_audit.get("occupant_load", 0) or 0)
@@ -570,7 +677,9 @@ def build_gate_layers(
         ))
     except Exception as exc:
         logger.exception("L14 fire-egress layer crashed")
-        layers.append(make_layer("L14", "WARN", summary=f"Layer evaluation error: {exc}"))
+        layers.append(make_layer("L14", crash_status("L14"),
+                                 summary=f"Layer evaluation error: {exc} - not verified",
+                                 findings=["Evaluator crashed; this layer is unverified"]))
 
     # ---------------------------------------------------------------- L15
     try:
@@ -595,14 +704,45 @@ def build_gate_layers(
                                  findings=["Essential rooms could not be verified"],
                                  citation="NBC 2016 Part 3 occupancy requirements"))
 
-    # Enforce completeness: the gate may NEVER return fewer layers than declared.
-    present = {l.layer_id for l in layers}
-    for lid in LAYER_IDS:
-        if lid not in present:
-            layers.append(make_layer(lid, "N/A", reason="Layer evaluator did not run - recorded, never skipped"))
+    # Enforce completeness: every declared layer is present or explicitly FAILs.
+    layers = ensure_all_layers(layers)
 
     layers.sort(key=lambda l: LAYER_IDS.index(l.layer_id))
     return [l.to_dict() for l in layers]
+
+
+def refusal_gate_report(reason: str) -> Dict[str, Any]:
+    """Gate payload for a REFUSED generation (no geometry was solved).
+
+    A refusal is a verdict, not an absence: the caller must still receive the
+    full L1-L15 contract, every layer explicitly N/A WITH the refusal reason,
+    and an overall FAIL. Emitting no gate at all let a refused plan look like
+    a plan whose gate had never been asked for (audit F20: absence is not a
+    pass), and gave the certificate/UI surfaces nothing to render.
+    """
+    note = (str(reason or "").strip() or "Generation refused before any geometry was solved")
+    layers: List[LayerStatus] = [
+        make_layer(
+            lid, "N/A",
+            summary="Not evaluated: generation refused",
+            reason=note,
+            findings=["No geometry to evaluate - the brief was refused, not certified"],
+        )
+        for lid in LAYER_IDS
+    ]
+    dicts = [l.to_dict() for l in layers]
+    return {
+        "layer_ids": list(LAYER_IDS),
+        "layers": dicts,
+        "overall_status": "FAIL",
+        "validated_layers": [],
+        "n_a_layers": [{"layer_id": d["layer_id"], "reason": note} for d in dicts],
+        "llm_boundary": {"events": [], "event_ids": []},
+        "evaluated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "contract": "universal_gate_v1",
+        "refused": True,
+        "refusal_reason": note,
+    }
 
 
 def assemble_gate_report(layer_dicts: List[Dict[str, Any]],

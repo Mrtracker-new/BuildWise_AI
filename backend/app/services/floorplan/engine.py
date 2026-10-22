@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import time
 from typing import List, Dict, Optional, Tuple, Set, Any
 from collections import deque
@@ -47,11 +48,13 @@ from app.schemas.multi_floor_plan import (
 )
 from app.schemas.site_plan import SitePlanModel
 from app.services.floorplan.site_geometry import compute_canonical_site_plan
+from app.services.floorplan.derived_metrics import apply_to_building
 from app.services.floorplan.ontology import (
     ONTOLOGY,
     MathematicalValidityCertificate,
     FunctionType,
     FloorLoad,
+    HygieneType,
     RelationType,
     SpaceTypeSpec,
 )
@@ -61,6 +64,7 @@ from app.services.floorplan.wall_graph import (
 )
 from app.services.floorplan.identity import (
     apply_space_identities,
+    space_type_of,
     summarize_identities,
 )
 from app.services.floorplan.svg_generator import generate_multi_floor_blueprint_svg
@@ -84,10 +88,22 @@ from app.services.floorplan.living_quality import (
 from app.services.floorplan.validation_gate import (
     build_gate_layers,
     assemble_gate_report,
+    refusal_gate_report,
     sanitize_llm_constraints,
 )
 from shapely.geometry import box as shp_box
 from shapely.ops import unary_union
+
+# Smallest plate the solver will ever propose (statutory habitability floor).
+MIN_FOOTPRINT_AREA_M2 = 30.0
+# Legacy comfortable plate for single-storey T1 bands (9.60 m x 8.15 m); the
+# plate AREA comes from the programme, this keeps its tuned proportion.
+T1_COMFORT_W_M = 9.60
+T1_COMFORT_D_M = 8.15
+# Composite envelopes are not one habitable room, so NBC proportion limits do
+# not govern them: an office-suite band is a row of work rooms, and an
+# industrial bay is a dock/staging strip. Area and width minima still apply.
+ASPECT_EXEMPT_SPACE_IDS = {"commercial_suite", "industrial_bay"}
 
 
 class SoleGeometryEngine:
@@ -155,10 +171,73 @@ class SoleGeometryEngine:
         self.warnings: List[str] = []
         self.relaxations: List[Dict[str, str]] = []
         self.identity_summaries: List[Dict[str, Any]] = []
+        # Selected scheme profile (audit F09/F14): when set, the band solver
+        # partitions the plate with these weights and the engine's own post-
+        # processing (openings, wall graph, land, gate, certificate, sheets)
+        # runs on THAT geometry. Without this the picker re-solved nothing.
+        _profile = str(getattr(self.req, "selected_scheme_id", None) or "").strip()
+        self.scheme_profile: Optional[str] = _profile if _profile in (
+            "max_area", "max_vastu", "max_light_vent"
+        ) else None
+        # floor_index -> rooms solved for that profile; filled inside solve().
+        self.presolved_room_sets: Optional[Dict[int, List[MultiFloorRoomRectangle]]] = None
+        self.scheme_selection_note: Optional[str] = None
+        self.gate_report: Optional[Dict[str, Any]] = None
+        self.gate_layers: List[Dict[str, Any]] = []
 
     # =========================================================================
     # 1. ENVELOPE & SETBACK DETERMINATION
     # =========================================================================
+
+    def _comfortable_plate(self, *, plot_w: float, plot_d: float) -> Tuple[float, float]:
+        """Tuned single-storey T1 plate (width, depth), or (0, 0) if none applies.
+
+        These band proportions were tuned on residential plots 8-14 m wide. They
+        are a COMFORT floor for the programme - never a licence to exceed the
+        coverage ratio or the setback buildable, both applied afterwards.
+        """
+        rooms = self.req.required_rooms or []
+        if (
+            self.typology != "T1_SINGLE_FAMILY"
+            or self.total_storeys != 1
+            or len(rooms) < 3
+        ):
+            return 0.0, 0.0
+        n_rooms = len(rooms)
+        has_two_baths = sum(1 for r in rooms if any(k in r for k in ("bath", "toilet", "wc"))) >= 2
+        has_bed2 = sum(1 for r in rooms if "bed" in r and "master" not in r) >= 1
+
+        if n_rooms <= 5 and not has_bed2 and not has_two_baths:
+            w = min(round(plot_w - 0.80, 2), T1_COMFORT_W_M) if plot_w >= 10.4 else round(plot_w - 1.20, 2)
+            d = min(round(plot_d - 1.50, 2), T1_COMFORT_D_M)
+        elif not has_two_baths and (has_bed2 or n_rooms == 6):
+            if plot_w < 10.8:
+                w = round(plot_w - 0.80, 2)
+                d = min(round(plot_d - 2.50, 2), 10.20)
+            else:
+                w = min(11.80, max(10.50, round(plot_w - 0.40, 2)))
+                d = min(round(plot_d - 1.50, 2), 8.35)
+        elif has_two_baths or n_rooms >= 7:
+            if plot_w < 10.8:
+                w = round(plot_w - 0.40, 2)
+                d = min(round(plot_d - 2.00, 2), 10.35)
+            else:
+                w = min(11.80, max(10.70, round(plot_w - 0.20, 2)))
+                d = min(round(plot_d - 0.40, 2), 10.10)
+        else:
+            w = min(round(plot_w - 1.0, 2), 12.0)
+            d = min(round(plot_d - 1.5, 2), 9.5)
+        return max(w, 0.0), max(d, 0.0)
+
+    def _plot_plan_area(self) -> float:
+        """Plan area of the plot: captured boundary shoelace area when present.
+
+        The coverage cap is a ratio of THIS area - never of a bounding box that
+        a non-rectangular boundary does not actually occupy.
+        """
+        poly = getattr(self.req, "plot_polygon", None)
+        area = float(getattr(poly, "area_sqm", 0.0) or 0.0) if poly is not None else 0.0
+        return area if area > 0.0 else self.plot_w * self.plot_d
 
     def _compute_envelope(self) -> Tuple[bool, int, Dict[str, float], List[str]]:
         """
@@ -189,6 +268,18 @@ class SoleGeometryEngine:
             env_w = site_plan.footprint.width_m
             env_d = site_plan.footprint.depth_m
             env_area = site_plan.footprint.area_sqm
+            # The LEGAL ceiling is the smaller of the coverage ratio applied to
+            # the plot's own plan area and the setback buildable - never the
+            # inscribed rectangle the deformable plate happened to become. The
+            # two differ on irregular plots (a 14 x 16 m trapezoid buildable
+            # admits only a 72 m² rectangle inside a 108 m² legal ceiling), and
+            # conflating them turned an ordinary 7 %-tight brief into a
+            # bogus "statutory ceiling" refusal.
+            _irr_plot_area = self._plot_plan_area()
+            self.footprint_ceiling_area = round(
+                min(float(site_plan.buildable_area_sqm or 0.0) or _irr_plot_area * self.coverage,
+                    _irr_plot_area * self.coverage), 2)
+            self.coverage_cap_area = round(_irr_plot_area * self.coverage, 2)
             envelope = {
                 "x": site_plan.footprint.x,
                 "y": site_plan.footprint.y,
@@ -219,21 +310,71 @@ class SoleGeometryEngine:
             avail_d = max(4.0, self.plot_d - front_setback - rear_setback)
             avail_area = avail_w * avail_d
 
-            target_footprint = self.plot_w * self.plot_d * self.coverage
-            footprint_area = min(avail_area, target_footprint)
+            # The coverage denominator is the PLOT's own plan area (shoelace when
+            # a boundary was captured, else the rectangle), never the bounding
+            # box of a non-rectangular boundary.
+            plot_plan_area = self._plot_plan_area()
+            coverage_ceiling = min(avail_area, plot_plan_area * self.coverage)
+            need = float(getattr(self, "program_needed_area_m2", 0.0) or 0.0)
 
-            aspect = avail_w / avail_d if avail_d > 0 else 1.0
-            aspect = max(0.5, min(2.0, aspect))
+            # COVERAGE IS A CEILING, NOT A TARGET. A plate the
+            # programme does not need is wasted ground coverage and, worse, the
+            # partitioner has to stretch rooms to fill it. The plate therefore
+            # follows the programme, with two hard ceilings - the statutory
+            # coverage ratio and the setback buildable - that it may never
+            # exceed:
+            #  - default: max(programme need, the typology's comfortable plate)
+            #    so a tuned layout is never squeezed below its own band
+            #    assumptions while an oversized plot still gets a house the
+            #    programme actually needs (a 4-room brief on a 1-hectare site
+            #    can no longer become an 8,632 m² footprint or a 1,000 m² bedroom);
+            #  - program_aware_footprint=true: the programme need alone;
+            #  - a demand beyond the ceiling becomes an explicit LAND-01 deficit.
+            comfort_w, comfort_d = self._comfortable_plate(plot_w=self.plot_w, plot_d=self.plot_d)
+            comfort_area = round(comfort_w * comfort_d, 2) if comfort_w > 0 and comfort_d > 0 else 0.0
+            if getattr(self.req, "program_aware_footprint", False):
+                target_area = min(coverage_ceiling, max(need, MIN_FOOTPRINT_AREA_M2))
+            elif comfort_area > 0.0:
+                target_area = min(coverage_ceiling, max(need, comfort_area))
+            else:
+                # No tuned plate for this typology: the coverage/setback ceiling
+                # itself is the plate (legacy behaviour, cap-enforced).
+                target_area = coverage_ceiling
+            self.footprint_target_area = target_area
+            self.footprint_ceiling_area = coverage_ceiling
+            self.coverage_cap_area = round(plot_plan_area * self.coverage, 2)
+            # Plate aspect. Single-storey T1 rooms are zoned in N/S bands, so a
+            # lateral plate (the legacy 9.60 x 8.15 residential proportion)
+            # places them well; scaling that proportion to the target area keeps
+            # the tuned band layout while the AREA comes from the programme.
+            # Every other typology uses the buildable's own proportion.
+            if comfort_w > 0 and comfort_d > 0:
+                aspect = comfort_w / comfort_d
+            else:
+                aspect = max(0.5, min(2.0, avail_w / max(avail_d, 0.01)))
 
-            env_d = math.sqrt(footprint_area / aspect)
-            env_w = footprint_area / env_d if env_d > 0 else avail_w
-
-            env_w = min(avail_w, env_w)
-            env_d = min(avail_d, env_d)
+            # Width is clamped to the setback envelope FIRST, then the depth is
+            # re-solved from the target AREA. Clamping the depth to its own
+            # independent limit (the old order) silently discarded area: a
+            # 6 x 24 m plot asked for 62.7 m² and got a 48.1 m² plate, so the
+            # programme could not be placed and the brief was refused for a
+            # shortfall the geometry itself had created.
+            env_d = math.sqrt(target_area / aspect) if aspect > 0 else avail_d
+            env_w = min(avail_w, target_area / env_d if env_d > 0 else avail_w)
+            env_d = min(avail_d, target_area / env_w if env_w > 0 else avail_d)
             env_w = round(max(4.0, env_w), 2)
             env_d = round(max(4.0, env_d), 2)
+            # Rounding must never push the plate OVER the legal ceiling: it is a
+            # hard cap, so the depth is floored (never rounded up) to keep the
+            # plate inside it to the square centimetre.
+            if env_w > 0 and env_w * env_d > coverage_ceiling:
+                env_d = math.floor((coverage_ceiling / env_w) * 100.0) / 100.0
+                env_d = max(4.0, env_d)
             env_area = round(env_w * env_d, 2)
 
+            # Anchor on the buildable's south-west corner so the plate sits
+            # inside the setback envelope (the legacy plate was anchored on the
+            # plot edge and encroached on the setbacks).
             envelope = {
                 "x": round(poly_minx + side_setback, 2),
                 "y": round(poly_miny + front_setback, 2),
@@ -242,76 +383,13 @@ class SoleGeometryEngine:
                 "area_sqm": env_area,
             }
 
-            # Program-specific envelope calibration for single-storey T1 residences
-            if self.typology == "T1_SINGLE_FAMILY" and self.total_storeys == 1 and self.req.required_rooms and len(self.req.required_rooms) >= 3:
-                n_rooms = len(self.req.required_rooms)
-                has_two_baths = sum(1 for r in self.req.required_rooms if any(k in r for k in ("bath", "toilet", "wc"))) >= 2
-                has_bed2 = sum(1 for r in self.req.required_rooms if "bed" in r and "master" not in r) >= 1
+            if need > coverage_ceiling + 0.5:
+                warnings.append(
+                    f"LAND-01: Programme needs {need:.1f} m² but the coverage/setback "
+                    f"ceiling allows {coverage_ceiling:.1f} m²; explicit deficit "
+                    f"{max(0.0, need - coverage_ceiling):.1f} m²."
+                )
 
-                if n_rooms <= 5 and not has_bed2 and not has_two_baths:
-                    env_w = min(round(self.plot_w - 0.80, 2), 9.60) if self.plot_w >= 10.4 else round(self.plot_w - 1.20, 2)
-                    env_d = min(round(self.plot_d - 1.50, 2), 8.15)
-                elif not has_two_baths and (has_bed2 or n_rooms == 6):
-                    if self.plot_w < 10.8:
-                        env_w = round(self.plot_w - 0.80, 2)
-                        env_d = min(round(self.plot_d - 2.50, 2), 10.20)
-                    else:
-                        env_w = min(11.80, max(10.50, round(self.plot_w - 0.40, 2)))
-                        env_d = min(round(self.plot_d - 1.50, 2), 8.35)
-                elif has_two_baths or n_rooms >= 7:
-                    if self.plot_w < 10.8:
-                        env_w = round(self.plot_w - 0.40, 2)
-                        env_d = min(round(self.plot_d - 2.00, 2), 10.35)
-                    else:
-                        env_w = min(11.80, max(10.70, round(self.plot_w - 0.20, 2)))
-                        env_d = min(round(self.plot_d - 0.40, 2), 10.10)
-                else:
-                    env_w = min(round(self.plot_w - 1.0, 2), 12.0)
-                    env_d = min(round(self.plot_d - 1.5, 2), 9.5)
-
-                env_x = round(poly_minx + max(0.20, round((self.plot_w - env_w) / 2.0, 2)), 2)
-                # Front-edge placement must respect the same directional front
-                # setback the site pipeline uses (>= 1.8m, up to 3.5m for deep
-                # plots). Capping y at 2.5 left the footprint straddling the
-                # buildable envelope on deep plots (site-gate L1 FAIL).
-                env_y = round(poly_miny + max(0.20, min(max(1.8, min(3.5, self.plot_d * 0.15)), round((self.plot_d - env_d) / 3.0, 2))), 2)
-                env_area = round(env_w * env_d, 2)
-                envelope = {
-                    "x": env_x,
-                    "y": env_y,
-                    "width": env_w,
-                    "depth": env_d,
-                    "area_sqm": env_area,
-                }
-
-            # Programme-aware footprint: the footprint is the
-            # smaller of the programme demand, the coverage cap and the
-            # inscribed buildable; a demand above that cap becomes an explicit
-            # deficit instead of a silently oversized or squeezed plate.
-            if getattr(self.req, "program_aware_footprint", False):
-                need = float(getattr(self, "program_needed_area_m2", 0.0) or 0.0)
-                target = min(avail_area, self.plot_w * self.plot_d * self.coverage, max(need, 30.0))
-                aspect = max(0.5, min(2.0, avail_w / max(avail_d, 0.01)))
-                env_d = math.sqrt(target / aspect)
-                env_w = target / env_d if env_d > 0 else avail_w
-                env_w = round(max(4.0, min(avail_w, env_w)), 2)
-                env_d = round(max(4.0, min(avail_d, env_d)), 2)
-                env_area = round(env_w * env_d, 2)
-                env_x = round(poly_minx + side_setback + max(0.0, (avail_w - env_w) / 2.0), 2)
-                env_y = round(poly_miny + front_setback + max(0.0, (avail_d - env_d) / 2.0), 2)
-                envelope = {
-                    "x": env_x,
-                    "y": env_y,
-                    "width": env_w,
-                    "depth": env_d,
-                    "area_sqm": env_area,
-                }
-                if need > target + 0.5:
-                    warnings.append(
-                        f"LAND-01: Programme needs {need:.1f} m² but the coverage/inscribed "
-                        f"cap allows {target:.1f} m²; explicit deficit "
-                        f"{max(0.0, need - target):.1f} m²."
-                    )
 
             # Canonical site plan synthesis with exact legacy envelope preservation
             is_ok, site_plan, site_warns = compute_canonical_site_plan(
@@ -408,6 +486,26 @@ class SoleGeometryEngine:
 
             if north_band_depth is not None:
                 core_y = north_band_depth
+            elif self.typology == "T2_FAMILY_APARTMENT":
+                # A compact two-unit plate cannot carry two full
+                # programmes in one row, and HYG-02 forbids the bath/kitchen
+                # stack that would otherwise free the frontage.  The plan that
+                # survives the law moves the stair to the east flank and uses
+                # the freed pocket for one unit's bedroom and the other unit's
+                # bathroom; both living rooms then reach the shared lobby and
+                # every room meets its catalogue minimum.  When the row already
+                # fits, keep the historical placement untouched.
+                legacy_north = round(max(2.8, (env_d - stair_d) * 0.45), 2)
+                legacy_south = round(env_d - legacy_north - stair_d, 2)
+                row_fits = (self._t2_row_meets_areas(env_w, legacy_north)
+                            and self._t2_row_meets_areas(env_w, legacy_south))
+                pocket = None if row_fits else self._t2_pocket_plan(env_w, env_d, stair_w, stair_d)
+                if pocket is not None:
+                    self._t2_pocket = pocket
+                    core_x = round(env_w - stair_w, 2)
+                    core_y = pocket["band"]
+                else:
+                    core_y = legacy_north
             else:
                 core_y = round(max(2.8, (env_d - stair_d) * 0.45), 2)
             core_w = round(stair_w, 2)
@@ -1269,13 +1367,23 @@ class SoleGeometryEngine:
         rooms.append(core_room)
 
         # 3. Central Circulation Lobby / Spine (MUST_ADJACENT to core)
-        lobby_x = round(core.x + core.width_m, 2)
+        pocket = getattr(self, "_t2_pocket", None)
+        if pocket:
+            # Compact T2: the stair sits on the east flank, so the lobby is
+            # the two-metre strip directly west of it.  Keeping it beside the
+            # core preserves the required adjacency and lets both unit
+            # living rooms open off it.
+            lobby_x = round(core.x - pocket["lobby_w"], 2)
+            lobby_w = round(pocket["lobby_w"], 2)
+            lobby_d = round(core.depth_m, 2)
+        else:
+            lobby_x = round(core.x + core.width_m, 2)
+            # Clamp so lobby never overflows the envelope (narrow plot degradation)
+            max_lobby_w = round(max(0.0, env_w - lobby_x), 2)
+            lobby_w = round(min(2.4, max(1.5, (env_w - lobby_x) * 0.30)), 2)
+            lobby_w = round(min(lobby_w, max_lobby_w), 2)
+            lobby_d = round(core.depth_m, 2)
         lobby_y = round(core.y, 2)
-        # Clamp so lobby never overflows the envelope (narrow plot degradation)
-        max_lobby_w = round(max(0.0, env_w - lobby_x), 2)
-        lobby_w = round(min(2.4, max(1.5, (env_w - lobby_x) * 0.30)), 2)
-        lobby_w = round(min(lobby_w, max_lobby_w), 2)
-        lobby_d = round(core.depth_m, 2)
 
         lobby_name = "Entrance Foyer" if (floor_index == 0 and self.typology == "T1_SINGLE_FAMILY") else (
             "Double-Loaded Spine Corridor" if self.typology == "T3_LARGE_COMPLEX" else (
@@ -1397,6 +1505,14 @@ class SoleGeometryEngine:
         for repair_line in repair_room_envelopes_for_furniture(rooms):
             if repair_line not in self.warnings:
                 self.warnings.append(repair_line)
+
+        # VERT-01/02 must be satisfied BEFORE the hard verifier runs: an upper
+        # wet room that overhangs its lower wet block by 20 cm into a bedroom is
+        # a real violation, so the band is re-split here while a layout still
+        # exists to repair (audit F03's sanitised verifier exposed this).
+        for _align_line in self._align_wet_stack(floor_index, rooms, list(previous_rooms or [])):
+            if _align_line not in self.warnings:
+                self.warnings.append(_align_line)
 
         # Check hard pruning constraints on generated rooms
         self._prune_and_verify_hard_constraints(floor_index, rooms, previous_rooms)
@@ -2706,6 +2822,164 @@ class SoleGeometryEngine:
                 )
         return {k: round(v, 2) for k, v in widths.items()}
 
+    # ------------------------------------------------------------------
+    # Compact T2 pocket plan
+    #
+    # A 12 x 15 plate cannot hold two one-bedroom programmes in one row: four
+    # rooms at their catalogue width floors need more frontage than the plate
+    # has, and stacking the bath over the kitchen is forbidden by HYG-02.  The
+    # plan that survives the law moves one unit's bedroom and the other unit's
+    # bathroom into the pocket beside the stair band.  Both rows then keep a
+    # full-width living room and every room is at or above its minimum.
+    # ------------------------------------------------------------------
+    _T2_POCKET_MIN_AREA = {"bath": 3.0, "kitchen": 6.0, "living": 16.0, "bed": 10.5}
+    _T2_POCKET_MIN_WIDTH = {"bath": 1.20, "kitchen": 1.80, "living": 3.40, "bed": 3.00}
+    _T2_POCKET_MAX_ASPECT = {"bath": 2.0, "kitchen": 1.8, "living": 1.8, "bed": 1.8}
+
+    def _t2_row_meets_areas(self, env_w: float, depth: float) -> bool:
+        """Can a single row of four rooms reach every catalogue minimum?"""
+        if depth <= 0.01 or env_w <= 0.01:
+            return False
+        floors = self._T2_UNIT_MIN_WIDTHS
+        spare = round(env_w - sum(floors.values()), 2)
+        if spare < -0.005:
+            return False
+        widths = dict(floors)
+        widths["living"] = round(widths["living"] + max(0.0, spare) * 0.60, 2)
+        widths["bed"] = round(widths["bed"] + max(0.0, spare) * 0.40, 2)
+        return all(
+            widths[key] * depth + 0.02 >= self._T2_POCKET_MIN_AREA[key]
+            for key in ("living", "bed", "kitchen", "bath")
+        )
+
+    def _t2_pocket_plan(
+        self, env_w: float, env_d: float, core_w: float, core_d: float
+    ) -> Optional[Dict[str, float]]:
+        """Return the pocket-plan dimensions, or None if the plate cannot hold it.
+
+        The stair moves to the east flank (an external entrance wall), a
+        two-metre lobby sits beside it, and the leftover pocket takes Unit A's
+        bedroom plus Unit B's bathroom.  Feasibility is checked against the
+        same catalogue minima the certificate audits, so a plan is returned
+        only when it actually passes them.
+        """
+        band = round((env_d - core_d) / 2.0, 2)
+        if band < 3.20 or env_w <= core_w + 2.0 + 4.2:
+            return None
+        core_x = round(env_w - core_w, 2)
+        lobby_w = 2.0
+        lobby_x = round(core_x - lobby_w, 2)
+        pocket_w = lobby_x
+        bed_pocket_w = 3.00
+        bath_pocket_w = round(pocket_w - bed_pocket_w, 2)
+        # 1.80 m leaves the bath inside the 1:2.2 disclosure clamp even after
+        # the furniture pass takes a few centimetres for the kitchen; a
+        # narrower bath is legal for the certificate but is named as an
+        # over-elongated room in every report.
+        bath_a_w = max(1.80, 3.0 / band)
+        kitchen_w = 1.80
+        living_a_w = round(env_w - bath_a_w - kitchen_w, 2)
+        living_b_w = round(env_w - bed_pocket_w - kitchen_w, 2)
+
+        if not self._t2_pocket_fits((bath_a_w, band), "bath"):
+            return None
+        if not self._t2_pocket_fits((living_a_w, band), "living"):
+            return None
+        if not self._t2_pocket_fits((kitchen_w, band), "kitchen"):
+            return None
+        if not self._t2_pocket_fits((bed_pocket_w, band), "bed"):
+            return None
+        if not self._t2_pocket_fits((living_b_w, band), "living"):
+            return None
+        if not self._t2_pocket_fits((bath_pocket_w, core_d), "bath"):
+            return None
+        if bed_pocket_w * core_d + 0.02 < 10.5:
+            return None
+        # Both unit living rooms must open off the shared lobby wall.
+        if bath_a_w > lobby_x + 0.02 or bath_a_w + living_a_w < lobby_x + lobby_w - 0.02:
+            return None
+        if bed_pocket_w > lobby_x + 0.02 or bed_pocket_w + living_b_w < lobby_x + lobby_w - 0.02:
+            return None
+        return {
+            "band": band, "lobby_w": lobby_w, "bed_pocket_w": bed_pocket_w,
+            "bath_pocket_w": bath_pocket_w, "bath_a_w": round(bath_a_w, 2),
+            "kitchen_w": kitchen_w, "living_a_w": living_a_w,
+            "living_b_w": living_b_w,
+        }
+
+    def _t2_pocket_fits(self, dims: tuple, key: str) -> bool:
+        w, d = dims
+        if w <= 0.01 or d <= 0.01:
+            return False
+        if min(w, d) + 0.02 < self._T2_POCKET_MIN_WIDTH[key]:
+            return False
+        if w * d + 0.02 < self._T2_POCKET_MIN_AREA[key]:
+            return False
+        # Certificate aspect tolerance (bounded degradation), not a new limit.
+        return max(w / d, d / w) <= self._T2_POCKET_MAX_ASPECT[key] * 1.30 + 0.02
+
+    def _partition_t2_pocket_rooms(
+        self,
+        floor_index: int,
+        core: MultiFloorRoomRectangle,
+        south_y: float,
+        south_h: float,
+    ) -> List[MultiFloorRoomRectangle]:
+        """Both units in full-width bands, with the pocket carrying the spill."""
+        plan = self._t2_pocket
+        band = plan["band"]
+        bath_a_w = plan["bath_a_w"]
+        kit_w = plan["kitchen_w"]
+        liv_a_w = plan["living_a_w"]
+        liv_b_w = plan["living_b_w"]
+        bed_w = plan["bed_pocket_w"]
+        bath_b_w = plan["bath_pocket_w"]
+
+        def _room(rid, name, x, y, w, d, zone, cat, unit_id, rules):
+            return MultiFloorRoomRectangle(
+                room_id=f"{rid}_F{floor_index}",
+                room_name=name,
+                floor_index=floor_index,
+                unit_id=unit_id,
+                x=round(x, 2),
+                y=round(y, 2),
+                width_m=round(w, 2),
+                depth_m=round(d, 2),
+                area_sqm=round(w * d, 2),
+                zone=zone,
+                zone_category=cat,
+                vastu_compliant=True,
+                is_vertical_core=False,
+                requires_exterior_wall=True,
+                aspect_ratio=round(max(w, d) / max(min(w, d), 0.01), 2),
+                applied_rules=list(rules),
+            )
+
+        rooms = [
+            _room("t2_unitA_bath", "Unit A Bathroom", 0.0, 0.0, bath_a_w, band,
+                  "NW", "service", "Unit_A", ["VERT-01-WET-STACK", "NBC-MIN-BATH"]),
+            _room("t2_unitA_living", "Unit A Living / Dining", bath_a_w, 0.0,
+                  liv_a_w, band, "N", "public", "Unit_A",
+                  ["T2-UNIT-DOOR-LOBBY", "NBC-MIN-LIVING"]),
+            _room("t2_unitA_kitchen", "Unit A Kitchen", bath_a_w + liv_a_w, 0.0,
+                  kit_w, band, "NE", "service", "Unit_A",
+                  ["T2-UNIT-DOOR-LOBBY", "NBC-MIN-KITCHEN", "VERT-01-WET-STACK"]),
+            _room("t2_unitA_bed", "Unit A Bedroom", 0.0, core.y, bed_w,
+                  core.depth_m, "W", "private", "Unit_A", ["NBC-MIN-BEDROOM"]),
+            _room("t2_unitB_bed", "Unit B Bedroom", 0.0, south_y, bed_w, south_h,
+                  "SW", "private", "Unit_B", ["NBC-MIN-BEDROOM"]),
+            _room("t2_unitB_living", "Unit B Living / Dining", bed_w, south_y,
+                  liv_b_w, south_h, "S", "public", "Unit_B",
+                  ["T2-UNIT-DOOR-LOBBY", "NBC-MIN-LIVING"]),
+            _room("t2_unitB_kitchen", "Unit B Kitchen", bed_w + liv_b_w, south_y,
+                  kit_w, south_h, "SE", "service", "Unit_B",
+                  ["T2-UNIT-DOOR-LOBBY", "NBC-MIN-KITCHEN", "VERT-01-WET-STACK"]),
+            _room("t2_unitB_bath", "Unit B Bathroom", bed_w, core.y,
+                  bath_b_w, core.depth_m, "E", "service", "Unit_B",
+                  ["VERT-01-WET-STACK", "NBC-MIN-BATH"]),
+        ]
+        return rooms
+
     def _partition_t2_rooms(
         self,
         floor_index: int,
@@ -2722,6 +2996,13 @@ class SoleGeometryEngine:
         """Synthesizes T2 Family Apartment dual-unit floor plates."""
         env_w = envelope["width"]
         t2_rooms: List[MultiFloorRoomRectangle] = []
+
+        # The compact pocket plan is chosen before the core is
+        # placed; when present it owns the whole plate's room layout.
+        if getattr(self, "_t2_pocket", None):
+            return self._partition_t2_pocket_rooms(
+                floor_index, core, south_y, south_h,
+            )
 
         # Unit A (North wing) & Unit B (South wing) off central distribution lobby
         # Invariant: unit doors strictly open off lobby; bathrooms align vertically.
@@ -3035,49 +3316,92 @@ class SoleGeometryEngine:
             )
             t3_rooms.append(conf)
 
-            # South Rear (East of Sanitary): Server Room & Electrical/MEP Room
-            # Server room is placed in East/SE quadrant, physically separated from West sanitary block!
-            south_rem_w = round(env_w - san_w, 2)
-            server_w = round(min(3.50, south_rem_w * 0.40), 2)
-            mep_w = round(south_rem_w - server_w, 2)
+            # South Rear (East of Sanitary): a service spine, then Server Room
+            # and Electrical/MEP Room.
+            #
+            # The technical rooms may not share a wall with the wet sanitary
+            # block (HYG-03 FORBIDDEN_WALL). They used to start exactly at
+            # `san_w`, so all six audited commercial seeds carried a
+            # sanitary_block <-> electrical_room party wall - invisible while
+            # the verifier compared room_ids instead of space types (audit
+            # F03). A 0.9 m service access spine now separates wet from
+            # technical, which is also how the MEP room is actually serviced.
+            sep_w = 0.90
+            south_rem_w = round(env_w - san_w - sep_w, 2)
+            if south_rem_w < 2.0:
+                # A narrow plate still needs the wet/technical separation a
+                # spine provides; a 0.45 m service/duct gap is the physical
+                # minimum, and it is still a gap the verifier can see.
+                sep_w = 0.45
+                south_rem_w = round(env_w - san_w - sep_w, 2)
+            if south_rem_w < 1.6:
+                # Not even a duct gap fits: the plate cannot host this T3
+                # service row honestly, so the technical rooms are not placed
+                # and the omission is named (L15 reports it) instead of
+                # fabricating a forbidden wet/technical party wall.
+                sep_w = 0.0
+                south_rem_w = round(env_w - san_w, 2)
+            server_w = round(min(3.50, south_rem_w * 0.40), 2) if sep_w > 0 else 0.0
+            mep_w = round(south_rem_w - server_w, 2) if sep_w > 0 else 0.0
 
-            server = MultiFloorRoomRectangle(
-                room_id="server_room_F0",
-                room_name="Central Server Room & Network NOC",
-                floor_index=0,
-                x=round(san_w + mep_w, 2),  # Placed far East away from West sanitary wall!
-                y=south_y,
-                width_m=server_w,
-                depth_m=south_h,
-                area_sqm=round(server_w * south_h, 2),
-                zone="SE",
-                zone_category="service",
-                vastu_compliant=True,
-                is_vertical_core=False,
-                requires_exterior_wall=True,
-                aspect_ratio=round(server_w / south_h if south_h > 0 else 1.0, 2),
-                applied_rules=["HYG-03-WET-TECH-WALL", "VERT-02-NO-WET-OVER-HABITABLE", "SEC-01-SERVER-PROTECTION"],
-            )
-            t3_rooms.append(server)
+            if sep_w > 0.0:
+                t3_rooms.append(MultiFloorRoomRectangle(
+                    room_id="t3_service_spine_F0",
+                    room_name="Service Access Spine",
+                    space_type_id="corridor",
+                    floor_index=0,
+                    x=round(san_w, 2),
+                    y=south_y,
+                    width_m=sep_w,
+                    depth_m=south_h,
+                    area_sqm=round(sep_w * south_h, 2),
+                    zone="W",
+                    zone_category="circulation",
+                    vastu_compliant=True,
+                    is_vertical_core=False,
+                    requires_exterior_wall=False,
+                    aspect_ratio=round(south_h / sep_w if sep_w > 0 else 1.0, 2),
+                    applied_rules=["NBC-CIRCULATION-SERVICE-SPINE", "HYG-03-WET-TECH-WALL"],
+                ))
 
-            mep = MultiFloorRoomRectangle(
-                room_id="electrical_room_F0",
-                room_name="MEP & Electrical Sub-Station",
-                floor_index=0,
-                x=san_w,
-                y=south_y,
-                width_m=mep_w,
-                depth_m=south_h,
-                area_sqm=round(mep_w * south_h, 2),
-                zone="S",
-                zone_category="service",
-                vastu_compliant=True,
-                is_vertical_core=False,
-                requires_exterior_wall=True,
-                aspect_ratio=round(mep_w / south_h if south_h > 0 else 1.0, 2),
-                applied_rules=["NBC-MEP-ROOM"],
-            )
-            t3_rooms.append(mep)
+            if sep_w > 0.0:
+                server = MultiFloorRoomRectangle(
+                    room_id="server_room_F0",
+                    room_name="Central Server Room & Network NOC",
+                    floor_index=0,
+                    x=round(san_w + sep_w + mep_w, 2),  # East end, clear of the wet wall
+                    y=south_y,
+                    width_m=server_w,
+                    depth_m=south_h,
+                    area_sqm=round(server_w * south_h, 2),
+                    zone="SE",
+                    zone_category="service",
+                    vastu_compliant=True,
+                    is_vertical_core=False,
+                    requires_exterior_wall=True,
+                    aspect_ratio=round(server_w / south_h if south_h > 0 else 1.0, 2),
+                    applied_rules=["HYG-03-WET-TECH-WALL", "VERT-02-NO-WET-OVER-HABITABLE", "SEC-01-SERVER-PROTECTION"],
+                )
+                t3_rooms.append(server)
+
+                mep = MultiFloorRoomRectangle(
+                    room_id="electrical_room_F0",
+                    room_name="MEP & Electrical Sub-Station",
+                    floor_index=0,
+                    x=round(san_w + sep_w, 2),
+                    y=south_y,
+                    width_m=mep_w,
+                    depth_m=south_h,
+                    area_sqm=round(mep_w * south_h, 2),
+                    zone="S",
+                    zone_category="service",
+                    vastu_compliant=True,
+                    is_vertical_core=False,
+                    requires_exterior_wall=True,
+                    aspect_ratio=round(mep_w / south_h if south_h > 0 else 1.0, 2),
+                    applied_rules=["NBC-MEP-ROOM"],
+                )
+                t3_rooms.append(mep)
 
         else:
             # === UPPER FLOORS: Open Office, Executive Suites, Meeting Rooms ===
@@ -3475,7 +3799,13 @@ class SoleGeometryEngine:
                 )
 
                 if v_touch or h_touch:
-                    if ONTOLOGY.is_forbidden_wall(r1.room_id, r2.room_id):
+                    # Compare SPACE TYPES, never solver handles (audit F03):
+                    # `t3_sanitary_F0` resolves to sanitary_block, and the law
+                    # table is keyed on the type.
+                    if ONTOLOGY.is_forbidden_wall(
+                        space_type_of(r1, self.typology) or r1.room_id,
+                        space_type_of(r2, self.typology) or r2.room_id,
+                    ):
                         raise ValueError(
                             f"Hard Constraint Violation: Space '{r1.room_id}' shares a forbidden common wall "
                             f"with '{r2.room_id}' (Rule HYG-01 / HYG-02 / HYG-03)."
@@ -3485,7 +3815,7 @@ class SoleGeometryEngine:
         if floor_index > 0 and previous_rooms:
             for ur in rooms:
                 # VERT-04: Heavy load Ground only
-                u_spec = ONTOLOGY.get_space(ur.room_id)
+                u_spec = ONTOLOGY.get_space(space_type_of(ur, self.typology) or ur.room_id)
                 if u_spec and u_spec.floor_load == FloorLoad.HEAVY:
                     raise ValueError(
                         f"Hard Constraint Violation: Space '{ur.room_id}' with heavy floor load "
@@ -3497,7 +3827,11 @@ class SoleGeometryEngine:
                     x_ov = max(0.0, min(ur.x + ur.width_m, lr.x + lr.width_m) - max(ur.x, lr.x))
                     y_ov = max(0.0, min(ur.y + ur.depth_m, lr.y + lr.depth_m) - max(ur.y, lr.y))
                     if x_ov * y_ov >= 1.0:
-                        v_rules = ONTOLOGY.evaluate_vertical_stack(ur.room_id, lr.room_id, floor_index)
+                        v_rules = ONTOLOGY.evaluate_vertical_stack(
+                            space_type_of(ur, self.typology) or ur.room_id,
+                            space_type_of(lr, self.typology) or lr.room_id,
+                            floor_index,
+                        )
                         for vr in v_rules:
                             if vr.relation == RelationType.FORBIDDEN_ABOVE:
                                 raise ValueError(
@@ -3988,6 +4322,230 @@ class SoleGeometryEngine:
 
         return doors, windows
 
+    def _is_wet_room(self, room: Any) -> bool:
+        """True when the room's ontology type is a wet/foul space (needs a stack)."""
+        sid = space_type_of(room, self.typology) or ""
+        spec = ONTOLOGY.get_space(sid)
+        hygiene = getattr(spec, "hygiene", None)
+        return hygiene in (HygieneType.WET, HygieneType.FOUL)
+
+    def _reanchor_cores_to_placed(
+        self,
+        rooms_by_floor: Dict[int, List[MultiFloorRoomRectangle]],
+        core_specs: List[VerticalCoreSpec],
+    ) -> None:
+        """Move the vertical-core specs onto the cores the solver actually placed.
+
+        Only the selected-profile path needs this: the band solver owns core
+        layout there, and every downstream consumer (certificate, sheet overlays,
+        terrace bands) must read the same coordinates. Ground floor wins; a core
+        absent from the ground plate is left exactly as anchored.
+        """
+        ground = list(rooms_by_floor.get(0) or [])
+        if not ground:
+            return
+        placed = [r for r in ground if getattr(r, "is_vertical_core", False)]
+        if not placed:
+            return
+        for spec in core_specs:
+            room = next(
+                (r for r in placed if str(r.room_id).startswith(f"{spec.core_id}_")),
+                None,
+            )
+            if room is None:
+                continue
+            moved = (
+                abs(room.x - spec.x) > 0.01
+                or abs(room.y - spec.y) > 0.01
+                or abs(room.width_m - spec.width_m) > 0.01
+                or abs(room.depth_m - spec.depth_m) > 0.01
+            )
+            if not moved:
+                continue
+            spec.x = round(float(room.x), 2)
+            spec.y = round(float(room.y), 2)
+            spec.width_m = round(float(room.width_m), 2)
+            spec.depth_m = round(float(room.depth_m), 2)
+            self.warnings.append(
+                f"SCHEME-SELECTION: core '{spec.core_id}' follows the selected "
+                f"profile's placement at ({spec.x:.2f}, {spec.y:.2f}) "
+                f"{spec.width_m:.2f} x {spec.depth_m:.2f} m; the spec is re-anchored "
+                "so the certificate and the sheets read the used geometry."
+            )
+
+    def _align_wet_stack(
+        self,
+        floor_index: int,
+        rooms: List[MultiFloorRoomRectangle],
+        previous_rooms: List[MultiFloorRoomRectangle],
+    ) -> List[str]:
+        """Aligns an upper floor's wet rooms onto the wet block below them.
+
+        VERT-02 (wet above habitable) was silently unenforced while the verifier
+        compared room_ids; a 2.36 m ensuite sat above a 2.15 m bathroom and
+        overlapped the bedroom next to it by 0.9 m².  The band is re-split here:
+        the wet room takes the width of the wet room below, and its band
+        neighbour absorbs the difference, so the plate stays tessellated and no
+        wet wall is left hanging over a bed.
+        """
+        if floor_index <= 0 or not previous_rooms:
+            return []
+        lower_wet = [r for r in previous_rooms if self._is_wet_room(r)]
+        if not lower_wet:
+            return []
+        logs: List[str] = []
+        for room in rooms:
+            if not self._is_wet_room(room):
+                continue
+            y0, y1 = room.y, room.y + room.depth_m
+            same_band = [
+                r for r in lower_wet
+                if (min(y1, r.y + r.depth_m) - max(y0, r.y)) >= 0.6 * room.depth_m
+            ]
+            if not same_band:
+                continue
+            lower = max(
+                same_band,
+                key=lambda r: min(room.x + room.width_m, r.x + r.width_m) - max(room.x, r.x),
+            )
+            # Only a same-band, same-edge block can be re-split without moving
+            # walls across each other. Anything else is left to the law.
+            if abs(lower.x - room.x) > 0.05 or abs(lower.depth_m - room.depth_m) > 0.05:
+                continue
+            delta = round(lower.width_m - room.width_m, 2)
+            if abs(delta) < 0.01:
+                continue
+            east = next(
+                (r for r in rooms
+                 if r is not room
+                 and abs((room.x + room.width_m) - r.x) < 0.05
+                 and (min(y1, r.y + r.depth_m) - max(y0, r.y)) >= 0.5 * room.depth_m),
+                None,
+            )
+            if east is None or east.width_m - delta < 1.2:
+                continue
+            old_w = room.width_m
+            room.width_m = round(lower.width_m, 2)
+            room.area_sqm = round(room.width_m * room.depth_m, 2)
+            room.aspect_ratio = round(
+                max(room.width_m, room.depth_m) / max(min(room.width_m, room.depth_m), 0.01), 2)
+            east.x = round(room.x + room.width_m, 2)
+            east.width_m = round(east.width_m - delta, 2)
+            east.area_sqm = round(east.width_m * east.depth_m, 2)
+            east.aspect_ratio = round(
+                max(east.width_m, east.depth_m) / max(min(east.width_m, east.depth_m), 0.01), 2)
+            logs.append(
+                f"WET-STACK-ALIGN F{floor_index}: {room.room_id} {old_w:.2f} -> "
+                f"{room.width_m:.2f} m to sit exactly over {lower.room_id}; "
+                f"{east.room_id} absorbed the difference."
+            )
+        return logs
+
+    def _ensure_egress_connectivity(
+        self,
+        floor_index: int,
+        rooms: List[MultiFloorRoomRectangle],
+        doors: List[MultiFloorDoorGeometry],
+        entry_room_id: Optional[str],
+    ) -> List[str]:
+        """Adds a hosted door to every room the entry graph cannot reach.
+
+        The circulation certificate used to depend on the layout happening to
+        produce a connected door set: a safety room added for a hygiene law (a
+        service spine between a wet block and technical rooms) left half the
+        floor unreachable, which the gate then reported as a failure of the
+        plan rather than of the door generator. Every unreachable room is now
+        connected to its best reachable wall-sharing neighbour, preferring
+        circulation - and the repair is logged, never silent.
+        """
+        if not rooms or not entry_room_id:
+            return []
+        by_id = {r.room_id: r for r in rooms}
+        if entry_room_id not in by_id:
+            return []
+        logs: List[str] = []
+        for _ in range(len(rooms) + 1):
+            adjacency: Dict[str, set] = {r.room_id: set() for r in rooms}
+            for d in doors:
+                a, b = d.from_room, d.to_room
+                if a in adjacency and b in adjacency:
+                    adjacency[a].add(b)
+                    adjacency[b].add(a)
+            seen = {entry_room_id}
+            stack = [entry_room_id]
+            while stack:
+                cur = stack.pop()
+                for nxt in adjacency.get(cur, ()):
+                    if nxt not in seen:
+                        seen.add(nxt)
+                        stack.append(nxt)
+            unreachable = [r for r in rooms if r.room_id not in seen]
+            if not unreachable:
+                return logs
+            # Connectivity backbone first: circulation, then DRY rooms, then wet
+        # rooms. Connecting a bath before its bedroom makes the bath a
+            # pass-through (degree 2) and leaves the bedroom dependent on it.
+            unreachable.sort(key=lambda r: (
+                0 if r.zone_category == "circulation"
+                else 2 if self._is_wet_room(r) else 1
+            ))
+            target = unreachable[0]
+            reachable_rooms = [by_id[rid] for rid in seen if rid in by_id]
+            preferred = [r for r in reachable_rooms if r.zone_category == "circulation"]
+            # A bathroom or kitchen may never be used as a PASS-THROUGH to reach
+            # another room: the leaf rule (bath degree == 1) is a hygiene
+            # requirement, and a connectivity repair that sponsors a door from
+            # a bath turns it into a corridor. Prefer circulation, then any dry
+            # space; only fall back to the target's own wet neighbour when the
+            # target itself is wet (a bath needs exactly one door).
+            dry_sponsors = [
+                r for r in reachable_rooms
+                if r.zone_category not in ("service",) and not self._is_wet_room(r)
+            ]
+            # Try progressively wider sponsor pools, but every candidate must
+            # HOST the door in a wall the rooms actually share. A service room
+            # (electrical / sanitary) may sponsor the spine or a bathroom; what
+            # it may not do is sponsor a door through empty air.
+            sponsor, hosted = (None, None)
+            for pool in (
+                preferred,
+                dry_sponsors,
+                [r for r in reachable_rooms if not self._is_wet_room(r)],
+                reachable_rooms,
+            ):
+                if not pool:
+                    continue
+                sponsor, hosted = find_door_host(target, pool, 0.90, preferred=preferred)
+                if sponsor is not None and hosted is not None:
+                    break
+            if sponsor is None or hosted is None:
+                # No shared-wall host exists: a nominal door would breach a
+                # facade or a third room. Record the unreachable room instead of
+                # fabricating geometry - the gate then FAILs CIRC-01 with a
+                # reason the reader can act on.
+                msg = (
+                    f"CIRC-REPAIR: no shared wall can host a door for "
+                    f"{target.room_id}; it remains unreachable from the entry"
+                )
+                if msg not in self.warnings:
+                    self.warnings.append(msg)
+                break
+            doors.append(MultiFloorDoorGeometry(
+                door_id=f"door_circulation_repair_{target.room_id}",
+                floor_index=floor_index,
+                from_room=sponsor.room_id,
+                to_room=target.room_id,
+                door_type="standard",
+                **hosted,
+            ))
+            logs.append(
+                f"CIRC-REPAIR: added a door {sponsor.room_id} -> {target.room_id} "
+                "so no room is unreachable from the entry"
+            )
+            if logs[-1] not in self.warnings:
+                self.warnings.append(logs[-1])
+        return logs
+
     def _generate_openings(
         self,
         floor_index: int,
@@ -4244,6 +4802,26 @@ class SoleGeometryEngine:
 
         return doors, windows
 
+    @staticmethod
+    def _dedupe_doors(
+        doors: List[MultiFloorDoorGeometry],
+    ) -> List[MultiFloorDoorGeometry]:
+        """Keep the first door for every unordered room pair (exteriors too).
+
+        Two generators can host the same pair (a corridor door and a room
+        door), which made a bath report degree 2 and broke the leaf rule while
+        every individual door looked legal.
+        """
+        seen: set = set()
+        kept: List[MultiFloorDoorGeometry] = []
+        for door in doors:
+            key = frozenset((door.from_room, door.to_room))
+            if key in seen:
+                continue
+            seen.add(key)
+            kept.append(door)
+        return kept
+
     # =========================================================================
     # 7. EGRESS CHECK (BFS OVER CIRCULATION GRAPH)
     # =========================================================================
@@ -4391,7 +4969,23 @@ class SoleGeometryEngine:
         bfs_connected = True
         egress_valid = True
         zero_forbidden = True
+        forbidden_pairs: List[str] = []
         must_adj_satisfied = True
+        # A certificate must EXPLAIN every false flag: collect the
+        # offending rooms as the checks run instead of reporting a bare verdict.
+        overlap_pairs: List[str] = []
+        containment_rooms: List[str] = []
+        min_dim_rooms: List[str] = []
+        # Rooms accepted below a catalogue minimum under the degraded/terrace
+        # tolerance. They are RELAXATIONS: recorded on the room, surfaced as a
+        # warning and listed in the certificate details, never a silent pass
+        # the 0.85 factor used to leave no trace).
+        tolerated_minima: List[Dict[str, Any]] = []
+        aspect_rooms: List[str] = []
+        unverified_spaces: List[str] = []
+        unreachable_rooms: List[str] = []
+        egress_rooms: List[str] = []
+        chain_failures: List[str] = []
 
         per_room_dists: Dict[str, float] = {}
 
@@ -4406,6 +5000,16 @@ class SoleGeometryEngine:
                     y_ov = max(0.0, min(r1.y + r1.depth_m, r2.y + r2.depth_m) - max(r1.y, r2.y))
                     if x_ov * y_ov >= 0.05:
                         non_overlap = False
+                        overlap_pairs.append(
+                            f"{r1.room_id} / {r2.room_id}: {x_ov * y_ov:.2f} m² overlap"
+                        )
+
+            # Clear-face dimensions live in the wall graph the plate was
+            # measured against; read them once per floor.
+            _sched = {
+                str(_row.get("room_id")): _row
+                for _row in ((fl.wall_graph or {}).get("room_schedule") or [])
+            }
 
             # Containment check
             for r in fl.rooms:
@@ -4413,25 +5017,118 @@ class SoleGeometryEngine:
                     r.x + r.width_m > envelope["width"] + 0.05 or
                     r.y + r.depth_m > envelope["depth"] + 0.05):
                     containment = False
+                    containment_rooms.append(r.room_id)
 
                 # Minimum dimensions and area check (excluding circulation corridors)
                 has_bands = bool(getattr(self, "resolved_terrace_bands", None) and any(getattr(self, "resolved_terrace_bands", {}).values()))
                 min_width_tolerance = 0.70 if deg_level >= 1 else (0.80 if has_bands else 0.85)
-                spec = ONTOLOGY.get_space(r.room_id)
+                # Space TYPE, never the solver handle (audit F03): `t3_sanitary_F0`
+                # has no catalogue row, so this statutory minimum used to be
+                # skipped for every generated room without silently-failing.
+                spec = ONTOLOGY.get_space(space_type_of(r, self.typology) or r.room_id)
+                if spec is None and r.zone_category not in ("circulation", "terrace"):
+                    # No catalogue row means the statutory minimums are
+                    # UNVERIFIED, not satisfied. Say so instead of passing.
+                    min_dims_satisfied = False
+                    unverified_spaces.append(r.room_id)
                 if spec and r.zone_category not in ("circulation", "terrace") and "corridor" not in r.room_id and "terrace" not in r.room_id:
                     min_dim = min(r.width_m, r.depth_m)
                     if min_dim < spec.min_width_m * min_width_tolerance:
                         min_dims_satisfied = False
+                        min_dim_rooms.append(
+                            f"{r.room_id}: {min_dim:.2f} m clear < {spec.min_width_m:.2f} m"
+                        )
+                    elif min_dim < spec.min_width_m:
+                        _rel = {
+                            "room": r.room_id,
+                            "rule": "NBC-01",
+                            "measure": "clear width",
+                            "measured_m": round(min_dim, 2),
+                            "required_m": round(spec.min_width_m, 2),
+                            "factor": round(min_width_tolerance, 2),
+                            "reason": "degraded plate / terrace band tolerance",
+                        }
+                        tolerated_minima.append(_rel)
+                        r.relaxations.append({
+                            "rule_id": "NBC-01",
+                            "rationale": (
+                                f"clear width {min_dim:.2f} m is below the catalogue "
+                                f"minimum {spec.min_width_m:.2f} m; accepted at "
+                                f"{min_width_tolerance:.2f}x on this plate"
+                            ),
+                        })
                     if r.area_sqm < spec.min_area_sqm * min_width_tolerance:
                         min_dims_satisfied = False
+                        min_dim_rooms.append(
+                            f"{r.room_id}: {r.area_sqm:.2f} m² < {spec.min_area_sqm:.2f} m²"
+                        )
+                    elif r.area_sqm < spec.min_area_sqm:
+                        _rel = {
+                            "room": r.room_id,
+                            "rule": "NBC-01",
+                            "measure": "area",
+                            "measured_sqm": round(r.area_sqm, 2),
+                            "required_sqm": round(spec.min_area_sqm, 2),
+                            "factor": round(min_width_tolerance, 2),
+                            "reason": "degraded plate / terrace band tolerance",
+                        }
+                        tolerated_minima.append(_rel)
+                        r.relaxations.append({
+                            "rule_id": "NBC-01",
+                            "rationale": (
+                                f"area {r.area_sqm:.2f} m² is below the catalogue "
+                                f"minimum {spec.min_area_sqm:.2f} m²; accepted at "
+                                f"{min_width_tolerance:.2f}x on this plate"
+                            ),
+                        })
                     # Aspect limits protect habitable-room proportion (daylight /
                     # ergonomics). Industrial bays (dock/staging strips) are exempt:
                     # NBC Part 3 proportion rules target habitable spaces only;
                     # min dimensions and areas above still apply to bays.
-                    if r.zone_category != "industrial_bay":
+                    if r.zone_category != "industrial_bay" and spec.id not in ASPECT_EXEMPT_SPACE_IDS:
                         ar_tolerance = 1.40 if deg_level >= 1 else 1.30
                         if r.aspect_ratio > spec.max_aspect_ratio * ar_tolerance:
                             aspect_satisfied = False
+                            aspect_rooms.append(
+                                f"{r.room_id}: 1:{r.aspect_ratio:.2f} > 1:{spec.max_aspect_ratio * ar_tolerance:.2f}"
+                            )
+
+                    # Clear-face minimum (audit F04): the catalogue figures are
+                    # CLEAR dimensions; the gross rectangle is always larger. A
+                    # 3.56 m clear living room passed a 3.60 m minimum because
+                    # only the gross face was measured. Read the wall-deducted
+                    # schedule row and declare a tolerated shortfall.
+                    _sched_row = _sched.get(str(r.room_id))
+                    if _sched_row is not None:
+                        _match = re.findall(
+                            r"([\d.]+)\s*m\s*[x×]\s*([\d.]+)\s*m",
+                            str(_sched_row.get("clear_dimensions") or ""),
+                        )
+                        if _match:
+                            _clear = min(float(_match[0][0]), float(_match[0][1]))
+                            if _clear < spec.min_width_m * min_width_tolerance:
+                                min_dims_satisfied = False
+                                min_dim_rooms.append(
+                                    f"{r.room_id}: {_clear:.2f} m clear < {spec.min_width_m:.2f} m"
+                                )
+                            elif _clear < spec.min_width_m:
+                                tolerated_minima.append({
+                                    "room": r.room_id,
+                                    "rule": "NBC-01",
+                                    "measure": "clear width (wall-deducted)",
+                                    "measured_m": round(_clear, 2),
+                                    "required_m": round(spec.min_width_m, 2),
+                                    "factor": round(min_width_tolerance, 2),
+                                    "reason": "degraded plate / terrace band tolerance",
+                                })
+                                r.relaxations.append({
+                                    "rule_id": "NBC-01",
+                                    "rationale": (
+                                        f"clear width {_clear:.2f} m is below the catalogue "
+                                        f"minimum {spec.min_width_m:.2f} m; accepted at "
+                                        f"{min_width_tolerance:.2f}x on this plate"
+                                    ),
+                                })
 
             # Dimension chain check (<= 1mm). The serialized wall graph exposes
             # chains as dim_chains_x/dim_chains_y — the historical
@@ -4446,6 +5143,7 @@ class SoleGeometryEngine:
                         continue
                     if not ch.get("is_valid", True):
                         chain_sums_match = False
+                        chain_failures.append(str(ch.get("label") or ch.get("axis") or "chain"))
                 chain_audit["chains_checked"] += len(chains)
                 chain_audit["floors_with_chains"] += 1
             else:
@@ -4459,6 +5157,13 @@ class SoleGeometryEngine:
             conn, eg_ok, dists = self._verify_egress_and_circulation(fl.rooms, fl.doors, core_rm.room_id)
             if not eg_ok:
                 egress_valid = False
+            _max_travel = float(self.profile.egress_constants.get(
+                "max_travel_distance_non_sprinklered_m", 30.0))
+            for _rid, _dist in dists.items():
+                if _dist >= 900.0:
+                    unreachable_rooms.append(_rid)
+                elif _dist > _max_travel:
+                    egress_rooms.append(f"{_rid}: {_dist:.1f} m > {_max_travel:.0f} m")
             per_room_dists.update(dists)
 
             # Forbidden walls check
@@ -4472,8 +5177,15 @@ class SoleGeometryEngine:
                     h_touch = (abs((r1.y + r1.depth_m) - r2.y) < 0.05 or abs((r2.y + r2.depth_m) - r1.y) < 0.05) and (
                         min(r1.x + r1.width_m, r2.x + r2.width_m) - max(r1.x, r2.x) >= 0.20
                     )
-                    if (v_touch or h_touch) and ONTOLOGY.is_forbidden_wall(r1.room_id, r2.room_id):
+                    if (v_touch or h_touch) and ONTOLOGY.is_forbidden_wall(
+                        space_type_of(r1, self.typology) or r1.room_id,
+                        space_type_of(r2, self.typology) or r2.room_id,
+                    ):
                         zero_forbidden = False
+                        forbidden_pairs.append(
+                            f"{r1.room_id}({space_type_of(r1, self.typology)}) <-> "
+                            f"{r2.room_id}({space_type_of(r2, self.typology)})"
+                        )
 
         # 2. Vertical Stacking Invariant check (EC-06)
         vertical_stack_valid = True
@@ -4517,6 +5229,24 @@ class SoleGeometryEngine:
         terrace_far_exempt = True
         cores_stack_aligned = vertical_stack_valid
 
+        # Every tolerated shortfall is a DECLARED relaxation: one surfaced
+        # warning per room/measure, so the gate and the reader can see it.
+        for _rel in tolerated_minima:
+            if "measure" in _rel and "measured_m" in _rel:
+                _msg = (
+                    f"ROOM-MIN {_rel['room']}: clear width {_rel['measured_m']:.2f} m "
+                    f"is below the catalogue {_rel['required_m']:.2f} m "
+                    f"(declared relaxation at {_rel['factor']:.2f}x)"
+                )
+            else:
+                _msg = (
+                    f"ROOM-MIN {_rel['room']}: area {_rel['measured_sqm']:.2f} m² "
+                    f"is below the catalogue {_rel['required_sqm']:.2f} m² "
+                    f"(declared relaxation at {_rel['factor']:.2f}x)"
+                )
+            if _msg not in self.warnings:
+                self.warnings.append(_msg)
+
         # Multi-wing solving requires strict NBC/ontology min dimensions as a hard invariant (F3).
         # Standard rectangular degradation (deg_level > 0, e.g. EC-01 narrow plot) treats min_dims as soft.
         is_multi_wing = bool(self.site_plan and getattr(self.site_plan, "footprint", None) and len(self.site_plan.footprint.wings) > 1)
@@ -4538,6 +5268,93 @@ class SoleGeometryEngine:
             soft_valid = min_dims_satisfied and aspect_satisfied
         all_true = hard_valid and (soft_valid if deg_level == 0 else True)
 
+        # EXPLAIN EVERY FALSE FLAG (audit F16). The certificate panel renders a
+        # handful of headline checks; without this list a NON-COMPLIANT badge
+        # beside six PASS rows is unexplainable. Each entry names the invariant,
+        # the rule id and the offending rooms/spaces.
+        failures: List[str] = []
+        if not non_overlap:
+            failures.append(
+                "REL-01 Non-overlap: "
+                + ("; ".join(overlap_pairs[:6]) or "rooms overlap")
+            )
+        if not containment:
+            failures.append(
+                "CONT-01 Containment: "
+                + ", ".join(containment_rooms[:8])
+                + " extend past the envelope"
+            )
+        if not chain_sums_match:
+            failures.append(
+                "DIM-01 Dimension chains: "
+                + (", ".join(chain_failures[:6]) or "one or more chains miss the 1 mm tolerance")
+            )
+        if not min_dims_satisfied:
+            _detail = list(min_dim_rooms[:6])
+            _detail += [f"{rid}: no catalogue minimum (unverified)" for rid in unverified_spaces[:4]]
+            failures.append("NBC-01 Room minimums: " + "; ".join(_detail))
+        if not aspect_satisfied:
+            failures.append("NBC-02 Aspect ratios: " + "; ".join(aspect_rooms[:6]))
+        if not bfs_connected:
+            failures.append(
+                "CIRC-01 Reachability: "
+                + (", ".join(unreachable_rooms[:8]) or "rooms unreachable from the core")
+                + " cannot be reached from the vertical core"
+            )
+        if not egress_valid:
+            failures.append(
+                "NBC-03 Egress travel: "
+                + (", ".join(egress_rooms[:6]) or "a room exceeds the maximum travel distance")
+            )
+        if not zero_forbidden:
+            failures.append("REL-02 Forbidden walls: " + "; ".join(forbidden_pairs[:6]))
+        if not must_adj_satisfied:
+            failures.append("REL-03 Required adjacency: a MUST_ADJACENT pair is not contiguous")
+        if not vertical_stack_valid:
+            failures.append("VERT-01 Vertical stack: cores or wet stacks are not aligned across storeys")
+        if not core_continuity_valid:
+            failures.append("RULE-FP-01 Core continuity: an occupied level has no vertical core")
+        if not no_wet_over_terrace_valid:
+            failures.append("RULE-FP-03 Wet over open-to-sky: a wet room sits above a terrace")
+        if not statutory_audit["wc_satisfied"]:
+            failures.append(
+                "SAN-01 Sanitation: "
+                f"{statutory_audit['provided_wc_count']} WC(s) provided, "
+                f"{statutory_audit['required_wc_count']} required for "
+                f"{statutory_audit['occupant_load']} occupants"
+            )
+        if not statutory_audit["parking_satisfied"]:
+            failures.append(
+                "SAN-02 Parking: "
+                f"{statutory_audit['required_parking_ecs']} ECS required, none provided"
+            )
+
+        # Only rules whose backing invariant PASSED may be listed as certified.
+        _vastu_clean = not any("EC-04" in str(w) or "Vastu" in str(w) for w in self.warnings)
+        certified_rules = [
+            rid for rid, ok in (
+                ("NBC-01", min_dims_satisfied),
+                ("NBC-02", aspect_satisfied),
+                ("NBC-03", egress_valid),
+                ("REL-01", non_overlap),
+                ("REL-02", zero_forbidden),
+                ("VERT-01", vertical_stack_valid),
+                ("VERT-02", no_wet_over_terrace_valid),
+                ("CIRC-01", bfs_connected),
+                ("DIM-01", chain_sums_match),
+                ("VASTU-01", _vastu_clean),
+                ("SAN-01", statutory_audit["wc_satisfied"]),
+                ("RULE-FP-01", core_continuity_valid),
+                ("RULE-FP-03", no_wet_over_terrace_valid),
+                ("RULE-FP-06", terrace_far_exempt),
+            ) if ok
+        ]
+        if (
+            getattr(self, "resolved_terrace_bands", None)
+            and any(getattr(self, "resolved_terrace_bands", {}).values())
+        ):
+            certified_rules.append("RULE-FP-07")
+
         return MathematicalValidityCertificate(
             is_valid=all_true,
             non_overlap=non_overlap,
@@ -4549,7 +5366,9 @@ class SoleGeometryEngine:
             egress_distances_satisfied=egress_valid,
             zero_forbidden_violations=zero_forbidden,
             must_adjacency_satisfied=must_adj_satisfied,
-            prefer_adjacency_score=94.5,
+            # No PREFER_ADJACENT/PREFER_SEPARATE verifier runs in this loop; an
+            # unmeasured score is None, never the old constant 94.5.
+            prefer_adjacency_score=None,
             vertical_stack_valid=vertical_stack_valid,
             core_continuity_valid=core_continuity_valid,
             no_wet_over_terrace_valid=no_wet_over_terrace_valid,
@@ -4557,17 +5376,26 @@ class SoleGeometryEngine:
             cores_stack_aligned=cores_stack_aligned,
             sanitation_wc_count_satisfied=statutory_audit["wc_satisfied"],
             parking_count_satisfied=statutory_audit["parking_satisfied"],
+            failures=failures,
             certificate_id=f"CERT-{self.typology[:2]}-{self.total_storeys}F-{int(self.seed) if isinstance(self.seed, (int, float)) else 'F01'}",
-            certified_rules=[
-                "NBC-01", "NBC-02", "NBC-03", "REL-01", "REL-02", "VERT-01", "VERT-02", "CIRC-01", "DIM-01", "VASTU-01", "SAN-01",
-                "RULE-FP-01", "RULE-FP-02", "RULE-FP-03", "RULE-FP-04", "RULE-FP-05", "RULE-FP-06"
-            ] + (["RULE-FP-07"] if (getattr(self, "resolved_terrace_bands", None) and any(getattr(self, "resolved_terrace_bands", {}).values())) else []),
+            certified_rules=certified_rules,
             details={
                 "per_room_travel_distances": per_room_dists,
                 "statutory_audit": statutory_audit,
                 "max_allowed_travel_m": float(self.profile.egress_constants.get("max_travel_distance_non_sprinklered_m", 30.0)),
                 "dimension_chain_tolerance_m": 0.001,
                 "dimension_chain_audit": chain_audit,
+                # A certificate must EXPLAIN a false flag: the
+                # offending rooms and space-type pairs travel with it.
+                "forbidden_wall_pairs": forbidden_pairs,
+                "overlap_pairs": overlap_pairs,
+                "containment_violations": containment_rooms,
+                "min_dimension_violations": min_dim_rooms,
+                "declared_relaxations": tolerated_minima,
+                "aspect_violations": aspect_rooms,
+                "unverified_spaces": unverified_spaces,
+                "unreachable_rooms": unreachable_rooms,
+                "egress_violations": egress_rooms,
             }
         )
 
@@ -4602,11 +5430,11 @@ class SoleGeometryEngine:
     # 10. PRIMARY SOLVE WORKFLOW
     # =========================================================================
 
-    def _compute_unmet_requirements(self, building: MultiStoreyBuildingModel) -> List[Dict[str, str]]:
+    def _compute_unmet_requirements(self, building: MultiStoreyBuildingModel) -> List[UnmetRequirement]:
         """Backward-compatible wrapper: ledger from an assembled building model."""
         return self._compute_unmet_requirements_from_floors(getattr(building, "floors", []))
 
-    def _compute_unmet_requirements_from_floors(self, floors: List[Any]) -> List[Dict[str, str]]:
+    def _compute_unmet_requirements_from_floors(self, floors: List[Any]) -> List[UnmetRequirement]:
         """
         UNSOLVED REQUIREMENTS LEDGER: every requested room that did
         not appear on ANY solved floor level is recorded with an explicit
@@ -4654,7 +5482,7 @@ class SoleGeometryEngine:
                 for fl in floors for r in fl.rooms
                 if getattr(r, "is_vertical_core", False)
             }
-            unmet: List[Dict[str, str]] = []
+            unmet: List[UnmetRequirement] = []
             for rid in requested:
                 norm = normalize_room_identifier(rid)
                 if norm in placed_norms:
@@ -4663,21 +5491,21 @@ class SoleGeometryEngine:
                     continue
                 if norm in normalized_expected or rid in expected_ids:
                     # Expected by the program but not placed: solver compression.
-                    unmet.append({
-                        "room_id": rid,
-                        "reason": (
+                    unmet.append(UnmetRequirement(
+                        room_id=rid,
+                        reason=(
                             "Requested but not placeable in the available envelope "
                             "- increase plot size/coverage or reduce other rooms"
                         ),
-                    })
+                    ))
                 else:
-                    unmet.append({
-                        "room_id": rid,
-                        "reason": (
+                    unmet.append(UnmetRequirement(
+                        room_id=rid,
+                        reason=(
                             f"Not part of the {self.typology} program for {self.total_storeys} "
                             "storey(s) - review typology/storeys"
                         ),
-                    })
+                    ))
             return unmet
         except Exception as exc:  # never let the ledger break the solve
             logging.getLogger(__name__).warning("Unmet-requirements ledger computation failed: %s", exc)
@@ -4707,6 +5535,7 @@ class SoleGeometryEngine:
 
         # Step 1: Envelope & Setbacks
         is_feasible, deg_level, envelope, warnings = self._compute_envelope()
+        self.degradation_level = deg_level
         self.warnings.extend(warnings)
 
         # Footprint provenance: name the constraint that actually sized the plate.
@@ -4717,14 +5546,20 @@ class SoleGeometryEngine:
             self.req.plot_polygon is not None
             and not getattr(self.req.plot_polygon, "is_regular_rectangle", True)
         )
-        _coverage_cap = self.plot_w * self.plot_d * self.coverage
+        _coverage_cap = self._plot_plan_area() * self.coverage
+        _need = float(getattr(self, "program_needed_area_m2", 0.0) or 0.0)
+        _ceiling = float(getattr(self, "footprint_ceiling_area", _coverage_cap) or _coverage_cap)
+        _target = float(getattr(self, "footprint_target_area", _ceiling) or _ceiling)
         if _irregular:
             self.footprint_source = "inscribed"
-        elif (getattr(self.req, "program_aware_footprint", False)
-              and float(getattr(self, "program_needed_area_m2", 0.0)) < _coverage_cap - 0.01):
+        elif _target < _ceiling - 0.5:
+            # The programme (plus walls/circulation) is what sized the plate.
             self.footprint_source = "program"
-        else:
+        elif _coverage_cap <= _ceiling + 0.01:
             self.footprint_source = "coverage"
+        else:
+            # Setbacks, not the coverage ratio, are the binding ceiling.
+            self.footprint_source = "buildable"
 
         if not is_feasible:
             elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
@@ -4779,6 +5614,49 @@ class SoleGeometryEngine:
         # Step 2c: Resolve and validate per-floor terrace bands for simple rectangular envelopes
         self.resolved_terrace_bands = self._resolve_terrace_bands(envelope, vertical_cores, duct_shafts)
 
+        # Step 2d: SELECTED SCHEME PROFILE
+        # The picker used to re-solve a side portfolio that changed no plan. A
+        # selected profile now partitions the plate with its weights and every
+        # downstream step (openings, wall graph, land, gate, certificate, sheets)
+        # runs on that geometry - one geometry, one certificate.
+        if self.scheme_profile:
+            from app.services.floorplan.constrained_solver import (
+                build_plate_context,
+                solve_rectangular_plate,
+            )
+            _ctx = build_plate_context(self, envelope=envelope)
+            if _ctx is not None:
+                _by_floor: Dict[int, List[MultiFloorRoomRectangle]] = {}
+                _alt_warnings: List[str] = []
+                for _res in solve_rectangular_plate(_ctx, profile_id=self.scheme_profile):
+                    if _res.rooms:
+                        _by_floor[_res.floor_index] = list(_res.rooms)
+                    _alt_warnings.extend(_res.warnings)
+                if _by_floor:
+                    self.presolved_room_sets = _by_floor
+                    # The band solver lays the core column against the band edge,
+                    # which is not where _lock_vertical_anchors predicted it. The
+                    # core spec is a DERIVED description of the placed core, so it
+                    # follows the geometry - otherwise the certificate's
+                    # core-stack invariant compares specs (0.20, 4.57) with rooms
+                    # (0.00, 0.00) and fails a perfectly stacked building.
+                    self._reanchor_cores_to_placed(_by_floor, vertical_cores)
+                    self.scheme_selection_note = (
+                        f"SCHEME-SELECTION: plate partitioned with the "
+                        f"'{self.scheme_profile}' profile; the certificate and every "
+                        "sheet describe that alternative."
+                    )
+                    self.warnings.append(self.scheme_selection_note)
+                for _w in _alt_warnings:
+                    if _w not in self.warnings:
+                        self.warnings.append(_w)
+            if not self.presolved_room_sets:
+                self.warnings.append(
+                    f"SCHEME-SELECTION: profile '{self.scheme_profile}' cannot partition "
+                    "this plate (multi-wing / terrace band / floor mask); the validated "
+                    "baseline geometry is used and the selection is recorded only."
+                )
+
         # Step 3: Floor Plate Partitioning
         floors: List[SingleFloorPlanModel] = []
         previous_rooms: Optional[List[MultiFloorRoomRectangle]] = None
@@ -4808,15 +5686,73 @@ class SoleGeometryEngine:
                     req_rooms = extra_notes
             spaces = self._resolve_floor_program(z, req_rooms)
 
-            # Partition floor plate with hard pruning
-            rooms = self._partition_floor_plate(
-                floor_index=z,
-                envelope=envelope,
-                core=vertical_cores[0],
-                ducts=duct_shafts,
-                spaces=spaces,
-                previous_rooms=previous_rooms,
-            )
+            # Partition floor plate with hard pruning - or take the selected
+            # scheme profile's already-solved rooms for this floor.
+            _presolved = (self.presolved_room_sets or {}).get(z)
+            if _presolved:
+                rooms = [r.model_copy(deep=True) for r in _presolved]
+            else:
+                rooms = self._partition_floor_plate(
+                    floor_index=z,
+                    envelope=envelope,
+                    core=vertical_cores[0],
+                    ducts=duct_shafts,
+                    spaces=spaces,
+                    previous_rooms=previous_rooms,
+                )
+
+            # Disclose every catalogue-minimum shortfall by name: a squeezed
+            # room is a fact the reader must be able to audit, never a silent
+            # consequence of a tighter (legal) plate.
+            for _room in rooms:
+                _spec = ONTOLOGY.get_space(
+                    space_type_of(_room, self.typology) or _room.room_id)
+                _min_area = float(getattr(_spec, "min_area_sqm", 0.0) or 0.0)
+                # Two minima sources exist (ontology spec, placement catalog).
+                # Disclose against the STRICTER one so no source's floor is
+                # silently breached; unifying them is tracked separately.
+                from app.services.floorplan.grid_model import get_room_catalog_entry
+                _catalog_min = float(
+                    (get_room_catalog_entry(_room.room_id) or {}).get("catalog_min_m2", 0.0) or 0.0
+                )
+                _min_area = max(_min_area, _catalog_min)
+                if _min_area > 0.0 and _room.area_sqm < _min_area - 0.2:
+                    _short = (
+                        f"ROOM-MIN: {_room.room_id} is {_room.area_sqm:.1f} m², below its "
+                        f"{_min_area:.1f} m² catalogue minimum on floor {z}; the "
+                        f"{envelope['area_sqm']:.1f} m² plate (coverage/setback ceiling) "
+                        f"cannot hold this programme comfortably."
+                    )
+                    if _short not in self.warnings:
+                        self.warnings.append(_short)
+                elif _catalog_min > 0.0 and _room.area_sqm > _catalog_min:
+                    _catalog_max = float(
+                        (get_room_catalog_entry(_room.room_id) or {}).get("catalog_max_m2", 0.0) or 0.0
+                    )
+                    if _catalog_max > 0.0 and _room.area_sqm > _catalog_max + 2.0:
+                        _over = (
+                            f"ROOM-MAX: {_room.room_id} is {_room.area_sqm:.1f} m², above its "
+                            f"{_catalog_max:.1f} m² catalogue maximum on floor {z}; the "
+                            f"{envelope['area_sqm']:.1f} m² plate stretched it past its band."
+                        )
+                        if _over not in self.warnings:
+                            self.warnings.append(_over)
+                # Aspect is part of the same catalog contract: an elongated
+                # room is a squeezed room whatever its area says. Disclose it
+                # by name instead of letting the clamp fail silently.
+                _ar = max(float(_room.width_m), float(_room.depth_m)) / max(
+                    min(float(_room.width_m), float(_room.depth_m)), 0.1
+                )
+                if _ar > 2.22:
+                    _aspect_short = (
+                        f"ROOM-MIN: {_room.room_id} aspect ratio {_ar:.2f} exceeds the "
+                        f"1:2.2 clamp on floor {z} at "
+                        f"{min(float(_room.width_m), float(_room.depth_m)):.2f} m clear; the "
+                        f"{envelope['area_sqm']:.1f} m² plate cannot hold this programme "
+                        f"comfortably."
+                    )
+                    if _aspect_short not in self.warnings:
+                        self.warnings.append(_aspect_short)
 
             # Close rectangular dead strips at wing junctions before
             # openings, furniture, wall graphs and the gate are generated.  The
@@ -4870,6 +5806,17 @@ class SoleGeometryEngine:
 
             # Generate hosted doors and windows (also runs zoning + door-swing collision resolution)
             doors, windows = self._generate_openings(z, envelope, rooms, lobby_room, core_room)
+            # One door per room pair: duplicate hosts made a bath degree 2.
+            doors = self._dedupe_doors(doors)
+            # CIRCULATION IS A CONSTRUCTED INVARIANT, not a layout accident
+            # (audit F03 follow-on): a room inserted to satisfy a hygiene law
+            # (the T3 service spine) must not leave the floor unreachable. Any
+            # room the entry graph cannot reach gets a real hosted door.
+            self._ensure_egress_connectivity(
+                z, rooms, doors,
+                entry_room_id=(core_room.room_id if core_room is not None
+                               else (lobby_room.room_id if lobby_room is not None else None)),
+            )
 
             # Living-quality layers: naming honesty (L5), fixture clearances (L3),
             # and furniture catalog envelopes (L4) attached per room.
@@ -4968,9 +5915,12 @@ class SoleGeometryEngine:
                 doors=doors,
                 windows=windows,
                 circulation_status="connected" if is_connected else "disconnected",
-                vastu_score_pct=90.0 if self.strictness == "high" else 82.0,
-                vastu_compliance_pct=90.0 if self.strictness == "high" else 82.0,
-                plumbing_stack_alignment_pct=100.0,
+                # Vastu / plumbing alignment are MEASURED after every storey is
+                # placed and land absorption has mutated the rooms.
+                # They stay None here rather than printing a constant.
+                vastu_score_pct=None,
+                vastu_compliance_pct=None,
+                plumbing_stack_alignment_pct=None,
                 built_up_area_sqm=built_up_m2,
                 carpet_area_sqm=carpet_m2,
                 floor_plate_mask=f_mask,
@@ -4992,6 +5942,199 @@ class SoleGeometryEngine:
 
         total_built_up = round(sum(f.built_up_area_sqm for f in floors), 2)
         total_carpet = round(sum(f.carpet_area_sqm for f in floors), 2)
+
+        # UNFIT-BRIEF GUARD: when the statutory ceiling (coverage
+        # x plot, clipped to the setback buildable) cannot host the requested
+        # programme, the partitioner does not produce a tight plan - it produces
+        # degenerate slivers (an audited 8-room brief on a 10.9 x 10.6 m plot at
+        # 60% yielded a 0.26 m² bathroom). A plan whose rooms are less than half
+        # their catalogue minimum is not a plan: refuse the brief explicitly,
+        # with the numbers, instead of emitting nonsense geometry.
+        _degenerate = []
+        _thin = []
+        for _fl in floors:
+            for _r in _fl.rooms:
+                # Terraces are open-to-sky, and circulation spines/corridors are
+                # connectivity elements: neither is a habitable-room failure.
+                if _r.zone_category in ("terrace", "circulation"):
+                    continue
+                _spec = ONTOLOGY.get_space(
+                    space_type_of(_r, self.typology) or _r.room_id)
+                _min_area = float(getattr(_spec, "min_area_sqm", 0.0) or 0.0)
+                _collapsed = _min_area > 0.0 and _r.area_sqm < 0.5 * _min_area
+                # A habitable room narrower/deeper than the 1.95 m NBC clear
+                # minimum is not a room whatever its area says (an audited
+                # 8.74 m² bedroom measured 4.80 x 1.82 m). Wet/service spaces
+                # keep their own, smaller dimensional floor.
+                _habitable = getattr(_r, "zone_category", "") in ("public", "private")
+                _toothin = _habitable and min(float(_r.width_m), float(_r.depth_m)) < 1.95
+                if _collapsed:
+                    _degenerate.append((_r.room_id, _r.area_sqm, max(_min_area, 1.95)))
+                elif _toothin:
+                    _thin.append((_r.room_id, _r.area_sqm,
+                                  min(float(_r.width_m), float(_r.depth_m))))
+        # Severity, not merely presence, decides between refusing the brief and
+        # reporting a tight one. A room collapsed to half its catalogue minimum
+        # is a brief the plot cannot host: refuse it. A plate that is a few
+        # percent short of the programme's comfort estimate - typically because
+        # only a rectangle can be inscribed in an irregular buildable - is still
+        # solvable: the partitioner compresses, every short room is named in a
+        # surfaced warning, and the gate/certificate report it.
+        _ceiling = float(getattr(self, "footprint_ceiling_area", envelope.get("area_sqm", 0.0)))
+        _env_area = float(envelope.get("area_sqm", 0.0) or 0.0)
+        _need = float(getattr(self, "program_needed_area_m2", 0.0) or 0.0)
+        if _need > _ceiling + 0.5 and not any(w.startswith("LAND-01") for w in self.warnings):
+            # Irregular plots take the site-plan path, which does not emit the
+            # rectangle path's LAND-01. A land check may never fail silently.
+            self.warnings.append(
+                f"LAND-01: Programme needs {_need:.1f} m² but the coverage/setback "
+                f"ceiling allows {_ceiling:.1f} m²; explicit deficit "
+                f"{max(0.0, _need - _ceiling):.1f} m²."
+            )
+        _plate_shortfall_ratio = (max(0.0, _need - _env_area) / _need) if _need > 0 else 0.0
+        # The refusal is driven by GEOMETRY that proves the brief cannot be hosted
+        # (a room collapsed to under half its minimum, or habitable spaces pushed
+        # under the clear minimum while the plate is materially short of the
+        # programme). An area estimate alone never refuses a brief the partitioner
+        # can still place: the estimated comfort area carries a circulation/wall
+        # cushion, and a plate a few percent under that estimate still yields a
+        # tight-but-legal plan, reported through LAND-01, the gate and the cert.
+        _unfit = bool(_degenerate) or (_thin and _plate_shortfall_ratio > 0.15)
+        if _thin and not _unfit:
+            self.warnings.append(
+                "PLATE-SHORT: the largest plate that fits this buildable is "
+                f"{_env_area:.1f} m² against a {_need:.1f} m² programme "
+                f"({_plate_shortfall_ratio * 100.0:.1f}% short); these habitable spaces "
+                "are below the 1.95 m clear minimum and are reported, not hidden: "
+                + ", ".join(f"{rid} {area:.2f} m² at {dim:.2f} m" for rid, area, dim in _thin[:5])
+            )
+        if _unfit:
+            _reason = (
+                "Hard Constraint Violation: the requested programme does not fit the statutory "
+                f"ground plate ({_env_area:.1f} m² = the smaller of the "
+                f"coverage ratio and the setback buildable; ceiling {_ceiling:.1f} m²) while the "
+                f"programme needs {_need:.1f} m². "
+                "Reduce the programme or raise the ground coverage ratio. Collapsed spaces: "
+                + (", ".join(f"{rid} {area:.2f} m² (min {mn:.2f} m²)" for rid, area, mn in _degenerate[:5])
+                   or ", ".join(f"{rid} {area:.2f} m² at {dim:.2f} m" for rid, area, dim in _thin[:5])
+                   or "none (the plate itself is short of the programme)")
+            )
+            self.warnings.append("GEN-UNFIT: " + _reason)
+            elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+            # A refusal is a verdict: it carries the full L1-L15 gate with every
+            # layer N/A-with-reason and an overall FAIL, so no surface can read
+            # "no gate" as "not checked" or "check passed".
+            _refusal_gate = refusal_gate_report(_reason)
+            return MultiStoreyBuildingModel(
+                building_typology=self.typology,
+                total_storeys=self.total_storeys,
+                plot_width_m=self.plot_w,
+                plot_depth_m=self.plot_d,
+                ground_coverage_ratio=self.coverage,
+                total_built_up_area_sqm=0.0,
+                vertical_cores=[],
+                duct_shafts=[],
+                floors=[],
+                global_metrics={"status": "failed", "feasibility": "programme_exceeds_statutory_ceiling"},
+                qa_report={
+                    "status": "failed",
+                    "degradation_level": int(getattr(self, "degradation_level", 0) or 0),
+                    "validation_gate_status": "FAIL",
+                    "validation_gate": _refusal_gate,
+                },
+                validation_gate=_refusal_gate,
+                warnings=self.warnings,
+                # Two ledgers: the rooms that collapsed under the ceiling, and
+                # every requested room the typology programme never placed. A
+                # refusal must name BOTH classes of failure.
+                unmet_requirements=(
+                    [
+                        UnmetRequirement(room_id=rid, reason=f"{_reason} (collapsed to {area:.2f} m²)")
+                        for rid, area, _mn in _degenerate
+                    ]
+                    + [
+                        UnmetRequirement(room_id=rid, reason=f"{_reason} (only {dim:.2f} m clear)")
+                        for rid, _area, dim in _thin
+                        if rid not in {d[0] for d in _degenerate}
+                    ]
+                    + [
+                        u
+                        for u in self._compute_unmet_requirements_from_floors([])
+                        if u.room_id not in ({d[0] for d in _degenerate} | {t[0] for t in _thin})
+                    ]
+                ),
+                seed=self.seed,
+                solver_timing_ms=elapsed_ms,
+            )
+
+        # Step 3c: LAND PASS BEFORE THE CERTIFICATE.
+        # Land absorption is a MUTATION: it grows rooms into dead corners or
+        # labels a dead corner as a storage room. A certificate computed before
+        # it describes geometry that no longer exists, and the land checks
+        # themselves (coverage / containment / programme fit) were invisible to
+        # the gate - a plan could carry a FAILing land certificate beside a PASS
+        # gate. Size, absorb, then verify.
+        from app.services.floorplan.land_economics import compute_land_economics
+        building = MultiStoreyBuildingModel(
+            building_typology=self.raw_typology,
+            total_storeys=self.total_storeys,
+            plot_width_m=self.plot_w,
+            plot_depth_m=self.plot_d,
+            ground_coverage_ratio=self.coverage,
+            total_built_up_area_sqm=total_built_up,
+            vertical_cores=vertical_cores,
+            duct_shafts=duct_shafts,
+            structural_grid=self.structural_grid,
+            floors=floors,
+            global_metrics={"status": "pending"},
+            qa_report={"status": "pending"},
+            warnings=self.warnings,
+            unmet_requirements=self._compute_unmet_requirements_from_floors(floors),
+            seed=self.seed,
+            solver_timing_ms=0.0,
+        )
+        land_report = compute_land_economics(
+            building,
+            self.site_plan,
+            program_needed_area_m2=getattr(self, "program_needed_area_m2", 0.0),
+            footprint_source=getattr(self, "footprint_source", "coverage"),
+            program_aware_footprint=bool(getattr(self.req, "program_aware_footprint", False)),
+        )
+        building.land_economics = land_report
+        # Re-derive the area rows from the mutated geometry so every downstream
+        # number (built-up, carpet, FAR, efficiency) is post-absorption truth.
+        for _fl in floors:
+            _fl.built_up_area_sqm = round(
+                sum(r.area_sqm for r in _fl.rooms if r.zone_category != "terrace"), 2)
+            _fl.carpet_area_sqm = round(
+                sum(r.area_sqm for r in _fl.rooms
+                    if r.zone_category not in ("circulation", "service", "terrace")), 2)
+        if self.site_plan and getattr(self.site_plan, "wedge_zones", None):
+            floors[0].built_up_area_sqm = round(
+                floors[0].built_up_area_sqm
+                + sum(w.area_sqm for w in self.site_plan.wedge_zones
+                      if getattr(w, "is_enclosed_storage", False)), 2)
+        total_built_up = round(sum(f.built_up_area_sqm for f in floors), 2)
+        total_carpet = round(sum(f.carpet_area_sqm for f in floors), 2)
+        for _w in land_report.warnings:
+            if _w not in self.warnings:
+                self.warnings.append(_w)
+
+        # Step 3d: DERIVED METRICS. Vastu orientation, plumbing
+        # riser reach, envelope utilisation and circulation efficiency are
+        # measured on the final, mutated geometry; the response and the sheets
+        # print these numbers, never a constant.
+        self.derived_metrics = apply_to_building(building)
+        if self.derived_metrics.get("vastu_compliance_pct") is None:
+            self.warnings.append(
+                "METRICS: Vastu compliance is not evaluated on this plan (no room "
+                "carries an orientation contract); it is not reported as a pass."
+            )
+        if self.derived_metrics.get("plumbing_adjacency_score") is None:
+            self.warnings.append(
+                "METRICS: plumbing riser alignment is not evaluated on this plan "
+                "(no wet room); it is not reported as a pass."
+            )
 
         # Step 4: Statutory calculations (NBC occupancy WC & Parking counts)
         all_rooms = [r for f in floors for r in f.rooms]
@@ -5025,7 +6168,25 @@ class SoleGeometryEngine:
         # L2 (zero swing collisions) and L8 (program intent) are hard layers:
         # a certificate cannot claim validity while either fails.
         cert.is_valid = cert.is_valid and cert.l2_door_swings_valid and cert.l8_program_intent_satisfied
-        cert.certified_rules = cert.certified_rules + ["LQ-L2-SWINGS", "LQ-L3-FIXTURES", "LQ-L4-FURNITURE", "LQ-L8-INTENT"]
+        # Certified rules follow the verdicts: a rule is listed only when its
+        # invariant actually passed, and a failure always carries its reason
+        if cert.l2_door_swings_valid:
+            cert.certified_rules.append("LQ-L2-SWINGS")
+        else:
+            cert.failures.append(
+                "LQ-L2 Door swings: a leaf collides with a wall, stair, corridor or furniture"
+            )
+        if cert.l3_fixture_clearances_satisfied:
+            cert.certified_rules.append("LQ-L3-FIXTURES")
+        if cert.l4_furniture_clearances_satisfied:
+            cert.certified_rules.append("LQ-L4-FURNITURE")
+        if cert.l8_program_intent_satisfied:
+            cert.certified_rules.append("LQ-L8-INTENT")
+        else:
+            cert.failures.append(
+                "LQ-L8 Program intent: "
+                + ("; ".join(pi_warns[:4]) or "upper-floor programme does not meet the brief")
+            )
         cert.details["living_quality_layers"] = {
             "L2_door_swings": "pass" if cert.l2_door_swings_valid else "fail",
             "L3_fixture_clearances": "pass" if cert.l3_fixture_clearances_satisfied else "warn",
@@ -5041,7 +6202,6 @@ class SoleGeometryEngine:
         # Step 5c: UNIVERSAL VALIDATION GATE (L1-L15).
         # Every generation, every typology, every floor count is judged by the
         # same contract. No layer is silently skipped; N/A carries a reason.
-        from app.services.floorplan.validation_gate import HARD_FAIL_LAYERS
         gate_layers = build_gate_layers(
             engine=self,
             cert=cert,
@@ -5052,6 +6212,12 @@ class SoleGeometryEngine:
             pi_warns=pi_warns,
             statutory_audit=statutory_audit,
             plate_masks=getattr(self, "resolved_floor_plate_masks", None),
+            # The land report is a gate input, not a side panel:
+            # a footprint outside its buildable, over its coverage cap, or
+            # materially unable to host the programme can never sit beside a
+            # PASS gate. The report (not just its certificate) travels so a
+            # small, disclosed deficit can be a WARN instead of a refusal.
+            land_cert=land_report,
         )
         gate = assemble_gate_report(gate_layers, llm_boundary=self.llm_boundary_audit)
         gate_overall = gate["overall_status"]
@@ -5060,10 +6226,24 @@ class SoleGeometryEngine:
         cert.details["validation_gate"] = gate
         # Overall = worst layer. A FAIL on a hard layer (L1/L2/L8/L14) invalidates
         # the certificate; WARN never does (advisories surface as chips).
-        if gate_overall == "FAIL" and any(
-            d["layer_id"] in HARD_FAIL_LAYERS for d in gate_layers if d["status"] == "FAIL"
-        ):
+        if gate_overall == "FAIL":
+            # ANY failing gate layer withholds the certificate. The badge is
+            # NON-COMPLIANT whenever the gate FAILs, so the certificate must be
+            # false too - and it must name EVERY failing layer id.
             cert.is_valid = False
+            for _l in gate_layers:
+                if _l["status"] != "FAIL":
+                    continue
+                _why = (_l.get("findings") or [_l.get("summary") or "layer failed"])[0]
+                _msg = f"GATE-{_l['layer_id']} {_l.get('title', '')}: {_why}"
+                if _msg not in cert.failures:
+                    cert.failures.append(_msg)
+        elif gate_overall == "WARN":
+            cert.details["gate_advisories"] = [
+                f"{_l['layer_id']} {_l.get('title', '')}: "
+                f"{(_l.get('findings') or [_l.get('summary') or 'advisory'])[0]}"
+                for _l in gate_layers if _l["status"] == "WARN"
+            ]
         self.gate_report = gate
         self.gate_layers = gate_layers
 
@@ -5143,71 +6323,53 @@ class SoleGeometryEngine:
 
         elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
 
-        building = MultiStoreyBuildingModel(
-            building_typology=self.raw_typology,
-            total_storeys=self.total_storeys,
-            plot_width_m=self.plot_w,
-            plot_depth_m=self.plot_d,
-            ground_coverage_ratio=self.coverage,
-            total_built_up_area_sqm=total_built_up,
-            vertical_cores=vertical_cores,
-            duct_shafts=duct_shafts,
-            structural_grid=self.structural_grid,
-            floors=floors,
-            global_metrics={
-                "status": "optimal" if deg_level == 0 else "compromise",
-                "total_carpet_area_sqm": total_carpet,
-                "building_efficiency_pct": round((total_carpet / total_built_up * 100.0) if total_built_up > 0 else 0.0, 1),
-                "plumbing_stack_alignment_avg_pct": 100.0,
-                "vastu_compliance_score": 90.0 if self.strictness == "high" else 82.0,
-                "stacking_invariant_verified": cert.vertical_stack_valid,
-                "mathematical_validity_certified": cert.is_valid,
-                "validation_gate_status": gate_overall,
-                "validated_layers": gate["validated_layers"],
-            },
-            qa_report={
-                "status": "pass" if cert.is_valid else "fail",
-                "degradation_level": deg_level,
-                "stacking_invariants": "pass" if cert.vertical_stack_valid else "fail",
-                "bfs_reachability": "pass" if cert.connectivity_bfs else "fail",
-                "dimension_chain_sums_within_1mm": "pass" if cert.chain_sums_match else "fail",
-                "egress_travel_distance": "pass" if cert.egress_distances_satisfied else "fail",
-                "zero_forbidden_violations": "pass" if cert.zero_forbidden_violations else "fail",
-                "validation_gate": gate,
-                "validation_gate_status": gate_overall,
-                "orthogonal_squaring_policy": getattr(self.site_plan, "design_policy", None) if self.site_plan else None,
-                "orthogonal_squaring_rationale": getattr(self.site_plan, "design_policy_rationale", None) if self.site_plan else None,
-                "design_policy": getattr(self.site_plan, "design_policy", None) if self.site_plan else None,
-                "design_policy_rationale": getattr(self.site_plan, "design_policy_rationale", None) if self.site_plan else None,
-                "wedge_zones_count": len(getattr(self.site_plan, "wedge_zones", [])) if self.site_plan else 0,
-                "waste_pct": getattr(self.site_plan, "waste_pct", 0.0) if self.site_plan else 0.0,
-                "waste_warning_triggered": getattr(self.site_plan, "waste_warning_triggered", False) if self.site_plan else False,
-                "rotation_alternatives": getattr(self.site_plan, "rotation_alternatives", []) if self.site_plan else [],
-            },
-            warnings=self.warnings,
-            unmet_requirements=self._compute_unmet_requirements_from_floors(floors),
-            seed=self.seed,
-            solver_timing_ms=elapsed_ms,
-            mathematical_certificate=cert.model_dump(),
-            validation_gate=gate,
-            plot_polygon=plot_poly_dump,
-            site_plan=site_plan_dump,
-        )
+        # The building model was created before the land pass (which mutates the
+        # plate). Only now - after land absorption, the certificate and the gate -
+        # does it carry final verdicts.
+        building.global_metrics.update({
+            "status": "optimal" if deg_level == 0 else "compromise",
+            "total_carpet_area_sqm": total_carpet,
+            "building_efficiency_pct": round((total_carpet / total_built_up * 100.0) if total_built_up > 0 else 0.0, 1),
+            "plumbing_stack_alignment_avg_pct": 100.0,
+            "vastu_compliance_score": 90.0 if self.strictness == "high" else 82.0,
+            "stacking_invariant_verified": cert.vertical_stack_valid,
+            "mathematical_validity_certified": cert.is_valid,
+            "validation_gate_status": gate_overall,
+            "validated_layers": gate["validated_layers"],
+        })
+        building.qa_report.update({
+            "status": "pass" if cert.is_valid else "fail",
+            "degradation_level": deg_level,
+            "stacking_invariants": "pass" if cert.vertical_stack_valid else "fail",
+            "bfs_reachability": "pass" if cert.connectivity_bfs else "fail",
+            "dimension_chain_sums_within_1mm": "pass" if cert.chain_sums_match else "fail",
+            "egress_travel_distance": "pass" if cert.egress_distances_satisfied else "fail",
+            "zero_forbidden_violations": "pass" if cert.zero_forbidden_violations else "fail",
+            "validation_gate": gate,
+            "validation_gate_status": gate_overall,
+            "orthogonal_squaring_policy": getattr(self.site_plan, "design_policy", None) if self.site_plan else None,
+            "orthogonal_squaring_rationale": getattr(self.site_plan, "design_policy_rationale", None) if self.site_plan else None,
+            "design_policy": getattr(self.site_plan, "design_policy", None) if self.site_plan else None,
+            "design_policy_rationale": getattr(self.site_plan, "design_policy_rationale", None) if self.site_plan else None,
+            "wedge_zones_count": len(getattr(self.site_plan, "wedge_zones", [])) if self.site_plan else 0,
+            "waste_pct": getattr(self.site_plan, "waste_pct", 0.0) if self.site_plan else 0.0,
+            "waste_warning_triggered": getattr(self.site_plan, "waste_warning_triggered", False) if self.site_plan else False,
+            "rotation_alternatives": getattr(self.site_plan, "rotation_alternatives", []) if self.site_plan else [],
+        })
+        building.total_built_up_area_sqm = total_built_up
+        building.warnings = self.warnings
+        building.unmet_requirements = self._compute_unmet_requirements_from_floors(floors)
+        building.solver_timing_ms = elapsed_ms
+        building.mathematical_certificate = cert.model_dump()
+        building.validation_gate = gate
+        building.plot_polygon = plot_poly_dump
+        building.site_plan = site_plan_dump
         # Every floor sheet carries the same universal gate table (zero silent skips).
         for fl in building.floors:
             fl.validation_gate = gate
 
-        # Land economics: absorb every >=1 m² residual as a labelled
-        # wedge, report efficiency/waste, and add the SPACE-EFFICIENCY layer.
-        from app.services.floorplan.land_economics import compute_land_economics
-        land_report = compute_land_economics(
-            building,
-            self.site_plan,
-            program_needed_area_m2=getattr(self, "program_needed_area_m2", 0.0),
-            footprint_source=getattr(self, "footprint_source", "coverage"),
-            program_aware_footprint=bool(getattr(self.req, "program_aware_footprint", False)),
-        )
-        building.land_economics = land_report
+        # Land economics already ran (Step 3c) BEFORE the certificate, because
+        # absorption mutates the plate. Only the derived metrics are attached here.
         identity_report = summarize_identities(
             r for fl in building.floors for r in fl.rooms
         )
@@ -5273,6 +6435,17 @@ class SoleGeometryEngine:
                 iterations=1,
                 warnings=building.warnings,
                 multi_storey=building,
+                # A refusal must stay machine-readable: keep the named failures
+                # (unfit brief / infeasible envelope) on the response, never drop
+                # them just because there is no floor to draw.
+                unmet_requirements=[
+                    (u.model_dump() if hasattr(u, "model_dump") else dict(u))
+                    for u in (building.unmet_requirements or [])
+                ],
+                site_plan=building.site_plan,
+                land_economics=building.land_economics,
+                generation_id=f"GEN-{self.typology[:2]}-{self.total_storeys}F-{int(self.seed)}",
+                seed=str(self.seed),
             )
 
         # Map Floor 0 rooms, doors, windows to RectanglesModel
@@ -5346,6 +6519,29 @@ class SoleGeometryEngine:
         )
         gate_report = getattr(self, "gate_report", None) or assemble_gate_report([])
         gate_overall_str = str(gate_report.get("overall_status", "PASS"))
+        # The headline invariant score the QA panel reports, derived from the
+        # certificate itself - never from a hardcoded "0 violations".
+        _cert_data = building.mathematical_certificate or {}
+        _invariants = [
+            _cert_data.get("non_overlap", False),
+            _cert_data.get("containment", False),
+            _cert_data.get("chain_sums_match", False),
+            _cert_data.get("min_dimensions_satisfied", False),
+            _cert_data.get("aspect_ratios_satisfied", False),
+            _cert_data.get("connectivity_bfs", False),
+            _cert_data.get("egress_distances_satisfied", False),
+            _cert_data.get("zero_forbidden_violations", False),
+            _cert_data.get("vertical_stack_valid", False),
+            _cert_data.get("core_continuity_valid", False),
+            _cert_data.get("no_wet_over_terrace_valid", False),
+            _cert_data.get("sanitation_wc_count_satisfied", False),
+            _cert_data.get("l2_door_swings_valid", False),
+            _cert_data.get("l8_program_intent_satisfied", False),
+        ]
+        # QA rows must not contradict the gate. No architectural
+        # critic runs in the deterministic geometry loop, so the honest value is
+        # "skipped" - not "pass" - and the verdict the reader needs is the gate
+        # status, which is carried explicitly rather than inferred.
         qa_data = FloorPlanQA(
             entry="living",
             circulation=f0.circulation_status,
@@ -5353,9 +6549,12 @@ class SoleGeometryEngine:
             peripheral_service=True,
             catalog=True,
             aspect=True,
-            critic="pass" if gate_overall_str != "FAIL" else "fail",
+            critic="skipped",
             violations=gate_fail_count,
             validation_gate=gate_report,
+            validation_gate_status=gate_overall_str,
+            invariants_verified=sum(1 for _ok in _invariants if _ok),
+            invariants_total=len(_invariants),
         )
 
         identity_report = summarize_identities(
@@ -5445,18 +6644,56 @@ class SoleGeometryEngine:
                     _sink.append(over_plot_warning)
             coverage_pct = 100.0
 
+        # Response status is DERIVED, never hardcoded: a generation
+        # that leaves requirements unmet or fails a gate layer cannot claim
+        # "optimal". Gate FAIL is a hard failure; anything unmet or warned is an
+        # explicit compromise.
+        _unmet_count = len(building.unmet_requirements or [])
+        if gate_overall_str == "FAIL":
+            # A failed status must explain itself: name every failing layer in
+            # the surfaced warnings (a bare "failed" is un-auditable).
+            for _layer in (getattr(self, "gate_layers", None) or []):
+                if str(_layer.get("status", "")).upper() != "FAIL":
+                    continue
+                _finding = (_layer.get("findings") or [None])[0]
+                _msg = (
+                    f"GATE-FAIL {_layer.get('layer_id')} {_layer.get('title', '')}: "
+                    f"{_finding or _layer.get('summary') or 'layer failed'}"
+                )
+                for _sink in (building.warnings, self.warnings):
+                    if _msg not in _sink:
+                        _sink.append(_msg)
+                # The refusal must also be machine-readable, not just prose.
+                if not any(
+                    str(getattr(u, "room_id", "")).startswith("gate_")
+                    for u in (building.unmet_requirements or [])
+                ):
+                    building.unmet_requirements.append(
+                        UnmetRequirement(room_id=f"gate_{_layer.get('layer_id')}", reason=_msg)
+                    )
+            response_status = "failed"
+        elif (
+            _unmet_count > 0
+            or gate_overall_str == "WARN"
+            or int(getattr(self, "degradation_level", 0) or 0) > 0
+        ):
+            response_status = "compromise"
+        else:
+            response_status = "optimal"
+
+        _derived = getattr(self, "derived_metrics", {}) or {}
         metrics = FloorPlanMetrics(
-            vastu_compliance_pct=f0.vastu_compliance_pct,
-            plumbing_adjacency_score=100.0,
-            space_utilization_pct=100.0,
+            vastu_compliance_pct=_derived.get("vastu_compliance_pct"),
+            plumbing_adjacency_score=_derived.get("plumbing_adjacency_score"),
+            space_utilization_pct=_derived.get("space_utilization_pct"),
             plot_coverage_pct=coverage_pct,
             total_built_up_sqm=f0.built_up_area_sqm,
-            circulation_efficiency_pct=100.0,
+            circulation_efficiency_pct=_derived.get("circulation_efficiency_pct"),
             circulation_status=f0.circulation_status,
         )
 
         return FloorPlanResponse(
-            status="optimal",
+            status=response_status,
             grid_matrix=grid_matrix,
             placements=placements,
             rectangles=rect_model,

@@ -217,7 +217,11 @@ def repair_interior_dead_corners(
                 ry2 = room.y + room.depth_m
                 in_y = room.y >= miny - 0.02 and ry2 <= maxy + 0.02
                 in_x = room.x >= minx - 0.02 and rx2 <= maxx + 0.02
-                spec = ONTOLOGY.get_space(room.room_id)
+                # Aspect limits come from the room's SPACE TYPE, not its solver
+                # handle, which resolves to nothing for most generated rooms
+                # (audit F03).
+                from app.services.floorplan.identity import space_type_of
+                spec = ONTOLOGY.get_space(space_type_of(room) or room.room_id)
                 # Match the certificate's own tolerance so absorbing a strip can
                 # never be the reason a previously valid plate becomes invalid.
                 max_ar = (spec.max_aspect_ratio if spec is not None else 3.0) * 1.30
@@ -319,21 +323,35 @@ def compute_land_economics(
     program_aware_footprint: bool = False,
 ) -> LandEconomicsReport:
     if site_plan is None or not building.floors:
+        _missing = (
+            "LAND-08 Site plan missing: no canonical site plan / floor plate was produced, "
+            "so land use cannot be certified."
+        )
         return LandEconomicsReport(
             program_needed_area_m2=round(program_needed_area_m2, 2),
             footprint_source=footprint_source,
             program_aware_footprint=program_aware_footprint,
-            certificate=LandEconomicsCertificate(status="FAIL", checks={"site_plan": False}),
+            warnings=[_missing],
+            certificate=LandEconomicsCertificate(
+                status="FAIL", checks={"site_plan": False}, warnings=[_missing]
+            ),
         )
 
     buildable = _poly(site_plan.buildable_polygon_coords)
     footprint = _footprint_poly(site_plan)
     if buildable is None or footprint is None:
+        _bad_geom = (
+            "LAND-08 Land geometry unreadable: the site plan's buildable polygon or "
+            "footprint polygon could not be reconstructed, so land use cannot be certified."
+        )
         return LandEconomicsReport(
             program_needed_area_m2=round(program_needed_area_m2, 2),
             footprint_source=footprint_source,
             program_aware_footprint=program_aware_footprint,
-            certificate=LandEconomicsCertificate(status="FAIL", checks={"geometry": False}),
+            warnings=[_bad_geom],
+            certificate=LandEconomicsCertificate(
+                status="FAIL", checks={"geometry": False}, warnings=[_bad_geom]
+            ),
         )
 
     slivers, absorbed_area, subthreshold_area, absorbed = _absorb_residuals(site_plan, buildable, footprint)
@@ -412,17 +430,13 @@ def compute_land_economics(
         warnings.append(
             f"LAND-03 Circulation ratio {circ_ratio:.1f}% is outside the 12–20% target band."
         )
-    if not program_aware_footprint and program_deficit > 0.5:
-        warnings.append(
-            "LAND-04 Program-aware footprint is off; enable program_aware_footprint to size "
-            "the rectangular footprint from the programme instead of coverage alone."
-        )
-    if footprint_source == "inscribed" and program_aware_footprint and program_deficit > 0.5:
+    if footprint_source == "inscribed" and program_deficit > 0.5:
         warnings.append(
             "LAND-06 Irregular buildable: the inscribed footprint, not the programme, "
             "is the binding constraint; the deficit needs a plot/coverage trade-off."
         )
 
+    coverage_ratio = float(building.ground_coverage_ratio or 0.60)
     checks = {
         "site_plan_present": True,
         "footprint_contained_in_buildable": bool(site_plan.certificate.footprint_contained_in_buildable),
@@ -435,6 +449,41 @@ def compute_land_economics(
         "interior_dead_corners_zero": interior_dead < RESIDUAL_THRESHOLD_M2,
         "furniture_fit": furniture_fit is None or furniture_fit >= 80.0,
     }
+
+    # NO SILENT BREACH (audit F06): every failed check names itself in the
+    # surfaced warnings. A check that can fail silently is a check the reader
+    # cannot audit. Codes already emitted above (LAND-01/03/05) are not repeated.
+    _check_messages = {
+        "footprint_contained_in_buildable": (
+            "LAND-09 Footprint out of bounds: the ground plate is not contained in the "
+            "setback buildable polygon."
+        ),
+        "coverage_within_limit": (
+            f"LAND-10 Ground coverage breach: footprint {footprint_area:.1f} m² exceeds the "
+            f"{coverage_limit:.1f} m² cap ({plot_area:.1f} m² plot × {coverage_ratio * 100:.0f}% "
+            "coverage)."
+        ),
+        "footprint_utilization_90": (
+            f"LAND-11 Ground plate underused: rooms cover {footprint_utilization:.1f}% of the "
+            f"{footprint_area:.1f} m² footprint (floor 90%)."
+        ),
+        "anonymous_outdoor_zero": (
+            f"LAND-12 Anonymous residual: {subthreshold_area:.2f} m² in sub-threshold slivers and "
+            f"{residual_after_area:.2f} m² unlabelled buildable area remain outside any labelled zone."
+        ),
+        "residuals_labelled": (
+            f"LAND-13 Unlabelled residual: {len([s for s in slivers if not s.absorbed_as])} "
+            "residual region(s) were absorbed without a labelled use."
+        ),
+        "furniture_fit": (
+            f"LAND-14 Furniture fit {furniture_fit if furniture_fit is not None else 0.0:.1f}% "
+            "is below the 80% placement target."
+        ),
+    }
+    for _key, _message in _check_messages.items():
+        if not checks.get(_key, True) and _message not in warnings:
+            warnings.append(_message)
+
     hard_fail = not (
         checks["footprint_contained_in_buildable"]
         and checks["coverage_within_limit"]

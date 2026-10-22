@@ -54,7 +54,7 @@ def approximate_curvilinear_polygon(
     max_segment_length: float = 5.0
 ) -> Tuple[bool, List[str], List[Tuple[float, float]]]:
     """
-    Phase 1: Auto-approximates curved boundary segments (arcs) or dense survey points into piecewise-linear polylines.
+    Auto-approximates curved boundary segments (arcs) or dense survey points into piecewise-linear polylines.
     - Uses Shapely's simplify(tolerance=tolerance, preserve_topology=True).
     - Enforces >= 95% area retention.
     - Validates simple polygon topology (no self-intersections).
@@ -125,7 +125,7 @@ def validate_and_canonicalize_polygon(
     if len(deduped) < 3:
         return False, ["Plot polygon vertices collapse to fewer than 3 distinct points."], vertices, "invalid"
 
-    # Phase 1: Curvilinear boundary approximation for dense survey / arc inputs
+    # Curvilinear boundary approximation for dense survey / arc inputs
     has_sub_edge = any(
         math.hypot(deduped[(i+1)%len(deduped)][0] - deduped[i][0], deduped[(i+1)%len(deduped)][1] - deduped[i][1]) < MIN_STATUTORY_EDGE_M
         for i in range(len(deduped))
@@ -437,7 +437,7 @@ def decompose_buildable_into_wings(
     program_needed_area_m2: Optional[float] = None,
 ) -> InscribedFootprint:
     """
-    Phase 2: Rectangle Packing / Wing Decomposition for Advanced Footprint Topologies.
+    Rectangle Packing / Wing Decomposition for Advanced Footprint Topologies.
     - Rectangle Equivalence: Simple non-elongated rectangles produce exactly 1 Wing (single_rectangle)
       matching legacy behavior down to the millimeter.
     - Courtyard Typology: Subtracts central rectangular void (>= 3.5x3.5m) to create Central Courtyard
@@ -451,9 +451,13 @@ def decompose_buildable_into_wings(
     is_extreme_aspect = (aspect > 3.0) and (min(plot_w, plot_d) >= 10.0)
 
     # 1. Single Rectangle Path (Strict Rectangle-Equivalence)
-    if is_rect and not is_courtyard and not is_extreme_aspect and (
-        buildable_poly.area <= 400.0 or program_needed_area_m2 is not None
-    ):
+    # A rectangular plot has exactly ONE possible wing, whatever its size: the
+    # old `buildable <= 400 m²` guard sent large rectangles through the maximal
+    # inscribed-rectangle search, which ignores the coverage cap entirely (the
+    # audit's 9,661 m² boundary produced an 8,632 m² footprint against a 5,796 m²
+    # cap). The single-rectangle path below applies
+    # min(buildable, coverage x plot) and honours the solver's own envelope.
+    if is_rect and not is_courtyard and not is_extreme_aspect:
         if inscribed_override:
             env_w = round(inscribed_override["width"], 2)
             env_d = round(inscribed_override["depth"], 2)
@@ -1436,6 +1440,59 @@ def compute_canonical_site_plan(
         inscribed_override=inscribed_override,
         program_needed_area_m2=program_needed_area_m2,
     )
+
+    # HARD COVERAGE CEILING: the statutory coverage ratio caps the
+    # ground plate. A rectangular plot is sized before it reaches this point; an
+    # irregular plot decomposes the inscribed buildable and can exceed the ratio
+    # on very large sites, so the footprint is trimmed here - never silently.
+    _coverage_cap_area = round(plot_area * coverage, 2)
+    if inscribed_footprint.area_sqm > _coverage_cap_area + 0.5:
+        _wings = list(inscribed_footprint.wings or [])
+        _scale = math.sqrt(_coverage_cap_area / max(inscribed_footprint.area_sqm, 0.01))
+        if len(_wings) <= 1:
+            if _wings:
+                _w = _wings[0]
+                _w.width_m = round(_w.width_m * _scale, 2)
+                _w.depth_m = round(_w.depth_m * _scale, 2)
+                _w.area_sqm = round(_w.width_m * _w.depth_m, 2)
+                _w.corner_vertices = [
+                    (_w.x, _w.y),
+                    (_w.x + _w.width_m, _w.y),
+                    (_w.x + _w.width_m, _w.y + _w.depth_m),
+                    (_w.x, _w.y + _w.depth_m),
+                ]
+            inscribed_footprint.width_m = round(inscribed_footprint.width_m * _scale, 2)
+            inscribed_footprint.depth_m = round(inscribed_footprint.depth_m * _scale, 2)
+        else:
+            # Multi-wing topologies cannot be shrunk in place without breaking
+            # their corridor links, so the dominant wing carries the whole
+            # programme and the minor wing is released back to open space.
+            _w = max(_wings, key=lambda w: w.area_sqm)
+            _w.width_m = round(_w.width_m * _scale, 2)
+            _w.depth_m = round(_w.depth_m * _scale, 2)
+            _w.area_sqm = round(_w.width_m * _w.depth_m, 2)
+            _w.corner_vertices = [
+                (_w.x, _w.y),
+                (_w.x + _w.width_m, _w.y),
+                (_w.x + _w.width_m, _w.y + _w.depth_m),
+                (_w.x, _w.y + _w.depth_m),
+            ]
+            inscribed_footprint.wings = [_w]
+            inscribed_footprint.corridors = []
+            inscribed_footprint.width_m = _w.width_m
+            inscribed_footprint.depth_m = _w.depth_m
+            inscribed_footprint.topology_type = "single_rectangle"
+        inscribed_footprint.area_sqm = round(
+            sum(w.area_sqm for w in (inscribed_footprint.wings or [])) or
+            inscribed_footprint.width_m * inscribed_footprint.depth_m,
+            2,
+        )
+        warnings.append(
+            f"LAND-10 Footprint trimmed to the {_coverage_cap_area:.1f} m² coverage ceiling "
+            f"({coverage * 100:.0f}% of {plot_area:.1f} m²): the inscribed buildable footprint "
+            "exceeded the statutory ground-coverage ratio. Unused buildable area is labelled "
+            "open space."
+        )
 
     env_w = inscribed_footprint.width_m
     env_d = inscribed_footprint.depth_m

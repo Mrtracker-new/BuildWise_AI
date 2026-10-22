@@ -23,6 +23,33 @@ from app.services.floorplan.ontology import (
 )
 
 # Spaces whose display label is unit-scoped ("Unit A Bedroom").
+def space_type_of(room: Any, typology: Optional[str] = None) -> Optional[str]:
+    """Canonical ontology space id for a placed room.
+
+    THE key every ontology law check must compare. ``room_id`` is a solver
+    handle (``t3_sanitary_F0``, ``bed_2``, ``unitA_bed``), not a space type:
+    passing it to ``is_forbidden_wall`` made the forbidden-wall verifier blind
+    (audit F03) - six of six commercial seeds shared a sanitary_block /
+    electrical_room wall while the certificate reported zero violations.
+
+    Resolution order: the stamped identity, then the denormalized
+    ``space_type_id``, then id resolution through the ontology aliases.
+    """
+    ident = getattr(room, "identity", None)
+    if isinstance(ident, dict):
+        sid = ident.get("space_type_id")
+    else:
+        sid = getattr(ident, "space_type_id", None)
+    if sid:
+        return str(sid)
+    sid = getattr(room, "space_type_id", None)
+    if sid:
+        return str(sid)
+    room_id = getattr(room, "room_id", room if isinstance(room, str) else "")
+    resolved = ONTOLOGY.resolve_space_id(str(room_id), typology)
+    return str(resolved) if resolved else None
+
+
 UNIT_SCOPED_SPACE_IDS = {
     "unit_living",
     "unit_kitchen",
@@ -104,6 +131,7 @@ def resolve_space_identity(
     room_id: str,
     typology: Optional[str],
     *,
+    space_type_id: Optional[str] = None,
     area_sqm: Optional[float] = None,
     unit_id: Optional[str] = None,
     existing_name: Optional[str] = None,
@@ -117,7 +145,10 @@ def resolve_space_identity(
     existing label so every surface can render, and identity-coverage metrics
     make the gap explicit.
     """
-    sid = ONTOLOGY.resolve_space_id(room_id, typology)
+    # A stamped space type wins: it lets a solver-inserted element (the T3
+    # service spine) name its ontology type even when the solver handle is not
+    # an alias. Room ids remain the fallback for legacy payloads.
+    sid = space_type_id or ONTOLOGY.resolve_space_id(room_id, typology)
     spec = ONTOLOGY.get_space(sid) if sid else None
 
     # L5 threshold: only promote to Master Suite when the naming pass certified
@@ -165,6 +196,7 @@ def apply_room_identity(room: Any, typology: Optional[str]) -> SpaceIdentity:
     identity = resolve_space_identity(
         str(_value(room, "room_id", "") or ""),
         typology,
+        space_type_id=_value(room, "space_type_id", None),
         area_sqm=float(_value(room, "area_sqm", 0.0) or 0.0),
         unit_id=_value(room, "unit_id", None),
         existing_name=existing_name,
