@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 
 from app.schemas.response import LandValueEstimate, MultiplierBreakdown
+from app.services.boundary_service import resolve_plot_area_sqft
 from app.utils.geo_utils import haversine_distance
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
@@ -94,7 +95,8 @@ def calculate_land_value(
     total_construction_cost_inr: float,
     override_rate_per_sqft: Optional[float] = None,
     plot_area_sqft: Optional[float] = None,
-    ground_coverage_ratio: float = 0.60
+    ground_coverage_ratio: float = 0.60,
+    boundary_area_sqm: Optional[float] = None,
 ) -> LandValueEstimate:
     """
     Calculates indicative land valuation, locality multiplier adjustments,
@@ -107,14 +109,16 @@ def calculate_land_value(
         "Verify official valuation and stamp duty with the local Sub-Registrar Office before legal transaction."
     )
 
-    # 1. Derive or adopt plot area (Amendment 9)
+    # 1. Plot area: ONE decision, and it names its source (audit F07).
+    #    captured boundary > client-supplied area > coverage derivation.
     gcr = max(0.40, min(0.75, ground_coverage_ratio))
-    if plot_area_sqft is not None and plot_area_sqft >= 200.0:
-        actual_plot_area = round(plot_area_sqft, 1)
-    else:
-        # Standard footprint / ground coverage derivation
-        footprint_sqft = built_up_area_sqft / max(floors, 1)
-        actual_plot_area = round(footprint_sqft / gcr, 1)
+    actual_plot_area, plot_area_source, plot_area_warnings = resolve_plot_area_sqft(
+        boundary_area_sqm=boundary_area_sqm,
+        requested_plot_area_sqft=plot_area_sqft,
+        built_up_area_sqft=built_up_area_sqft,
+        floors=floors,
+        ground_coverage_ratio=gcr,
+    )
 
     # 2. Locality Multiplier
     multiplier, breakdown = calculate_locality_multiplier(road_score, facility_score)
@@ -177,6 +181,12 @@ def calculate_land_value(
         locality_multiplier=multiplier,
         multiplier_breakdown=breakdown,
         plot_area_sqft=actual_plot_area,
+        plot_area_source=plot_area_source,
+        boundary_area_sqft=(
+            round(float(boundary_area_sqm) / 0.09290304, 1)
+            if boundary_area_sqm is not None else None
+        ),
+        plot_area_warnings=plot_area_warnings,
         ground_coverage_ratio_applied=gcr,
         land_cost_inr=land_cost,
         construction_cost_inr=round(total_construction_cost_inr, 2),

@@ -183,6 +183,22 @@ def _safe_float(val: Any, default: float = 0.0) -> float:
         return default
 
 
+def _opt_float(val: Any) -> Optional[float]:
+    """Float or None: a missing measurement must never become 0.0 / 100.0."""
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def _pct_text(val: Any, dec: int = 1) -> str:
+    """Print a measured percentage, or an em dash when it was not evaluated."""
+    number = _opt_float(val)
+    return "\u2014" if number is None else f"{number:.{dec}f}%"
+
+
 def _safe_int(val: Any, default: int = 0) -> int:
     """Safely converts val to int; falls back to default on None, ValueError, or TypeError."""
     if val is None:
@@ -1230,6 +1246,133 @@ def make_universal_gate_table(gate: Dict[str, Any]) -> List[Any]:
 
 
 
+def make_land_economics_table(land: Optional[Dict[str, Any]]) -> List[Any]:
+    """
+    LAND ECONOMICS & SPACE EFFICIENCY table as ReportLab flowables.
+
+    The certificate is gate-bearing (L1): its overall status and every check are
+    printed verbatim, so the PDF cannot show a greener picture than the gate.
+    """
+    flowables: List[Any] = []
+    if not land:
+        return flowables
+    cert = land.get("certificate") or {}
+    if hasattr(cert, "model_dump"):
+        cert = cert.model_dump()
+    status = str((cert or {}).get("status") or "WARN").upper()
+    colors = {"PASS": COLOR_GREEN_TEXT, "WARN": COLOR_AMBER_TEXT, "FAIL": COLOR_RED_TEXT}
+    head = ParagraphStyle('LandHead', fontName=FONT_SEMIBOLD, fontSize=7.5, leading=9.0, textColor=COLOR_TEXT_PRIMARY)
+    cell = ParagraphStyle('LandCell', fontName=FONT_REGULAR, fontSize=7.0, leading=8.5, textColor=COLOR_TEXT_SECONDARY)
+    label = ParagraphStyle('LandLabel', fontName=FONT_REGULAR, fontSize=6.5, leading=8.0, textColor=COLOR_TEXT_TERTIARY)
+    value = ParagraphStyle('LandValue', fontName=FONT_SEMIBOLD, fontSize=8.5, leading=10.0, textColor=COLOR_TEXT_PRIMARY)
+    status_style = ParagraphStyle(
+        'LandStatus', fontName=FONT_SEMIBOLD, fontSize=7.5, leading=9.0,
+        textColor=colors.get(status, COLOR_TEXT_SECONDARY),
+    )
+
+    def _f(key: str, digits: int = 1) -> str:
+        v = _safe_float(land.get(key), None)
+        return f"{v:.{digits}f}" if v is not None else "-"
+
+    rows = [
+        [
+            Paragraph("<b>LAND ECONOMICS &amp; SPACE EFFICIENCY</b>", head),
+            Paragraph("", cell),
+            Paragraph(f"<b>SPACE-EFFICIENCY: {status}</b>", status_style),
+        ],
+    ]
+    kpi_pairs = [
+        ("Land-use efficiency", f"{_f('land_use_efficiency_pct')}%"),
+        ("Circulation ratio", f"{_f('circulation_ratio_pct')}%"),
+        ("Waste", f"{_f('waste_area_sqm')} m\u00b2 ({_f('waste_pct')}%)"),
+        ("Footprint utilization", f"{_f('footprint_utilization_pct')}%"),
+        ("Footprint", f"{_f('footprint_area_sqm')} m\u00b2 ({land.get('footprint_source', '-')})"),
+        ("Programme deficit", f"{_f('program_deficit_sqm')} m\u00b2"),
+        ("Floor area ratio", _f('floor_area_ratio', 2)),
+        ("Residual slivers", f"{_safe_int(land.get('sliver_count'), 0)} ({_safe_int(land.get('absorbed_residual_count'), 0)} absorbed)"),
+    ]
+    for idx in range(0, len(kpi_pairs), 4):
+        chunk = kpi_pairs[idx:idx + 4]
+        while len(chunk) < 4:
+            chunk.append(("", ""))
+        rows.append([
+            Paragraph(f"<font size='6.5'>{html.escape(k)}</font><br/><b>{html.escape(v)}</b>" if k else "", cell)
+            for k, v in chunk
+        ])
+
+    checks = list((cert or {}).get("checks", {}).items()) if isinstance((cert or {}).get("checks"), dict) else []
+    if checks:
+        failing = [name for name, ok in checks if not ok]
+        summary = f"{len(checks) - len(failing)}/{len(checks)} checks pass"
+        if failing:
+            summary += " - failing: " + ", ".join(failing[:6])
+        rows.append([Paragraph(html.escape(summary), cell), "", ""])
+
+    slivers = land.get("slivers") or []
+    if slivers:
+        sliver_text = "; ".join(
+            f"{s.get('sliver_id', '?')}: {_safe_float(s.get('area_sqm'), 0.0):.1f} m\u00b2 "
+            f"-> {s.get('absorbed_as') or 'unassigned'}"
+            for s in slivers[:6]
+        )
+        rows.append([Paragraph("<b>Residuals:</b> " + html.escape(sliver_text), cell), "", ""])
+
+    for warning in list(land.get("warnings") or []) + list((cert or {}).get("warnings") or []):
+        if not warning:
+            continue
+        rows.append([
+            Paragraph(html.escape(str(warning)[:200]), ParagraphStyle(
+                'LandWarn', fontName=FONT_REGULAR, fontSize=6.5, leading=8.0, textColor=COLOR_AMBER_TEXT
+            )),
+            "",
+            "",
+        ])
+
+    table = Table(rows, colWidths=[162.0, 162.0, 156.23], repeatRows=1)
+    table.setStyle(TableStyle([
+        ('SPAN', (0, 0), (1, 0)),
+        ('BACKGROUND', (0, 0), (-1, 0), COLOR_BG_SUBTLE),
+        ('LINEBELOW', (0, 0), (-1, 0), 1.0, COLOR_ACCENT),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.0),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.0),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4.0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4.0),
+        ('BOX', (0, 0), (-1, -1), 1.0, COLOR_ACCENT),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    flowables.append(table)
+    flowables.append(Spacer(1, 8))
+    return flowables
+
+
+def make_scheme_selection_line(floorplan: Optional[Dict[str, Any]]) -> List[Any]:
+    """Provenance line for a user-selected scheme profile (audit F09)."""
+    flowables: List[Any] = []
+    if not floorplan:
+        return flowables
+    snapshot = floorplan.get("params_snapshot") or {}
+    if hasattr(snapshot, "model_dump"):
+        snapshot = snapshot.model_dump()
+    if not isinstance(snapshot, dict):
+        return flowables
+    selected = floorplan.get("selected_scheme_id") or snapshot.get("selected_scheme_id")
+    if not selected:
+        return flowables
+    selection_status = str(snapshot.get("scheme_selection_status") or "recorded")
+    statement = {
+        "applied": "the certified plan IS this alternative",
+        "rejected_non_compliant": "the alternative was refused as non-compliant; certified baseline geometry retained",
+        "recorded_only": "this plate shape is not re-partitioned by the profile; baseline geometry retained",
+    }.get(selection_status, selection_status.replace('_', ' '))
+    style = ParagraphStyle('SchemeSel', fontName=FONT_REGULAR, fontSize=7.0, leading=9.0, textColor=COLOR_TEXT_SECONDARY)
+    flowables.append(Paragraph(
+        f"<b>SCHEME SELECTION:</b> {html.escape(str(selected))} - {html.escape(statement)}",
+        style,
+    ))
+    flowables.append(Spacer(1, 6))
+    return flowables
+
+
 def generate_pdf_report(
     data: Dict[str, Any],
     site_vision: Optional[Dict[str, Any]] = None,
@@ -2163,8 +2306,8 @@ def generate_pdf_report(
         level_rows = [level_headers]
         tot_bua_calc = 0.0
         tot_carpet_calc = 0.0
-        sum_vastu = 0.0
-        sum_plumb = 0.0
+        vastu_samples: List[float] = []
+        plumb_samples: List[float] = []
 
         for fl in ms_floors:
             f_idx = int(_get(fl, "floor_index", 0))
@@ -2172,14 +2315,16 @@ def generate_pdf_report(
             f_elev = f"+{f_idx * 3.0:.1f}m"
             f_bua = _safe_float(_get(fl, "built_up_area_sqm", 0.0))
             f_carpet = _safe_float(_get(fl, "carpet_area_sqm", 0.0))
-            f_vastu = _safe_float(_get(fl, "vastu_score_pct", _get(fl, "vastu_compliance_pct", 0.0)))
-            f_plumb = _safe_float(_get(fl, "plumbing_stack_alignment_pct", 100.0), 100.0)
+            f_vastu = _opt_float(_get(fl, "vastu_score_pct", _get(fl, "vastu_compliance_pct", None)))
+            f_plumb = _opt_float(_get(fl, "plumbing_stack_alignment_pct", None))
             f_circ = str(_get(fl, "circulation_status", "connected")).title()
 
             tot_bua_calc += f_bua
             tot_carpet_calc += f_carpet
-            sum_vastu += f_vastu
-            sum_plumb += f_plumb
+            if f_vastu is not None:
+                vastu_samples.append(f_vastu)
+            if f_plumb is not None:
+                plumb_samples.append(f_plumb)
 
             level_rows.append([
                 Paragraph(f"<b>Sheet 10.{f_idx + 1}</b>", td_style),
@@ -2187,14 +2332,13 @@ def generate_pdf_report(
                 Paragraph(f_elev, td_style),
                 Paragraph(f"{f_bua:.1f} m²", td_style),
                 Paragraph(f"{f_carpet:.1f} m²", td_style),
-                Paragraph(f"{f_vastu:.1f}%", td_style),
-                Paragraph(f"{f_plumb:.1f}%", td_style),
+                Paragraph(_pct_text(f_vastu), td_style),
+                Paragraph(_pct_text(f_plumb), td_style),
                 Paragraph(f"<b>{html.escape(f_circ)}</b>", td_green)
             ])
 
-        n_fl = max(len(ms_floors), 1)
-        avg_v = sum_vastu / n_fl
-        avg_p = sum_plumb / n_fl
+        avg_v = (sum(vastu_samples) / len(vastu_samples)) if vastu_samples else None
+        avg_p = (sum(plumb_samples) / len(plumb_samples)) if plumb_samples else None
         tbua_display = total_bua if total_bua > 0.0 else tot_bua_calc
         tcarpet_display = tot_carpet_calc if tot_carpet_calc > 0.0 else tbua_display * 0.82
 
@@ -2205,8 +2349,8 @@ def generate_pdf_report(
             Paragraph("<b>—</b>", th_style),
             Paragraph(f"<b>{tbua_display:.1f} m²</b>", th_style),
             Paragraph(f"<b>{tcarpet_display:.1f} m²</b>", th_style),
-            Paragraph(f"<b>{avg_v:.1f}%</b>", th_style),
-            Paragraph(f"<b>{avg_p:.1f}%</b>", th_style),
+            Paragraph(f"<b>{_pct_text(avg_v)}</b>", th_style),
+            Paragraph(f"<b>{_pct_text(avg_p)}</b>", th_style),
             Paragraph("<b>Verified</b>", td_green)
         ])
 
@@ -2229,28 +2373,61 @@ def generate_pdf_report(
 
         # Mathematical Validity Certificate block on Sheet 10.0
         cert = _get(multi_storey, "mathematical_certificate") or _get(floorplan, "mathematical_certificate") or {}
+        # The printed verdict must be derived, exactly like the screen: gate
+        # status, warnings and every invariant flag are read from the payload
+        # (audit F16/F17). Nothing is printed as satisfied unconditionally.
+        _cert_warnings = list(_get(floorplan, "warnings", []) or []) + list(_get(multi_storey, "warnings", []) or [])
+        _cert_gate = ((cert or {}).get("details") or {}).get("validation_gate") or _get(multi_storey, "validation_gate") or {}
+        _cert_gate_status = str(_cert_gate.get("overall_status") or "").upper()
+        # A gate that never ran is NOT a pass (audit F16): "" must not fall
+        # through to the all-clear verdict below.
+        _gate_ran = _cert_gate_status in ("PASS", "WARN", "FAIL")
+        _gate_fail_ids = [
+            f"GATE-{l.get('layer_id')}" for l in (_cert_gate.get("layers") or [])
+            if str(l.get("status", "")).upper() == "FAIL"
+        ]
         if cert:
             cert_id = str(cert.get("certificate_id", "CERT-MATH-VALID-2026"))
-            is_valid = bool(cert.get("is_valid", True))
-            status_text = "VERIFIED &amp; CERTIFIED" if is_valid else "NON-COMPLIANT"
-            status_color = "#166534" if is_valid else "#D70015"
+            is_valid = bool(cert.get("is_valid", True)) and _cert_gate_status != "FAIL"
+            if not is_valid:
+                status_text = "NON-COMPLIANT"
+                status_color = "#D70015"
+            elif not _gate_ran:
+                status_text = "UNVERIFIED - GATE DID NOT RUN"
+                status_color = "#B25E00"
+            elif _cert_gate_status == "WARN" or _cert_warnings:
+                status_text = "CERTIFIED - ADVISORIES"
+                status_color = "#B25E00"
+            else:
+                status_text = "VERIFIED &amp; CERTIFIED"
+                status_color = "#166534"
 
             td_red = ParagraphStyle('TD_Red_Cert', fontName=FONT_SEMIBOLD, fontSize=7.5, leading=9.5, textColor=COLOR_RED_TEXT)
             td_bold = ParagraphStyle('TD_Bold_Cert', fontName=FONT_SEMIBOLD, fontSize=8.0, leading=10.0, textColor=COLOR_TEXT_PRIMARY)
             td_right_bold = ParagraphStyle('TD_Right_Bold_Cert', fontName=FONT_SEMIBOLD, fontSize=8.0, leading=10.0, textColor=COLOR_TEXT_PRIMARY, alignment=2)
             td_small = ParagraphStyle('TD_Small_Cert', fontName=FONT_REGULAR, fontSize=7.0, leading=8.5, textColor=COLOR_TEXT_SECONDARY)
 
+            def _tri(flag: Any, *fallbacks: str) -> str:
+                """True -> PASS, False -> FAIL, missing -> NOT RUN."""
+                value = cert.get(flag)
+                for fb in fallbacks:
+                    if value is None:
+                        value = cert.get(fb)
+                return "PASS" if value is True else ("FAIL" if value is False else "NOT RUN")
+
+            _overlap = _tri("zero_overlap", "non_overlap")
+            _contain = _tri("envelope_containment", "containment")
             cert_checks = [
-                ("1. Non-Overlap &amp; Containment", "PASS" if cert.get("zero_overlap", cert.get("non_overlap", True)) and cert.get("envelope_containment", cert.get("containment", True)) else "FAIL", "REL-01 / CONT-01"),
-                ("2. Zero Forbidden Wall Pairs", "PASS" if cert.get("zero_forbidden_violations", True) else "FAIL", "REL-02 / FORBIDDEN"),
-                ("3. BFS Circulation Reachability", "PASS" if cert.get("connectivity_bfs", True) else "FAIL", "CIRC-01 / BFS-GRAPH"),
-                ("4. Dimension Chains Sum (&lt;=1mm)", "PASS" if cert.get("chain_sums_match", True) else "FAIL", "DIM-01 / NBC-TOLERANCE"),
-                ("5. NBC Egress Travel Distance", "PASS" if cert.get("egress_distances_satisfied", True) else "FAIL", "NBC-03 / EGRESS-30M"),
-                ("6. Vertical Stack Alignment", "PASS" if cert.get("vertical_stack_valid", True) else "FAIL", "VERT-01..05 / CORE-STACK"),
-                ("7. Core Continuity (All Levels)", "PASS" if cert.get("core_continuity_valid", True) else "FAIL", "RULE-FP-01 / NBC-CORE"),
-                ("8. No Wet Room Over Terrace", "PASS" if cert.get("no_wet_over_terrace_valid", True) else "FAIL", "RULE-FP-03 / PLUMB-STACK"),
-                ("9. Terrace FAR Statutory Exemption", "PASS" if cert.get("terrace_far_exempt", True) else "FAIL", "RULE-FP-06 / FAR-EXEMPT"),
-                ("10. Cores Stack-Aligned", "PASS" if cert.get("cores_stack_aligned", True) else "FAIL", "RULE-FP-01 / VERT-STACK"),
+                ("1. Non-Overlap &amp; Containment", "PASS" if _overlap == "PASS" and _contain == "PASS" else ("FAIL" if "FAIL" in (_overlap, _contain) else "NOT RUN"), "REL-01 / CONT-01"),
+                ("2. Zero Forbidden Wall Pairs", _tri("zero_forbidden_violations"), "REL-02 / FORBIDDEN"),
+                ("3. BFS Circulation Reachability", _tri("connectivity_bfs"), "CIRC-01 / BFS-GRAPH"),
+                ("4. Dimension Chains Sum (&lt;=1mm)", _tri("chain_sums_match"), "DIM-01 / NBC-TOLERANCE"),
+                ("5. NBC Egress Travel Distance", _tri("egress_distances_satisfied"), "NBC-03 / EGRESS-30M"),
+                ("6. Vertical Stack Alignment", _tri("vertical_stack_valid"), "VERT-01..05 / CORE-STACK"),
+                ("7. Core Continuity (All Levels)", _tri("core_continuity_valid"), "RULE-FP-01 / NBC-CORE"),
+                ("8. No Wet Room Over Terrace", _tri("no_wet_over_terrace_valid"), "RULE-FP-03 / PLUMB-STACK"),
+                ("9. Terrace FAR Statutory Exemption", _tri("terrace_far_exempt"), "RULE-FP-06 / FAR-EXEMPT"),
+                ("10. Cores Stack-Aligned", _tri("cores_stack_aligned"), "RULE-FP-01 / VERT-STACK"),
             ]
 
             cert_rows = [
@@ -2266,24 +2443,53 @@ def generate_pdf_report(
                 ]
             ]
             for chk_name, chk_status, chk_ref in cert_checks:
-                status_p = Paragraph(f"<b>{chk_status}</b>", td_green if chk_status == "PASS" else td_red)
+                _chk_style = td_green if chk_status == "PASS" else (td_red if chk_status == "FAIL" else td_style)
+                status_p = Paragraph(f"<b>{chk_status}</b>", _chk_style)
                 cert_rows.append([
                     Paragraph(chk_name, td_style),
                     Paragraph(f"<code>{chk_ref}</code>", td_style),
                     status_p,
                 ])
 
-            rules_list = cert.get("certified_rules") or [
-                "NBC-01", "NBC-02", "NBC-03", "REL-01", "REL-02", "VERT-01", "VERT-02", "CIRC-01", "DIM-01", "VASTU-01", "SAN-01"
-            ]
-            if rules_list:
-                rules_str = ", ".join(rules_list[:10])
-                if len(rules_list) > 10:
-                    rules_str += f" (+{len(rules_list) - 10} more)"
+            # Only rules the certificate actually verified are printed; a
+            # failing rule is never in this list (audit F16).
+            rules_list = cert.get("certified_rules") or []
+            _passed = sum(1 for _, s, _ in cert_checks if s == "PASS")
+            _total = len(cert_checks)
+            if not is_valid:
+                _verdict = f"NOT CERTIFIED - {_passed}/{_total} invariants"
+                if _gate_fail_ids:
+                    _verdict += " - failing: " + ", ".join(_gate_fail_ids)
+                _verdict_color = "#D70015"
+            elif not _gate_ran:
+                _verdict = f"UNVERIFIED - gate did not run - {_passed}/{_total} invariants"
+                _verdict_color = "#B25E00"
+            elif _cert_gate_status == "WARN" or _cert_warnings:
+                _verdict = (
+                    f"CERTIFIED - {_passed}/{_total} invariants - "
+                    f"{len(_cert_warnings)} advisor{'y' if len(_cert_warnings) == 1 else 'ies'}"
+                )
+                _verdict_color = "#B25E00"
+            else:
+                _verdict = f"100% SATISFIED - {_passed}/{_total} invariants"
+                _verdict_color = "#166534"
+            rules_str = ", ".join(rules_list[:10]) if rules_list else "none"
+            if len(rules_list) > 10:
+                rules_str += f" (+{len(rules_list) - 10} more)"
+            cert_rows.append([
+                Paragraph(f"<b>Certified Rule IDs:</b> {html.escape(rules_str)}", td_small),
+                "",
+                Paragraph(f"<font color='{_verdict_color}'><b>{html.escape(_verdict)}</b></font>", td_small),
+            ])
+            _failures = [str(f) for f in (cert.get("failures") or []) if str(f).strip()]
+            if _failures:
                 cert_rows.append([
-                    Paragraph(f"<b>Certified Rule IDs:</b> {html.escape(rules_str)}", td_small),
+                    Paragraph(
+                        "<b>Why withheld:</b> " + html.escape("; ".join(_failures[:5])),
+                        td_small,
+                    ),
                     "",
-                    Paragraph("<b>100% SATISFIED</b>", td_green),
+                    "",
                 ])
 
             t_cert = Table(cert_rows, colWidths=[240.0, 160.0, 89.23], repeatRows=2)
@@ -2320,6 +2526,16 @@ def generate_pdf_report(
         if _gate_flowables:
             story.extend(_gate_flowables)
 
+        # LAND ECONOMICS (audit F08/F10/F24): the space-efficiency certificate
+        # and the residuals it accounts for are printed on the dossier page too.
+        _land_dossier = _get(floorplan, "land_economics") or _get(multi_storey, "land_economics")
+        if hasattr(_land_dossier, "model_dump"):
+            _land_dossier = _land_dossier.model_dump()
+        _land_flowables = (
+            make_land_economics_table(_land_dossier or {})
+            + make_scheme_selection_line(floorplan)
+        )
+
         # Life Safety & Structural Compliance / Legal Advisory
         if not cert:
             compliance_text = (
@@ -2336,7 +2552,14 @@ def generate_pdf_report(
             "<b>LEGAL &amp; ENGINEERING ADVISORY:</b> Algorithmic preliminary space plan for feasibility review. "
             "Physical site testing and certified structural engineer stamp are mandatory prior to excavation or contract tender."
         )
-        story.append(make_callout(compact_disclaimer, width=CONTENT_WIDTH_PT))
+        _disclaimer_callout = make_callout(compact_disclaimer, width=CONTENT_WIDTH_PT)
+        if _land_flowables:
+            # Keep the land certificate attached to the advisory: a table that
+            # fits while its disclaimer orphans onto an otherwise empty page is
+            # a layout defect, not a new sheet.
+            story.append(KeepTogether(_land_flowables + [Spacer(1, 6), _disclaimer_callout]))
+        else:
+            story.append(_disclaimer_callout)
 
         # =========================================================================
         # SHEET 10.SP: SITE PLAN & CADASTRAL SURVEY (When site is non-rectangular)
@@ -2385,14 +2608,14 @@ def generate_pdf_report(
             story.append(Spacer(1, 5))
 
             # 4-Tile Stat Strip
-            f_vastu = _safe_float(_get(fl, "vastu_score_pct", _get(fl, "vastu_compliance_pct", 0.0)))
-            f_plumb = _safe_float(_get(fl, "plumbing_stack_alignment_pct", 100.0), 100.0)
+            f_vastu = _opt_float(_get(fl, "vastu_score_pct", _get(fl, "vastu_compliance_pct", None)))
+            f_plumb = _opt_float(_get(fl, "plumbing_stack_alignment_pct", None))
             f_bua = _safe_float(_get(fl, "built_up_area_sqm", 0.0))
             f_carpet = _safe_float(_get(fl, "carpet_area_sqm", 0.0))
 
             tile_w = CONTENT_WIDTH_PT / 4.0
-            bp_t1 = make_stat_tile("Vastu Compliance", f"{f_vastu:.1f}%", width=tile_w - 6.0)
-            bp_t2 = make_stat_tile("Plumbing Alignment", f"{f_plumb:.1f}%", width=tile_w - 6.0)
+            bp_t1 = make_stat_tile("Vastu Compliance", _pct_text(f_vastu), width=tile_w - 6.0)
+            bp_t2 = make_stat_tile("Plumbing Alignment", _pct_text(f_plumb), width=tile_w - 6.0)
             bp_t3 = make_stat_tile("Built-Up Area", f"{f_bua:.1f} m²", width=tile_w - 6.0)
             bp_t4 = make_stat_tile("Carpet Area", f"{f_carpet:.1f} m²", width=tile_w - 6.0)
 
@@ -2657,6 +2880,14 @@ def generate_pdf_report(
         _gate_sf_flowables = make_universal_gate_table(_gate_sf)
         if _gate_sf_flowables:
             story.extend(_gate_sf_flowables)
+
+        # LAND ECONOMICS (audit F08/F10/F24) + the scheme selection that
+        # produced this geometry, on the single-floor blueprint page.
+        _land_sf = _get(floorplan, "land_economics") or _get(multi_storey, "land_economics")
+        if hasattr(_land_sf, "model_dump"):
+            _land_sf = _land_sf.model_dump()
+        story.extend(make_land_economics_table(_land_sf or {}))
+        story.extend(make_scheme_selection_line(floorplan))
 
         # Construction Schedules (Door, Window, Room, Wall Specs)
         render_single_sched = include_construction_schedules
