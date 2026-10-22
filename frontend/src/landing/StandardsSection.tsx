@@ -37,10 +37,13 @@
  * this in parallel, so the section assembles as three columns filing themselves
  * in rather than as one block arriving.
  */
-import React from 'react';
+import React, { useRef } from 'react';
 import { motion } from 'framer-motion';
 import { fadeRise, fadeRiseTight, staggerParent, SETTLE_VIEWPORT } from './motion';
 import { SectionHeading } from './SectionHeading';
+import { ScrollRule } from './ScrollRule';
+import { Bearing } from './Bearing';
+import { useDampedScrub, useOnScreen } from './interaction';
 import { GROUP_LABELS, GROUP_ORDER, sourcesIn, type Source, type SourceGroup } from './standards';
 
 const SpecList: React.FC<{ group: SourceGroup; rows: ReadonlyArray<Source> }> = ({ group, rows }) => (
@@ -78,21 +81,69 @@ const SpecList: React.FC<{ group: SourceGroup; rows: ReadonlyArray<Source> }> = 
   </motion.div>
 );
 
-export const StandardsSection: React.FC = () => (
+export const StandardsSection: React.FC = () => {
+  /* The header row's own entry band, shared by one instrument: the sheet's dial
+     turns as this section arrives and comes to rest as the heading settles at the
+     reading position.
+
+     WHY THE SCRUB ENGINE RATHER THAN THE RAW BAND VALUE. `useEntryProgress` hands
+     the rotation straight to the wheel, so the dial is a mirror of the scrollbar:
+     it starts and stops with the wheel, and a fling snaps it to its end angle.
+     The dial is the page's largest moving mass, and a mass that changes direction
+     at the speed of the wheel reads as a spinner rather than as an instrument.
+     `useDampedScrub` follows the same band through an exponential approach (see
+     `dampedFollow`), so the card trails the hand slightly, carries a little way
+     after the reader stops and settles into its bearing — no overshoot, because
+     the engine uses a damped follow and not a spring, exactly for the reason
+     springs.ts records for scrub values.
+
+     `tau` 0.13s: the default 0.09 is tuned for a 6 m storey rising 30 px; this is
+     a 200 px dial, so it gets a touch more mass and is back at rest ~0.4s after
+     the wheel stops. `enabled` on visibility is the idle contract for scroll scrub — an
+     off-screen instrument runs no animation frame and reads no geometry. */
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const onScreen = useOnScreen(sectionRef);
+  const entry = useDampedScrub(sectionRef, { enabled: onScreen, tau: 0.13 });
+
+  return (
   <section id="standards" aria-label="Standards and data sources" className="scroll-mt-24 py-24 sm:py-28">
-    <div className="mx-auto max-w-7xl px-6 lg:px-10">
+    <div ref={sectionRef} className="mx-auto max-w-7xl px-6 lg:px-10">
       <motion.div variants={staggerParent(0.12)} initial="hidden" whileInView="show" viewport={SETTLE_VIEWPORT}>
         {/* "code and named sources", not "code and open data": the sheet below
             credits a copyrighted publication publisher (BIS, CPWD) and a
             commercially licensed basemap (Esri), so "open data" was true of one
             of its three columns. The claim it replaces is the weaker one to
             make and the harder one to defend on a page like this. */}
-        <SectionHeading
-          eyebrow="Standards and data"
-          title="Grounded in code and named sources"
-          copy="Every figure in a dossier traces back to a published standard or a named dataset. Nothing is a black box, and nothing is behind a paid key."
-        />
-        <div className="mt-12 grid gap-x-12 gap-y-10 md:grid-cols-2 lg:grid-cols-3">
+        <div className="flex items-start justify-between gap-10">
+          <div className="min-w-0">
+            <SectionHeading
+              eyebrow="Standards and data"
+              title="Grounded in code and named sources"
+              copy="Every figure in a dossier traces back to a published standard or a named dataset. Nothing is a black box, and nothing is behind a paid key."
+            />
+          </div>
+          {/* The header's empty right column, carrying the section's own
+              instrument: a dial that turns as the sheet arrives, captioned with
+              the codes the rows below are cited against. Decorative, so it
+              takes no tab stop and announces nothing — the facts it gestures at
+              are the three lists underneath, which are real content. */}
+          <div className="pointer-events-none hidden w-[clamp(152px,15vw,200px)] shrink-0 lg:block">
+            <Bearing
+              progress={entry}
+              sweep={-58}
+              counterSweep={108}
+              bearing={189}
+              caption="Survey datum"
+              footnote="IS 1893 · NBC 2016"
+              dialOpacity={0.62}
+              className="text-bw-accent"
+            />
+          </div>
+        </div>
+        {/* Same drawn boundary as the capabilities grid: the rule is the section
+            edge, and it reports the reader's travel as it draws. */}
+        <ScrollRule className="mt-10" />
+        <div className="mt-8 grid gap-x-12 gap-y-10 md:grid-cols-2 lg:grid-cols-3">
           {GROUP_ORDER.map((group) => (
             <SpecList key={group} group={group} rows={sourcesIn(group)} />
           ))}
@@ -108,4 +159,5 @@ export const StandardsSection: React.FC = () => (
       </motion.div>
     </div>
   </section>
-);
+  );
+};

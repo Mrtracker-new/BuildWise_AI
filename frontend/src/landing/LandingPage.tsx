@@ -61,7 +61,7 @@ export const LandingPage: React.FC = () => {
        their settled state under reduced motion (see scrollLink.useEntryProgress),
        because motion a reader drives themselves is position, not animation. */
     <MotionConfig reducedMotion="user">
-      <div className="bw-landing relative min-h-screen font-sans text-[#0b1220] antialiased">
+      <div className="bw-landing relative min-h-screen font-sans text-bw-ink antialiased">
         <Backdrop />
         <ScrollRail />
         <Navbar />

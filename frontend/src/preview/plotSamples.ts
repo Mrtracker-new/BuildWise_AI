@@ -89,9 +89,9 @@ export const PLOT_SAMPLES: ReadonlyArray<PlotSample> = [
     "id": "residential-rect",
     "generationId": "GEN-T1-2F-20261016",
     "seed": "20261016",
-    "typology": "residential_single",
+    "typology": "T1_SINGLE_FAMILY",
     "storeys": 2,
-    "solverStatus": "optimal",
+    "solverStatus": "compromise",
     "ring": [
       [
         0,
@@ -266,6 +266,14 @@ export const PLOT_SAMPLES: ReadonlyArray<PlotSample> = [
         "y": 6.33,
         "widthM": 0.5,
         "depthM": 0.6
+      },
+      {
+        "id": "duct_vent_F1_ensuite_bath_F1",
+        "wet": false,
+        "x": 1.65,
+        "y": 6.28,
+        "widthM": 0.45,
+        "depthM": 0.45
       }
     ],
     "wedges": [],
@@ -311,8 +319,8 @@ export const PLOT_SAMPLES: ReadonlyArray<PlotSample> = [
         {
           "id": "L4",
           "title": "Furniture Clearances",
-          "status": "WARN",
-          "summary": "Furniture clearance advisory"
+          "status": "PASS",
+          "summary": "Furniture sets placed with circulation envelopes"
         },
         {
           "id": "L5",
@@ -341,14 +349,14 @@ export const PLOT_SAMPLES: ReadonlyArray<PlotSample> = [
         {
           "id": "L9",
           "title": "Ventilation",
-          "status": "WARN",
-          "summary": "1 external, 1 shaft, 1 mechanical-flagged"
+          "status": "PASS",
+          "summary": "1 external, 2 shaft, 0 mechanical-flagged"
         },
         {
           "id": "L10",
           "title": "Wet-Core & Plumbing",
           "status": "WARN",
-          "summary": "3/3 wet rooms shaft-grouped, 2 dry-room crossings"
+          "summary": "3/3 wet rooms shaft-grouped, 1 dry-room crossings"
         },
         {
           "id": "L11",
@@ -382,8 +390,8 @@ export const PLOT_SAMPLES: ReadonlyArray<PlotSample> = [
         }
       ],
       "counts": {
-        "pass": 9,
-        "warn": 5,
+        "pass": 11,
+        "warn": 3,
         "fail": 0,
         "na": 1,
         "total": 15
@@ -399,17 +407,17 @@ export const PLOT_SAMPLES: ReadonlyArray<PlotSample> = [
     },
     "provenance": {
       "capture": "backend/data/landing-captures/generated-plan.full.json",
-      "bytes": 748694,
-      "sha256": "179fcd40392a7680fb0f1900641ed8d506f11114574c0ff883c0c0c5b0c200d7"
+      "bytes": 874037,
+      "sha256": "d7cb2c45f7ec02eebae8600230f0ae1764969eed31e475582aeaa409fe8d5eee"
     }
   },
   {
     "id": "residential-irregular",
     "generationId": "GEN-T1-2F-20261016",
     "seed": "20261016",
-    "typology": "residential_single",
+    "typology": "T1_SINGLE_FAMILY",
     "storeys": 2,
-    "solverStatus": "optimal",
+    "solverStatus": "compromise",
     "ring": [
       [
         0,
@@ -630,6 +638,14 @@ export const PLOT_SAMPLES: ReadonlyArray<PlotSample> = [
         "y": 6.24,
         "widthM": 0.5,
         "depthM": 0.6
+      },
+      {
+        "id": "duct_vent_F1_ensuite_bath_F1",
+        "wet": false,
+        "x": 1.65,
+        "y": 6.19,
+        "widthM": 0.45,
+        "depthM": 0.45
       }
     ],
     "wedges": [
@@ -758,43 +774,7 @@ export const PLOT_SAMPLES: ReadonlyArray<PlotSample> = [
         ]
       }
     ],
-    "outdoor": [
-      {
-        "id": "OUT-01",
-        "name": "North Yard 1",
-        "areaSqm": 70.02,
-        "ring": [
-          [
-            2.09,
-            10.24
-          ],
-          [
-            7.85,
-            15.21
-          ],
-          [
-            17.46,
-            13.91
-          ],
-          [
-            19.38,
-            7.08
-          ],
-          [
-            17.07,
-            2.09
-          ],
-          [
-            2.09,
-            2.09
-          ],
-          [
-            2.09,
-            10.24
-          ]
-        ]
-      }
-    ],
+    "outdoor": [],
     "bays": [
       {
         "id": "ECS-1",
@@ -843,8 +823,8 @@ export const PLOT_SAMPLES: ReadonlyArray<PlotSample> = [
         {
           "id": "L4",
           "title": "Furniture Clearances",
-          "status": "WARN",
-          "summary": "Furniture clearance advisory"
+          "status": "PASS",
+          "summary": "Furniture sets placed with circulation envelopes"
         },
         {
           "id": "L5",
@@ -873,14 +853,14 @@ export const PLOT_SAMPLES: ReadonlyArray<PlotSample> = [
         {
           "id": "L9",
           "title": "Ventilation",
-          "status": "WARN",
-          "summary": "1 external, 1 shaft, 1 mechanical-flagged"
+          "status": "PASS",
+          "summary": "1 external, 2 shaft, 0 mechanical-flagged"
         },
         {
           "id": "L10",
           "title": "Wet-Core & Plumbing",
           "status": "WARN",
-          "summary": "3/3 wet rooms shaft-grouped, 2 dry-room crossings"
+          "summary": "3/3 wet rooms shaft-grouped, 1 dry-room crossings"
         },
         {
           "id": "L11",
@@ -914,8 +894,8 @@ export const PLOT_SAMPLES: ReadonlyArray<PlotSample> = [
         }
       ],
       "counts": {
-        "pass": 9,
-        "warn": 5,
+        "pass": 11,
+        "warn": 3,
         "fail": 0,
         "na": 1,
         "total": 15
@@ -931,8 +911,8 @@ export const PLOT_SAMPLES: ReadonlyArray<PlotSample> = [
     },
     "provenance": {
       "capture": "backend/data/landing-captures/generated-plan-irregular.full.json",
-      "bytes": 773407,
-      "sha256": "28327478241fc2c3a1075f0803fbe4fff1c6350b5ea8bcdbc4489a6a62c25313"
+      "bytes": 896015,
+      "sha256": "921f436cc2629ce8079e9af45c606835143636660af2e1ac29895c70059c26cb"
     }
   }
 ] as unknown as ReadonlyArray<PlotSample>;

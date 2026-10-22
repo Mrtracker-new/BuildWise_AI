@@ -1,5 +1,5 @@
 /**
- * interaction/hooks.ts — the React bindings for P1–P7.
+ * interaction/hooks.ts — the React bindings for landing interactions.
  *
  * WHY THE PURE HALVES ARE SEPARATE (`./springs`, `./capability`, `./pointer`,
  * `./scrub`, `./stage`, `./geometry`, `./drag`). This repository runs its unit
@@ -17,7 +17,7 @@
  * 100-move pointer sweep produces no structural mutation of the stage.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useMotionValue, useSpring, type MotionValue } from 'framer-motion';
+import { useMotionValue, useMotionValueEvent, useSpring, type MotionValue } from 'framer-motion';
 import { resolveCapability, type Capability, type CapabilityInput } from './capability';
 import { SPRING_POSE, SPRING_SNAPPY, dampedFollow, type SpringPreset } from './springs';
 import { normalizePointer, parallaxTarget, tiltFromOrientation, type Frame } from './pointer';
@@ -27,7 +27,7 @@ import { draggedPoint, moveVertex, nudgeVertex, stepFor } from './drag';
 import type { Vertex } from '../../services/boundaryIO';
 
 /* ------------------------------------------------------------------ */
-/* P7 · capability gate                                                */
+/* Capability gate                                                    */
 /* ------------------------------------------------------------------ */
 
 const matches = (query: string): boolean =>
@@ -104,7 +104,7 @@ export function useOnScreen(ref: React.RefObject<HTMLElement | null>, rootMargin
 }
 
 /* ------------------------------------------------------------------ */
-/* P1 · springs                                                        */
+/* Springs                                                            */
 /* ------------------------------------------------------------------ */
 
 /**
@@ -121,7 +121,7 @@ export function useStateSpring(active: boolean, spring: SpringPreset = SPRING_SN
 }
 
 /* ------------------------------------------------------------------ */
-/* P2 · pointer parallax, with the touch/gyro equivalent               */
+/* Pointer parallax, with the touch/gyro equivalent                   */
 /* ------------------------------------------------------------------ */
 
 export interface Offset {
@@ -236,7 +236,7 @@ export function useDeviceTilt(amplitude: { x: number; y: number }, enabled: bool
 }
 
 /* ------------------------------------------------------------------ */
-/* P4 · damped scroll scrub                                            */
+/* Damped scroll scrub                                                */
 /* ------------------------------------------------------------------ */
 
 export interface ScrubOptions {
@@ -303,8 +303,105 @@ export function useDampedScrub(
   return value;
 }
 
+export interface DampedFollowOptions {
+  /** Time constant of the damped follow, in seconds. */
+  tau?: number;
+  /** Disable the loop entirely — an off-screen consumer then pays nothing. */
+  enabled?: boolean;
+}
+
+/**
+ * The damped follow of a source VALUE, for a consumer that has no band of its own.
+ *
+ * `useDampedScrub` above answers "how far through its band is THAT element"; this
+ * answers "follow THIS value with weight". The hero's bearing dial is the reason
+ * it exists: its card turns with the whole document's scroll, so there is no
+ * element whose geometry could be scrubbed — only a progress value to lag behind.
+ * Handed `scrollYProgress` directly, the card is a mirror of the scrollbar: it
+ * starts and stops dead with the wheel, and a fling snaps it to its end angle. The
+ * dial is the page's largest moving mass, so it gets the same treatment the
+ * standards dial gets, through the same engine (`dampedFollow`) and for the same
+ * reason springs are the wrong tool here — a scrub value that overshoots reads as
+ * the page lagging and then catching up.
+ *
+ * IDLE CONTRACT: `enabled` false runs no frame and reads no value. The caller
+ * gates it on visibility (`useOnScreen`), so the first screen's instrument costs
+ * nothing once the reader has scrolled past it. The loop also PARKS itself once
+ * the remaining distance is below what a frame could show, and the source's next
+ * change wakes it — see `settled` below. That is what lets a consumer on an
+ * always-visible layer (the backdrop's instruments are `position: fixed`, so an
+ * `IntersectionObserver` would never fire on them) use this without leaving a
+ * frame running for the life of the page.
+ *
+ * REDUCED MOTION passes the source straight through: the value is still the
+ * reader's own position rather than an animation, it is simply not smoothed.
+ */
+export function useDampedFollow(
+  source: MotionValue<number>,
+  options: DampedFollowOptions = {},
+): MotionValue<number> {
+  const { tau = 0.13, enabled = true } = options;
+  const value = useMotionValue(source.get());
+  const reduced = matches('(prefers-reduced-motion: reduce)');
+
+  /* Reduced motion: mirror the source as it changes, with no follow. (The loop
+     below cannot do this job, because it is not started at all in that rung.) */
+  useMotionValueEvent(source, 'change', (v) => {
+    if (reduced) value.set(v);
+  });
+
+  useEffect(() => {
+    if (reduced) {
+      value.set(source.get());
+      return;
+    }
+    if (!enabled) return;
+
+    let raf: number | null = null;
+    let last = 0;
+    let current = value.get();
+    let target = source.get();
+
+    /* SETTLED. An exponential approach never exactly arrives, so "is it done?"
+       is a threshold, not a comparison. 1e-4 of the value's own magnitude is
+       beneath what any consumer can show: on a 180° sweep it is 0.02° of angle,
+       on a 0→1 progress it is a ten-thousandth of the page. Below it the loop
+       parks rather than spending a frame to move nothing. */
+    const settled = () => Math.abs(target - current) <= 1e-4 * Math.max(1, Math.abs(target));
+
+    const frame = (now: number) => {
+      const dt = last === 0 ? 1 / 60 : (now - last) / 1000;
+      last = now;
+      current = dampedFollow(current, target, dt, tau);
+      value.set(current);
+      raf = settled() ? null : requestAnimationFrame(frame);
+    };
+
+    /* Zero the clock on every wake: a restart after a parked second must not
+       read as one 1000 ms frame, which would jump the value straight to target. */
+    const wake = () => {
+      if (raf !== null) return;
+      last = 0;
+      raf = requestAnimationFrame(frame);
+    };
+
+    const stop = source.on('change', (v) => {
+      target = v;
+      wake();
+    });
+
+    wake();
+    return () => {
+      stop();
+      if (raf !== null) cancelAnimationFrame(raf);
+    };
+  }, [source, tau, enabled, value, reduced]);
+
+  return value;
+}
+
 /* ------------------------------------------------------------------ */
-/* P5 · ring drag plumbing                                             */
+/* Ring drag plumbing                                                 */
 /* ------------------------------------------------------------------ */
 
 export interface RingDragOptions {

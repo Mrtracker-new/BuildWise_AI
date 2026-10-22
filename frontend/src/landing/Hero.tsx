@@ -55,9 +55,11 @@
  * with the document and only the things BELOW it (CTA row, spec bar, stage,
  * ledger) animate — none of them can hold the LCP hostage.
  */
-import React from 'react';
-import { motion, useReducedMotion } from 'framer-motion';
+import React, { useRef } from 'react';
+import { motion, useReducedMotion, useTransform } from 'framer-motion';
+import { useDampedFollow, useOnScreen } from './interaction';
 import { timed } from './motion';
+import { useDrift, usePageScroll } from './scrollLink';
 import { APP_PATH, currentPath, navigate } from './router';
 import { scrollToId } from './scroll';
 import { Icon } from '../components/Icon';
@@ -65,6 +67,7 @@ import { LANDING } from './theme';
 import { HERO_COPY } from './heroCopy';
 import { oneLine } from './standards';
 import { HeroModel } from './HeroModel';
+import { Bearing } from './Bearing';
 
 /** The primary CTA's destination: the app, with the capture wizard asked for. */
 export const CAPTURE_HREF = `${APP_PATH}?start=capture`;
@@ -86,6 +89,24 @@ const SPECS: ReadonlyArray<Spec> = [
 export const Hero: React.FC = () => {
   const reduced = useReducedMotion();
 
+  /* The copy column's share of the scroll. The model below is scrubbed by the
+     same wheel, so the two layers separate as the reader descends — the copy on
+     the near plane, the plot gaining height behind it. `useDrift` rounds to
+     whole pixels so the type never resamples across subpixels. */
+  const { scrollY, progress } = usePageScroll();
+  const copyDrift = useDrift(scrollY, -0.045);
+  const copyY = useTransform(copyDrift, (v) => (reduced ? 0 : v));
+
+  /* The site-bearing dial's card turns with the WHOLE document, so it follows
+     the page's progress rather than a band of its own — through the damped
+     follow, so it trails the wheel by ~0.4s and eases into its angle after a
+     fling instead of being pinned to the scrollbar. `enabled` on visibility is
+     the idle contract: once the first screen is behind the reader the loop is
+     off, and the dial keeps whatever angle it reached. */
+  const heroRef = useRef<HTMLElement>(null);
+  const heroOnScreen = useOnScreen(heroRef, '10% 0px');
+  const dialProgress = useDampedFollow(progress, { enabled: heroOnScreen });
+
   /**
    * Real anchor, SPA speed. Only an unmodified primary click is intercepted:
    * middle-click, ⌘/Ctrl-click and "open in new tab" keep the browser's own
@@ -99,94 +120,142 @@ export const Hero: React.FC = () => {
     navigate(CAPTURE_HREF);
   };
 
+  /* The first screen's instrument. One element, one mount: it is the TOP of the
+     right-hand column at every width where that column exists (lg and up), so it
+     cannot be present in one layout and absent in the next — the earlier version
+     was an absolutely-positioned dial that switched off at `xl`, which meant the
+     same page showed a bearing dial at 1265px and none at 1440px. */
+  const siteBearing = (
+    <Bearing
+      progress={dialProgress}
+      sweep={72}
+      bearing={42}
+      caption="Site bearing"
+      footnote="Datum WGS 84"
+      readout
+      dialOpacity={0.5}
+      className="text-bw-accent"
+    />
+  );
+
   return (
     <section
+      ref={heroRef}
       id="top"
       className="relative overflow-hidden"
       aria-label="BuildWise AI — intelligent construction planning"
     >
       <div className="relative mx-auto max-w-7xl px-6 pb-20 pt-32 sm:pt-36 lg:px-10 lg:pt-40">
-        <p className="inline-flex h-8 items-center gap-2 rounded-full border border-bw-line bg-white/75 pl-2.5 pr-3.5 text-bw-ink-2">
-          <span aria-hidden className="h-[6px] w-[6px] shrink-0 rounded-full bg-bw-accent" />
-          <span
-            className="text-[11px] font-semibold uppercase"
-            style={{ letterSpacing: LANDING.type.trackingEyebrow }}
-          >
-            {HERO_COPY.eyebrow}
-          </span>
-        </p>
-
-        <h1
-          className="mt-6 font-bold text-bw-ink"
-          style={{ fontSize: LANDING.type.hero, letterSpacing: LANDING.type.trackingHero, lineHeight: 1.04 }}
+        {/* The copy column takes a small share of the scroll (0.045x) so the
+            first screen has depth against the model below it, which is the
+            thing the scrub actually builds. Transform-only: no layout, no
+            repaint, and reduced motion pins it at 0. */}
+        <motion.div
+          className="lg:grid lg:grid-cols-12 lg:items-center lg:gap-x-12"
+          style={{ y: copyY }}
         >
-          <span className="block">{HERO_COPY.headlineFirst}</span>
-          <span className="block">
-            {HERO_COPY.headlineSecondLead}
-            <span className="bw-gradient-text">{HERO_COPY.headlineSecondAccent}</span>
-            {HERO_COPY.headlineSecondTrail}
-          </span>
-        </h1>
+          <div className="lg:col-span-8">
+            <p className="inline-flex h-8 items-center gap-2 rounded-full border border-bw-line bg-bw-surface pl-2.5 pr-3.5 text-bw-ink-2">
+              <span aria-hidden className="h-[6px] w-[6px] shrink-0 rounded-full bg-bw-accent" />
+              <span
+                className="text-[11px] font-semibold uppercase"
+                style={{ letterSpacing: LANDING.type.trackingEyebrow }}
+              >
+                {HERO_COPY.eyebrow}
+              </span>
+            </p>
 
-        <p className="mt-6 max-w-[38rem] text-[17px] leading-[1.6] text-bw-ink-2">
-          {HERO_COPY.subcopy}
-        </p>
+            <h1
+              className="mt-6 font-bold text-bw-ink"
+              style={{ fontSize: LANDING.type.hero, letterSpacing: LANDING.type.trackingHero, lineHeight: 1.04 }}
+            >
+              <span className="block">{HERO_COPY.headlineFirst}</span>
+              <span className="block">
+                {HERO_COPY.headlineSecondLead}
+                <span className="bw-gradient-text">{HERO_COPY.headlineSecondAccent}</span>
+                {HERO_COPY.headlineSecondTrail}
+              </span>
+            </h1>
 
-        {/* CTA row. Full-width below `sm`: two buttons of different widths stacked
-            on a phone leave the primary action narrower than the eye expects. */}
-        <div className="mt-9 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-          <motion.a
-            href={CAPTURE_HREF}
-            onClick={onPrimaryClick}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={reduced ? timed(0.3, 0.5) : { type: 'spring', stiffness: 320, damping: 26, delay: 0.54 }}
-            className="group inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-bw-ink px-6 text-[15px] font-semibold text-white transition-[background-color,transform] duration-200 hover:bg-bw-ink-hover active:scale-[0.98] sm:w-auto"
-            style={{ boxShadow: LANDING.shadow.dark }}
-          >
-            Trace your site
-            <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-1 motion-reduce:transform-none">
-              <Icon name="chevron-right" size={15} />
-            </span>
-          </motion.a>
+            <p className="mt-6 max-w-[38rem] text-[17px] leading-[1.6] text-bw-ink-2">
+              {HERO_COPY.subcopy}
+            </p>
 
-          <motion.button
-            type="button"
-            onClick={() => scrollToId('capabilities')}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={reduced ? timed(0.3, 0.6) : { type: 'spring', stiffness: 320, damping: 26, delay: 0.62 }}
-            className="group inline-flex h-12 w-full items-center justify-center gap-2 rounded-full border border-bw-line bg-white/80 px-5 text-[15px] font-semibold text-bw-ink transition-[background-color,border-color,transform] duration-200 hover:bg-white active:scale-[0.98] sm:w-auto"
-          >
-            <span aria-hidden className="transition-transform duration-200 group-hover:translate-y-0.5 motion-reduce:transform-none">
-              <Icon name="chevron-down" size={15} />
-            </span>
-            See the platform
-          </motion.button>
-        </div>
+            {/* CTA row. Full-width below `sm`: two buttons of different widths stacked
+                on a phone leave the primary action narrower than the eye expects. */}
+            <div className="mt-9 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+              <motion.a
+                href={CAPTURE_HREF}
+                onClick={onPrimaryClick}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={reduced ? timed(0.3, 0.5) : { type: 'spring', stiffness: 320, damping: 26, delay: 0.54 }}
+                className="group inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-bw-cta px-6 text-[15px] font-semibold text-bw-cta-ink transition-[background-color,transform] duration-200 hover:bg-bw-cta-hover active:scale-[0.98] sm:w-auto"
+                style={{ boxShadow: LANDING.shadow.dark }}
+              >
+                Trace your site
+                <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-1 motion-reduce:transform-none">
+                  <Icon name="chevron-right" size={15} />
+                </span>
+              </motion.a>
 
-        {/* Spec bar — the three facts that decide a technical evaluation. */}
-        <motion.dl
-          initial={{ opacity: 0, y: 14 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={timed(0.6, 0.7)}
-          className="mt-12 grid max-w-4xl gap-x-10 gap-y-6 border-t border-bw-line pt-7 sm:grid-cols-3"
-        >
-          {SPECS.map((spec) => (
-            <div key={spec.label}>
-              {/* `text-bw-ink-2`, not ink-3: at 10.5px uppercase this label is small
-                  text under WCAG, and `--bw-ink-3` (#6b7787) resolves to 4.05:1 on the
-                  porcelain ground — a real axe failure on the page's first screen.
-                  `--bw-ink-2` (#46536a) is 6.9:1 on the same ground and is already the
-                  colour of the values beside these labels, so the pair still reads as
-                  one unit rather than as two. */}
-              <dt className="text-[10.5px] font-semibold uppercase text-bw-ink-2" style={{ letterSpacing: '0.14em' }}>
-                {spec.label}
-              </dt>
-              <dd className="mt-1.5 text-[13.5px] font-medium leading-[1.5] text-bw-ink-2">{spec.value}</dd>
+              <motion.button
+                type="button"
+                onClick={() => scrollToId('capabilities')}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={reduced ? timed(0.3, 0.6) : { type: 'spring', stiffness: 320, damping: 26, delay: 0.62 }}
+                className="group inline-flex h-12 w-full items-center justify-center gap-2 rounded-full border border-bw-line bg-bw-surface px-5 text-[15px] font-semibold text-bw-ink transition-[background-color,border-color,transform] duration-200 hover:bg-bw-line-soft active:scale-[0.98] sm:w-auto"
+              >
+                <span aria-hidden className="transition-transform duration-200 group-hover:translate-y-0.5 motion-reduce:transform-none">
+                  <Icon name="chevron-down" size={15} />
+                </span>
+                See the platform
+              </motion.button>
             </div>
-          ))}
-        </motion.dl>
+
+  
+          </div>
+
+        {/* THE RIGHT-HAND COLUMN — dial over spec bar, at every width from `lg`.
+            Below `lg` the two halves are still one flow: the spec bar is the
+            three-up row it always was, under the copy.
+
+            WHY THE DIAL IS IN THE COLUMN AND NOT ABSOLUTE. It was an
+            absolutely-placed dial over the empty right third of the
+            sub-`xl` layout, which left the page with an instrument at 1265px and
+            none at 1440px — the same page, two products. Giving the column a
+            real occupant at every one of its widths is what makes the first
+            screen complete rather than patched: measured at 1440px, the spec
+            list used to hang on a 440px-tall divider with 300px of bare paper
+            above it. */}
+        <div className="mt-12 max-w-4xl lg:col-span-4 lg:col-start-9 lg:mt-0 lg:flex lg:max-w-none lg:flex-col lg:justify-center lg:gap-7 lg:self-stretch lg:border-l lg:border-bw-line lg:pl-8">
+          <div className="pointer-events-none hidden w-[min(100%,264px)] lg:block xl:w-[min(100%,300px)]">{siteBearing}</div>
+
+          {/* Spec bar — the three facts that decide a technical evaluation. */}
+          <motion.dl
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={timed(0.6, 0.7)}
+            className="grid gap-x-10 gap-y-6 border-t border-bw-line pt-7 sm:grid-cols-3 lg:grid-cols-1 lg:gap-y-7 lg:border-t-0 lg:pt-0"
+          >
+            {SPECS.map((spec) => (
+              <div key={spec.label}>
+                {/* `text-bw-ink-2`, not ink-3: at 10.5px uppercase this label is small
+                    text under WCAG, and `--bw-ink-3` (#6b7787) resolves to 4.05:1 on the
+                    porcelain ground — a real axe failure on the page's first screen.
+                    `--bw-ink-2` (#46536a) is 6.9:1 on the same ground and is already the
+                    colour of the values beside these labels, so the pair still reads as
+                    one unit rather than as two. */}
+                <dt className="text-[10.5px] font-semibold uppercase text-bw-ink-2" style={{ letterSpacing: '0.14em' }}>
+                  {spec.label}
+                </dt>
+                <dd className="mt-1.5 text-[13.5px] font-medium leading-[1.5] text-bw-ink-2">{spec.value}</dd>
+              </div>
+            ))}
+          </motion.dl>
+        </div>
+        </motion.div>
 
         {/* ---------------- the second beat: the plot, extruded ---------------- */}
         <div className="mt-16 flex flex-col gap-4 border-t border-bw-line pt-8 sm:flex-row sm:items-end sm:justify-between">

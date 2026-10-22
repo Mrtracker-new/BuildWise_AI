@@ -71,7 +71,7 @@ export interface HeroMassing {
 export const HERO_MASSING: HeroMassing = {
   "generationId": "GEN-T1-2F-20261016",
   "seed": "20261016",
-  "typology": "residential_single",
+  "typology": "T1_SINGLE_FAMILY",
   "storeys": 2,
   "floorHeightM": 3,
   "plot": {
@@ -299,52 +299,29 @@ export const HERO_MASSING: HeroMassing = {
       "y": 8.33,
       "widthM": 0.5,
       "depthM": 0.6
-    }
-  ],
-  "outdoor": [
+    },
     {
-      "id": "OUT-01",
-      "ring": [
-        [
-          2.09,
-          10.24
-        ],
-        [
-          7.85,
-          15.21
-        ],
-        [
-          17.46,
-          13.91
-        ],
-        [
-          19.38,
-          7.08
-        ],
-        [
-          17.07,
-          2.09
-        ],
-        [
-          2.09,
-          2.09
-        ]
-      ]
+      "id": "duct_vent_F1_ensuite_bath_F1",
+      "x": 4.74,
+      "y": 8.28,
+      "widthM": 0.45,
+      "depthM": 0.45
     }
   ],
+  "outdoor": [],
   "figures": {
     "plotCoveragePct": 38.2
   },
   "certificate": {
     "isValid": false,
-    "pass": 8,
-    "warn": 5,
+    "pass": 11,
+    "warn": 3,
     "na": 1,
-    "total": 14
+    "total": 15
   },
   "provenance": {
     "capture": "backend/data/landing-captures/generated-plan-irregular.full.json",
-    "bytes": 773407,
-    "sha256": "28327478241fc2c3a1075f0803fbe4fff1c6350b5ea8bcdbc4489a6a62c25313"
+    "bytes": 896015,
+    "sha256": "921f436cc2629ce8079e9af45c606835143636660af2e1ac29895c70059c26cb"
   }
 } as HeroMassing;

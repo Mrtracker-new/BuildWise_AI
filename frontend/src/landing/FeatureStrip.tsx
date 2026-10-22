@@ -21,6 +21,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { fadeRise, staggerParent, SETTLE_VIEWPORT } from './motion';
 import { SectionHeading } from './SectionHeading';
+import { ScrollRule } from './ScrollRule';
 
 interface Feature {
   title: string;
@@ -129,7 +130,10 @@ export const FeatureStrip: React.FC = () => (
           title="Six analyses behind every pin"
           copy="The same run produces suitability, hazard, cost, orientation, and a buildable plan — grounded in Indian code and open data."
         />
-        <div className="mt-10 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {/* The section boundary draws with the wheel (see ScrollRule) instead of
+            arriving on a single trigger frame like the heading above it. */}
+        <ScrollRule className="mt-10" />
+        <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {FEATURES.map((f) => (
             <CapabilityCard key={f.title} feature={f} />
           ))}

@@ -175,7 +175,7 @@ export const Navbar: React.FC = () => {
               e.preventDefault();
               go('top');
             }}
-            className="flex shrink-0 items-center gap-2 rounded-full"
+            className="flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-2 rounded-full"
             aria-label="BuildWise AI — back to top"
           >
             <img
@@ -207,7 +207,7 @@ export const Navbar: React.FC = () => {
                       go(l.target);
                     }}
                     aria-current={isActive ? 'true' : undefined}
-                    className="bw-nav-link inline-flex h-8 items-center rounded-full px-3 text-[13.5px] font-medium text-bw-ink-2 transition-colors duration-150 hover:text-bw-ink"
+                    className="bw-nav-link inline-flex h-11 items-center rounded-full px-3 text-[13.5px] font-medium text-bw-ink-2 transition-colors duration-150 hover:text-bw-ink"
                   >
                     {isActive && (
                       <motion.span layoutId="bw-nav-active" className="bw-nav-active" transition={SPRING_SOFT} />
@@ -224,7 +224,7 @@ export const Navbar: React.FC = () => {
             <button
               type="button"
               onClick={() => navigate(APP_PATH)}
-              className="group inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-bw-line bg-white pl-3.5 pr-3 text-[13px] font-semibold text-bw-ink transition-[background-color,border-color,transform] duration-200 hover:bg-bw-line-soft active:scale-[0.97]"
+              className="group inline-flex h-11 shrink-0 items-center gap-1 rounded-full border border-bw-line bg-bw-surface pl-3.5 pr-3 text-[13px] font-semibold text-bw-ink transition-[background-color,border-color,transform] duration-200 hover:bg-bw-line-soft active:scale-[0.97]"
             >
               Open the app
               <span
@@ -242,7 +242,7 @@ export const Navbar: React.FC = () => {
               aria-expanded={menuOpen}
               aria-controls="bw-mobile-menu"
               aria-label={menuOpen ? 'Close menu' : 'Open menu'}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-bw-ink transition-colors duration-150 hover:bg-bw-line-soft md:hidden"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-bw-ink transition-colors duration-150 hover:bg-bw-line-soft md:hidden"
             >
               <MenuIcon open={menuOpen} />
             </button>
@@ -258,7 +258,7 @@ export const Navbar: React.FC = () => {
                 exit={{ opacity: 0, y: -6, scale: 0.99 }}
                 transition={SPRING_SOFT}
                 style={{ transformOrigin: 'top center', boxShadow: LANDING.shadow.window }}
-                className="absolute inset-x-0 top-[calc(100%+8px)] rounded-[18px] border border-bw-line-soft bg-white p-1.5 md:hidden"
+                className="absolute inset-x-0 top-[calc(100%+8px)] rounded-[18px] border border-bw-line-soft bg-bw-surface p-1.5 md:hidden"
               >
                 <ul className="flex flex-col">
                   {LINKS.map((l) => (
@@ -270,7 +270,7 @@ export const Navbar: React.FC = () => {
                           go(l.target);
                         }}
                         aria-current={active === l.target ? 'true' : undefined}
-                        className="flex items-center justify-between rounded-[12px] px-3.5 py-2.5 text-[15px] font-medium text-bw-ink transition-colors duration-150 hover:bg-bw-line-soft"
+                        className="flex min-h-11 items-center justify-between rounded-[12px] px-3.5 py-2.5 text-[15px] font-medium text-bw-ink transition-colors duration-150 hover:bg-bw-line-soft"
                       >
                         {l.label}
                         <span aria-hidden className="text-bw-ink-3">

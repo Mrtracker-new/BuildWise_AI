@@ -24,9 +24,10 @@
  * row. A footer is where people look for the licence line, so it is the last
  * place that should be able to disagree with the section it summarises.
  */
-import React from 'react';
-import { motion, useReducedMotion } from 'framer-motion';
+import React, { useRef } from 'react';
+import { motion, useReducedMotion, useTransform } from 'framer-motion';
 import { EASE_APPLE, fadeRise, staggerParent, timed, SETTLE_VIEWPORT } from './motion';
+import { useEntryProgress } from './scrollLink';
 import { APP_PATH, navigate } from './router';
 import { scrollToId } from './scroll';
 import { Icon } from '../components/Icon';
@@ -50,6 +51,13 @@ const DOSSIER_ROWS: ReadonlyArray<{ label: string; meta: string }> = [
 export const CtaBand: React.FC = () => {
   const reduced = useReducedMotion();
 
+  /* The dossier window's own entry band. It settles from +18px to -8px as the
+     section crosses the reading position, i.e. the artefact keeps rising a
+     little after the copy beside it has stopped. Transform-only. */
+  const windowRef = useRef<HTMLDivElement>(null);
+  const entry = useEntryProgress(windowRef);
+  const windowY = useTransform(entry, [0, 1], [18, -8]);
+
   return (
     <section id="blueprint" aria-label="Print-ready output" className="relative scroll-mt-24 pb-28 pt-4 sm:pb-32">
       <motion.div
@@ -70,7 +78,7 @@ export const CtaBand: React.FC = () => {
             <button
               type="button"
               onClick={() => navigate(APP_PATH)}
-              className="group inline-flex h-12 items-center gap-2 rounded-full bg-bw-ink px-6 text-[15px] font-semibold text-white transition-[background-color,transform] duration-200 hover:bg-bw-ink-hover active:scale-[0.98]"
+              className="group inline-flex h-12 items-center gap-2 rounded-full bg-bw-cta px-6 text-[15px] font-semibold text-bw-cta-ink transition-[background-color,transform] duration-200 hover:bg-bw-cta-hover active:scale-[0.98]"
               style={{ boxShadow: LANDING.shadow.dark }}
             >
               Open the app
@@ -89,67 +97,72 @@ export const CtaBand: React.FC = () => {
             <button
               type="button"
               onClick={() => scrollToId('standards')}
-              className="inline-flex h-12 items-center rounded-full border border-bw-line bg-white/80 px-5 text-[15px] font-semibold text-bw-ink transition-[background-color,border-color,transform] duration-200 hover:bg-white active:scale-[0.98]"
+              className="inline-flex h-12 items-center rounded-full border border-bw-line bg-bw-surface px-5 text-[15px] font-semibold text-bw-ink transition-[background-color,border-color,transform] duration-200 hover:bg-bw-line-soft active:scale-[0.98]"
             >
               Standards and data
             </button>
           </motion.div>
         </div>
 
-        {/* The dossier, as the window that produces it */}
-        <motion.div
-          /* The transition is stated, not inherited: without one this window
-             animated on framer's default spring while the copy beside it moved
-             on the Apple curve, so the two halves of the row arrived with
-             visibly different weight. */
-          variants={
-            reduced
-              ? { hidden: { opacity: 0 }, show: { opacity: 1, transition: timed(0.3) } }
-              : { hidden: { opacity: 0, y: 24 }, show: { opacity: 1, y: 0, transition: timed(0.7) } }
-          }
-          className="bw-window"
-        >
-          <WindowBar
-            title="Feasibility Dossier"
-            subtitle="Bengaluru · 2,450 m²"
-            toolbar={
-              <span className="bw-window-chip gap-1.5">
-                <span className="text-[10.5px] font-bold tabular-nums text-bw-accent">87</span>
-                <span className="text-[10.5px] font-semibold uppercase text-bw-ink-3" style={{ letterSpacing: '0.06em' }}>
-                  score
-                </span>
-              </span>
+        {/* The dossier, as the window that produces it. The wrapper is the
+            scroll layer: it rides a little faster than the copy beside it, so
+            the row separates in depth. The inner motion.div still owns the
+            one-shot entrance; the two transforms compose. */}
+        <motion.div ref={windowRef} style={{ y: windowY }}>
+          <motion.div
+            /* The transition is stated, not inherited: without one this window
+               animated on framer's default spring while the copy beside it moved
+               on the Apple curve, so the two halves of the row arrived with
+               visibly different weight. */
+            variants={
+              reduced
+                ? { hidden: { opacity: 0 }, show: { opacity: 1, transition: timed(0.3) } }
+                : { hidden: { opacity: 0, y: 24 }, show: { opacity: 1, y: 0, transition: timed(0.7) } }
             }
-          />
+            className="bw-window"
+          >
+            <WindowBar
+              title="Feasibility Dossier"
+              subtitle="Bengaluru · 2,450 m²"
+              toolbar={
+                <span className="bw-window-chip gap-1.5">
+                  <span className="text-[10.5px] font-bold tabular-nums text-bw-accent">87</span>
+                  <span className="text-[10.5px] font-semibold uppercase text-bw-ink-3" style={{ letterSpacing: '0.06em' }}>
+                    score
+                  </span>
+                </span>
+              }
+            />
 
-          <div className="rounded-b-[14px] bg-bw-porcelain p-3.5">
-            <ul className="flex flex-col gap-1.5">
-              {DOSSIER_ROWS.map((row, i) => (
-                <motion.li
-                  key={row.label}
-                  initial={{ opacity: 0, x: -8 }}
-                  whileInView={{ opacity: 1, x: 0 }}
-                  viewport={{ once: true, amount: 0.6 }}
-                  transition={{ duration: 0.45, delay: i * 0.07, ease: EASE_APPLE }}
-                  className="flex items-center justify-between gap-3 rounded-[9px] border border-bw-line-soft bg-white px-3 py-2"
-                >
-                  <span className="flex items-center gap-2">
-                    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-bw-accent-tint text-bw-accent" aria-hidden>
-                      <Icon name="check" size={10} strokeWidth={2.4} />
+            <div className="rounded-b-[14px] bg-bw-porcelain p-3.5">
+              <ul className="flex flex-col gap-1.5">
+                {DOSSIER_ROWS.map((row, i) => (
+                  <motion.li
+                    key={row.label}
+                    initial={{ opacity: 0, x: -8 }}
+                    whileInView={{ opacity: 1, x: 0 }}
+                    viewport={{ once: true, amount: 0.6 }}
+                    transition={{ duration: 0.45, delay: i * 0.07, ease: EASE_APPLE }}
+                    className="flex items-center justify-between gap-3 rounded-[9px] border border-bw-line-soft bg-bw-surface px-3 py-2"
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-bw-accent-tint text-bw-accent" aria-hidden>
+                        <Icon name="check" size={10} strokeWidth={2.4} />
+                      </span>
+                      <span className="text-[12.5px] font-semibold text-bw-ink">{row.label}</span>
                     </span>
-                    <span className="text-[12.5px] font-semibold text-bw-ink">{row.label}</span>
-                  </span>
-                  <span className="text-[10.5px] font-semibold uppercase text-bw-ink-3" style={{ letterSpacing: '0.08em' }}>
-                    {row.meta}
-                  </span>
-                </motion.li>
-              ))}
-            </ul>
-            <p className="mt-3 flex items-center justify-between rounded-[9px] px-1 text-[11.5px] text-bw-ink-3">
-              <span>PDF · Vector drawings · Room schedule</span>
-              <span className="font-semibold text-bw-green-ink">Ready to print</span>
-            </p>
-          </div>
+                    <span className="text-[10.5px] font-semibold uppercase text-bw-ink-3" style={{ letterSpacing: '0.08em' }}>
+                      {row.meta}
+                    </span>
+                  </motion.li>
+                ))}
+              </ul>
+              <p className="mt-3 flex items-center justify-between rounded-[9px] px-1 text-[11.5px] text-bw-ink-3">
+                <span>PDF · Vector drawings · Room schedule</span>
+                <span className="font-semibold text-bw-green-ink">Ready to print</span>
+              </p>
+            </div>
+          </motion.div>
         </motion.div>
       </motion.div>
     </section>
@@ -161,7 +174,7 @@ export const CtaBand: React.FC = () => {
 /* ------------------------------------------------------------------ */
 
 export const Footer: React.FC = () => (
-  <footer id="footer" className="scroll-mt-24 border-t border-bw-line-soft bg-white/70">
+  <footer id="footer" className="scroll-mt-24 border-t border-bw-line-soft bg-bw-surface">
     <div className="mx-auto max-w-7xl px-6 py-14 lg:px-10">
       <div className="grid gap-10 lg:grid-cols-[1.2fr_1fr_1fr_1fr]">
         <div>
@@ -184,7 +197,7 @@ export const Footer: React.FC = () => (
           <button
             type="button"
             onClick={() => navigate(APP_PATH)}
-            className="group mt-5 inline-flex h-9 items-center gap-1.5 rounded-full border border-bw-line bg-white px-4 text-[13px] font-semibold text-bw-ink transition-[background-color,border-color] duration-200 hover:bg-bw-line-soft"
+            className="group mt-5 inline-flex h-11 items-center gap-1.5 rounded-full border border-bw-line bg-bw-surface px-4 text-[13px] font-semibold text-bw-ink transition-[background-color,border-color] duration-200 hover:bg-bw-line-soft"
           >
             Open the app
             <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-0.5 motion-reduce:transform-none">
@@ -216,7 +229,7 @@ export const Footer: React.FC = () => (
         <p>© 2026 BuildWise AI · MIT License</p>
         <p>
           Press{' '}
-          <kbd className="rounded-[5px] border border-bw-line bg-white px-1.5 py-0.5 text-[10.5px] font-semibold text-bw-ink-2">
+          <kbd className="rounded-[5px] border border-bw-line bg-bw-surface px-1.5 py-0.5 text-[10.5px] font-semibold text-bw-ink-2">
             ?
           </kbd>{' '}
           inside the app for keyboard shortcuts.

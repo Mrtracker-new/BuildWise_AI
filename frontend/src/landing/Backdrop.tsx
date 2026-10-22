@@ -21,9 +21,26 @@
  * the page reads as a diorama sliding behind glass; at these values the gutters
  * acquire depth and nothing asks to be looked at.
  *
- * The compass rose also turns, slowly. That is the one element here whose motion
- * is not a depth cue — it is there so the composition is not four parallel
- * translations, which is the thing that reads as a template.
+ * The instruments turn. The compass rose and its smaller counter-dial are the
+ * one pair here whose motion is not a depth cue — they are there so the
+ * composition is not four parallel translations, which is the thing that reads
+ * as a template. Both are driven by PAGE PROGRESS, not by a fixed 3200px
+ * offset, so the turn spans the whole document: the rose has come half round by
+ * the time the reader reaches the closing band, and the dial on the other
+ * gutter has gone the other way. A rotation bound to raw scroll distance stops
+ * meaning anything the moment the page grows or shrinks; progress cannot.
+ *
+ * THE INSTRUMENTS HAVE WEIGHT. The turn is handed the same damped follow the
+ * hero and standards dials use (`useDampedFollow`), at the same `tau`, so the
+ * three instruments on the page settle at one rate and the page has ONE weight
+ * rather than a section-sized one in the copy and a scrollbar-sized one in the
+ * gutters. Bound raw, these two were the only dials on the page that stopped
+ * dead with the wheel — and they are the largest moving shapes here, so a fling
+ * snapped a 420px rose a full half turn in the frames the wheel was moving.
+ * Now they trail it and come to rest a fraction of a second after it does. The
+ * parking behaviour in that hook is what makes this affordable on a fixed
+ * layer: with no `IntersectionObserver` to gate it, the loop sleeps when the
+ * value has settled and wakes on the next scroll change.
  *
  * Reduced motion: this is not gated. Motion that follows the reader's own
  * scrolling is position, not animation — it cannot play unbidden, it stops the
@@ -32,10 +49,11 @@
  * CSS media query in index.css, and they are the part that genuinely loops.
  */
 import { motion, useTransform } from 'framer-motion';
+import { useDampedFollow } from './interaction';
 import { usePageScroll, useDrift } from './scrollLink';
 
 export const Backdrop: React.FC = () => {
-  const { scrollY } = usePageScroll();
+  const { scrollY, progress } = usePageScroll();
 
   /* How much of the scroll each layer takes. Grid 3% (the paper the page is
      printed on), glows 10–16% (light: further than paper, nearer than
@@ -46,12 +64,25 @@ export const Backdrop: React.FC = () => {
   const glowRight = useDrift(scrollY, -0.1);
   const glowLow = useDrift(scrollY, -0.13);
   const rose = useDrift(scrollY, -0.12);
+  const dial = useDrift(scrollY, -0.11);
   const coordsLeft = useDrift(scrollY, -0.18);
   const coordsRight = useDrift(scrollY, -0.15);
 
-  /* 20° across three viewports of scrolling: a turn you notice only if you stop
-     and look at it, which is the correct amount for a watermark. */
-  const roseTurn = useTransform(scrollY, [0, 3200], [0, 20]);
+  /* Half a turn across the document, in opposite directions. Both stay well
+     inside watermark weight (opacity 0.1), so the movement is felt in the
+     gutters rather than watched: the eye catches the tick marks sliding past
+     the section edges on the way down and the rose is somewhere else when the
+     reader comes back up.
+
+     The mapping comes first and the follow second, so the damped value is in
+     DEGREES and its settle threshold is measured against the sweep. Following
+     the progress instead would be the same picture at this range, but it would
+     put the instrument's weight on a 0→1 value that no consumer of the angle
+     can check. */
+  const roseSweep = useTransform(progress, [0, 1], [-12, 168]);
+  const dialSweep = useTransform(progress, [0, 1], [168, -12]);
+  const roseTurn = useDampedFollow(roseSweep);
+  const dialTurn = useDampedFollow(dialSweep);
 
   return (
     <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden" aria-hidden>
@@ -100,7 +131,7 @@ export const Backdrop: React.FC = () => {
       <motion.svg
         viewBox="0 0 400 400"
         className="absolute right-[-150px] top-[34%] hidden h-[420px] w-[420px] 2xl:block"
-        style={{ y: rose, rotate: roseTurn, opacity: 0.1 }}
+        style={{ y: rose, rotate: roseTurn, opacity: 0.11 }}
       >
         <g fill="none" stroke="#2f6fed" strokeWidth="1.4">
           <circle cx="200" cy="200" r="188" />
@@ -123,6 +154,37 @@ export const Backdrop: React.FC = () => {
           <polygon points="38,200 200,184 362,200 200,216" fill="rgba(47,111,237,0.05)" />
         </g>
         <text x="200" y="26" textAnchor="middle" fontSize="19" fontWeight="700" fill="#2f6fed" fontFamily="Inter, sans-serif">N</text>
+      </motion.svg>
+
+      {/* Counter-rotating bearing dial — left gutter. The same drafting
+          instrument language as the rose, turned the other way so the two
+          gutters never read as one wallpaper image. Hidden below 2xl with the
+          rose: these are gutter ornaments, and a gutter needs to exist. */}
+      <motion.svg
+        viewBox="0 0 300 300"
+        className="absolute left-[-128px] top-[58%] hidden h-[300px] w-[300px] 2xl:block"
+        style={{ y: dial, rotate: dialTurn, opacity: 0.09, color: 'var(--bw-accent)' }}
+      >
+        <g fill="none" stroke="currentColor" strokeWidth="1.2">
+          <circle cx="150" cy="150" r="138" />
+          <circle cx="150" cy="150" r="104" strokeDasharray="2 7" />
+          {Array.from({ length: 60 }, (_, i) => {
+            const a = (i * Math.PI) / 30;
+            const inner = i % 5 === 0 ? 116 : 128;
+            return (
+              <line
+                key={i}
+                x1={150 + inner * Math.sin(a)}
+                y1={150 - inner * Math.cos(a)}
+                x2={150 + 138 * Math.sin(a)}
+                y2={150 - 138 * Math.cos(a)}
+                strokeWidth={i % 15 === 0 ? 1.8 : 1}
+              />
+            );
+          })}
+          <polygon points="150,34 157,150 150,266 143,150" fill="rgba(47,111,237,0.06)" />
+        </g>
+        <text x="150" y="294" textAnchor="middle" fontSize="15" fontWeight="700" fill="currentColor" fontFamily="Inter, sans-serif">S</text>
       </motion.svg>
 
       {/* Surveyor coordinate annotations — left gutter */}
