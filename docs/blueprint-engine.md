@@ -500,7 +500,7 @@ The blueprint engine generates two presentation formats:
 
 ## Navigation
 - **Previous:** [← AI Pipeline & Adapters](ai-pipeline.md)
-- **Next:** [Map & Data Providers →](map-and-data.md)
+- **Next:** [Space Engine →](space-engine.md)
 
 ---
 *BuildWise AI • [MIT License](../LICENSE) • Copyright (c) 2026 Rolan Lobo*

@@ -112,7 +112,7 @@ This batch script automatically performs first-time bootstrapping (creates Pytho
 | `PORT` | `8000` | HTTP port on which the FastAPI application listens. |
 | `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated list of origins allowed for cross-origin browser requests. |
 | `DEFAULT_AI_PROVIDER` | `mock` | Default LLM provider for narrative generation. Options: `mock`, `groq`, `gemini`, `ollama`. |
-| `GROQ_API_KEY` | *(empty)* | Optional. API key for Groq Cloud (`llama-3.3-70b-versatile`). |
+| `GROQ_API_KEY` | *(empty)* | Optional. API key for Groq Cloud. The model defaults to `openai/gpt-oss-120b`; override with `GROQ_MODEL`. |
 | `GEMINI_API_KEY` | *(empty)* | Optional. API key for Google Gemini (`gemini-2.5-flash`). |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Endpoint for local self-hosted Ollama server (`llama3` or `mistral`). |
 

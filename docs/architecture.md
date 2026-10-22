@@ -126,7 +126,7 @@ User Selects Site
       │
       ▼
 4. LLM Narrative Synthesis
-      ├── Provider Factory (Groq llama-3.3-70b / Gemini 2.5 Flash / Mock)
+      ├── Provider Factory (Groq gpt-oss-120b / Gemini 2.5 Flash / Mock)
       ├── Strict JSON Mode Execution
       └── Pydantic Schema Enforcement
       │
@@ -147,7 +147,7 @@ backend/app/
 │   ├── base_adapter.py          # Abstract Base Class for LLM providers
 │   ├── blueprint_program.py     # Room program generator from client notes
 │   ├── gemini_adapter.py        # Google Gemini 2.5 Flash implementation
-│   ├── groq_adapter.py          # Groq Cloud (Llama 3.3 70B) implementation
+│   ├── groq_adapter.py          # Groq Cloud (gpt-oss-120b) implementation
 │   ├── layout_critic.py         # LLM layout verification loop
 │   ├── mock_adapter.py          # Deterministic zero-key fallback generator
 │   ├── ollama_adapter.py        # Local Ollama client adapter

@@ -13,10 +13,13 @@ Complete guide to testing, regression prevention, structural invariants validati
   - [Formal PDF Report Suite (`test_pdf_report_v9.py`)](#formal-pdf-report-suite-test_pdf_report_v9py)
   - [API Contract & Rate Limit Suite (`test_api.py`)](#api-contract--rate-limit-suite-test_apipy)
   - [Geospatial & Hazard Suites](#geospatial--hazard-suites)
+  - [Space-Engine, Gate & Economics Suites](#space-engine-gate--economics-suites)
+    - [Per-module engine suites](#per-module-engine-suites)
 - [Frontend Testing & Quality Gates](#frontend-testing--quality-gates)
   - [Linting with Oxlint](#linting-with-oxlint)
   - [TypeScript Compilation & Vite Build](#typescript-compilation--vite-build)
   - [Multi-Viewport Automated UI Audit (`audit.cjs`)](#multi-viewport-automated-ui-audit-auditcjs)
+  - [Additional Quality Gates](#additional-quality-gates)
 - [Running All Tests Locally](#running-all-tests-locally)
 - [Navigation](#navigation)
 
@@ -31,7 +34,7 @@ BuildWise AI employs a multi-tiered verification hierarchy ensuring that zero in
 │                        Continuous Quality Gates                        │
 ├──────────────────────────────────┬─────────────────────────────────────┤
 │        Backend Verification      │        Frontend Verification        │
-│  • 236 Automated Pytest Cases    │  • Oxlint Fast Static Analysis      │
+│  • 1,159 Automated Pytest Cases  │  • Oxlint Fast Static Analysis      │
 │  • 145 Placement Regression Test │  • TypeScript Strict Typing (tsc)   │
 │  • Vastu / Topological Invariant │  • Vite Production Bundling         │
 │  • CPWD Mathematical Accuracy    │  • Puppeteer 9-Viewport Audit       │
@@ -99,6 +102,7 @@ TEST_TYPOLOGIES = [
 ### API Contract & Rate Limit Suite (`test_api.py`)
 - Tests `POST /api/analyze` request validation and Pydantic response models.
 - Tests sliding window in-memory rate limiting (asserts `HTTP 429` on the 31st request within 60s).
+- **`test_external_provider_rate_limit.py`:** proves upstream 429s degrade honestly — Nominatim/Photon return no invented results, Overpass falls back to a named `ASSUMED` frontage, Groq drops to the deterministic mock with the `429` in `fallback_reason`.
 - Tests CORS headers and preflight `OPTIONS` requests.
 - Validates graceful degradation when external telemetry APIs simulate timeouts.
 
@@ -109,6 +113,58 @@ TEST_TYPOLOGIES = [
 - **`test_site_vision.py`:** Tests Copernicus Sentinel-2 multispectral vegetation index calculation (NDVI) and tree preservation clustering.
 - **`test_cost.py`:** Tests CPWD Plinth Area Rate formulas and floor height adjustments.
 - **`test_vastu.py`:** Tests 8-directional cardinal analysis and entrance scoring.
+
+---
+
+### Space-Engine, Gate & Economics Suites
+
+The generative plan is verified by contract suites rather than a golden drawing, so a
+solver change is judged by the same invariants the certificate and the report publish.
+The architecture behind these suites is documented in [Space Engine](space-engine.md).
+
+| Suite | What it pins |
+|:---|:---|
+| `test_validation_gate.py` | Every layer L1–L15 is evaluated, `N/A` never silently passes, the PDF sheet carries the same layer table as the UI |
+| `test_gate_integrity.py` | Gate verdicts, refusal gates, and certificates are recomputed after mutation; a stale PASS cannot survive |
+| `test_coverage_truth.py`, `test_plot_coverage_contract.py` | Captured boundary drives plate size; coverage is a hard cap, never an unwarned breach |
+| `test_land_economics.py` | Land economics certificate: footprint source, residuals, dead corners, circulation band |
+| `test_scheme_solver.py`, `test_scheme_selection.py`, `test_scheme_picker_wiring.py` | The three scheme profiles score deterministically, and choosing one **re-partitions** the plate (with the outcome recorded as applied / recorded only / refused) |
+| `test_furniture_ventilation.py`, `test_living_quality_layers.py` | Furniture sets fit their rooms; ventilation and daylight layers are evaluated |
+| `test_invariant_sweep_standing.py` | A standing multi-seed sweep keeps the hard invariants true across typologies |
+| `test_sidebar_control_wiring.py` | Every sidebar control reaches a visible output — no dead control, no orphan payload field |
+| `test_analyze_boundary.py` | Analysis plot area comes from the boundary, with the basis named |
+
+---
+
+#### Per-module engine suites
+| Suite | What it locks down |
+|:---|:---|
+| `test_floorplan.py` | Grid discretisation, Vastu quadrant constraints, plumbing adjacency, disjointness/containment, dissection contiguity, SVG validity |
+| `test_multi_floor_engine.py` | Vertical core stacking, cross-floor graph reachability, wet-stack alignment, graceful degradation (EC01–EC04), typology × storey × strictness matrix |
+| `test_validation_gate.py` | The L1–L15 gate: severity typing, `pass/warn/na` tallies, a layer that did not run cannot pass, refusal honesty |
+| `test_land_economics.py` | Programme-aware footprint, coverage ceiling, residual sliver absorption, explicit (never silent) programme deficit |
+| `test_coverage_truth.py` | Captured-boundary coverage ceiling, plate fill, refusal on an unplaceable brief |
+| `test_ontology_contracts.py` | Space semantics, symmetric relation matrix, vertical no-wet-over-habitable law, typology catalog completeness |
+| `test_drawing_ir.py` / `test_drafting_hygiene.py` | Sheet parity with the model, bbox containment, `L0/L1` level ladders, `m²` typography, title-block fields |
+| `test_living_quality_layers.py` | Layers 2–4: door swings, fixture clearances, furniture placement and kitchen working triangle |
+| `test_pipeline_contracts.py` | API ↔ frontend response contract, wall-graph DTO, dimension-chain sum, sidebar single-source combinations |
+| `test_proportions_and_wet_stack.py` | Frontage is capped at each space's catalogue proportion, bands are split so their rooms can fill them, every disproportionate room is named, and `VERT-01` is only claimed where the room measurably stacks |
+| `test_compact_t2_unit_plan.py` | The 12 × 15 T2 plate holds both unit programmes: stair on the east flank, pocket bedroom + second bath, every room at its catalogue gross minimum, both living rooms opening off the lobby, no bath/kitchen shared wall (HYG-02), identical wet positions on every storey, and the row plan untouched on plates that already fit |
+| `test_analyze_boundary.py` / `test_plot_coverage_contract.py` | Boundary echo, statutory-area rejection, area disagreement surfacing, traced boundaries never overhanging |
+| `test_irregular_site_geometry.py` | Projection round-trip, self-intersection and narrow-wedge rejection, golden L-shape/courtyard cases, PDF parity |
+| `test_report_honesty_parity.py` / `test_pdf_hygiene_parity.py` | Warnings verbatim in UI and PDF, null seismic zone never rendered as a letter, no mid-word PDF truncation |
+
+#### Engine scripts (`backend/scripts/`)
+```bash
+cd backend
+
+# Cross-typology invariant sweep -> docs_ignore/space-engine/qa-sweep.{json,md}
+python scripts/qa_invariant_sweep.py --quick
+
+# Re-freeze the landing hero geometry the 3D massing extrudes from
+python scripts/capture_landing_generation.py
+```
+`qa_invariant_sweep.py` runs every typology × plot × storey × strictness combination through the real solver and writes a violation register; `--only`, `--typology`, `--suffix` narrow or label a run. `capture_landing_generation.py` calls the same function as `POST /api/generate-floorplan` with `ai_provider="mock"` and a fixed seed, so re-running reproduces the landing asset byte-for-byte (timestamps excluded from the provenance hash).
 
 ---
 
@@ -154,6 +210,28 @@ To execute the audit:
 ```bash
 npm run audit:ui
 ```
+
+### Additional Quality Gates
+
+Beyond the viewport audit, these commands prove specific contracts. They run against the
+built tree (`vite preview` on port 4173 for `audit:landing`) or the dev servers on
+`localhost:5173` + `localhost:8000` where noted.
+
+| Command | Contract it proves |
+|:---|:---|
+| `node scripts/test_boundary_pipeline.cjs` | Projection parity, boundary canonicalisation, gate layer ids (L1–L15), sheet-truth chips, frontage callouts |
+| `node scripts/test_unified_source.cjs` | One source of truth for the capture → analysis → report payload |
+| `npm run test:design` | Design-token grammar and interaction primitives |
+| `npm run test:interaction` | Focus, keyboard and pressed-state behaviour |
+| `npm run test:map-controls` | Map control offsets against the HUD |
+| `npm run test:trace-ui` | Capture wizard tracing flow |
+| `npm run lint:tokens` · `lint:emoji` · `lint:css` | No ad-hoc colour literals, no banned glyphs, no orphan CSS |
+| `npm run lint:material` | Every blur/translucency surface is classified chrome (pinned ledger; regenerate with `--update`) |
+| `npm run check:contrast` | Text contrast against the design tokens |
+| `npm run assert:bundle` | Route-level bundle split is intact |
+| `npm run test:e2e` *(dev servers required)* | Full funnel in Chromium: capture → analysis → blueprint, including land economics, the scheme picker re-solving the plate, the 390 px report section-nav fade, the frontage vertex pair (F31) and float-free numeric inputs (F30) |
+| `node scripts/audit_sidebar_wiring.cjs` *(dev servers required)* | Every sidebar control moves a visible output, light + dark proofs, dropdown/menu keyboard behaviour |
+| `npm run audit:landing` *(preview build on 4173)* | Landing console, axe, overflow, CLS and LCP across viewports, 44 px tap targets (F33) and the fixed porcelain palette under an OS `prefers-color-scheme: dark` preference. The landing is intentionally light-only (see `index.css`); the dark pass asserts it stays porcelain rather than inverting. Exits non-zero on console/page errors, axe violations, undersized targets, document overflow or an inverted palette |
 
 ---
 

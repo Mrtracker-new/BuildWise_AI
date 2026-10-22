@@ -142,6 +142,9 @@ The primary site engineering analysis endpoint. Executes reverse geocoding, digi
 - `latitude` / `longitude` *(float, required)*: WGS84 decimal coordinates.
 - `built_up_area_sqft` *(float, default: 2000.0)*: Planned gross floor area across all storeys.
 - `quality_grade` *(string, default: "standard")*: `"economy"`, `"standard"`, `"premium"`, or `"luxury"`.
+  It drives the **finish schedule and cost rates** only (door/window finishes, wall
+  and floor specification, CPWD rate band). It does **not** change room geometry,
+  clear dimensions or the plate; a premium grade is not a larger plan (audit F19).
 - `building_typology` *(string, default: "residential_single")*: Typology identifier.
 - `floors` *(int, default: 1)*: Total number of storeys (e.g. 1 = G, 2 = G+1).
 - `ground_coverage_ratio` *(float, optional)*: Maximum building footprint ratio (0.1 to 1.0).
@@ -237,7 +240,7 @@ The primary site engineering analysis endpoint. Executes reverse geocoding, digi
   "ai_metadata": {
     "provider_requested": "groq",
     "provider_used": "groq",
-    "model_name": "llama-3.3-70b-versatile",
+    "model_name": "openai/gpt-oss-120b",
     "latency_seconds": 1.42,
     "fallback_reason": null
   }

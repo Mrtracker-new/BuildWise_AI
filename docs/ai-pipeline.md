@@ -84,11 +84,14 @@ Factory instantiation via `app.ai.get_ai_adapter(provider_name)` returns the app
 
 ### 1. Groq Adapter (`GroqExplanationAdapter`)
 Located in `app/ai/groq_adapter.py`.
-- **Default Model:** `llama-3.3-70b-versatile`
+- **Default Model:** `openai/gpt-oss-120b`
 - **Fallback Candidate List:**
   1. User-configured `GROQ_MODEL`
-  2. `llama-3.3-70b-versatile`
-  3. `llama-3.1-8b-instant`
+  2. `openai/gpt-oss-120b`
+  3. `openai/gpt-oss-20b`
+  4. `qwen/qwen3.8-27b`
+  5. `llama-3.3-70b-versatile`
+  6. `llama-3.1-8b-instant`
 - **JSON Enforcement:** Sends `"response_format": {"type": "json_object"}`.
 - **Payload Extraction:** Extracts text bounded by the first `{` and last `}` using `re.search(r'\{.*\}', raw_content, re.DOTALL)`.
 - **Latency:** ~0.6s to 1.5s for 70B parameter models.

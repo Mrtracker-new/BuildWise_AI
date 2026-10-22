@@ -144,7 +144,7 @@ When deploying or distributing BuildWise AI, all upstream data attributions must
 ---
 
 ## Navigation
-- **Previous:** [← Generative Blueprint Engine](blueprint-engine.md)
+- **Previous:** [← Space Engine](space-engine.md)
 - **Next:** [Testing & Quality Assurance →](testing.md)
 
 ---
