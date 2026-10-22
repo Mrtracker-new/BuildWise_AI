@@ -134,11 +134,6 @@ export function unitCountForFloor(floor: SingleFloorPlanModel | null | undefined
   return units.size;
 }
 
-export function generatedTypologyLabel(building: MultiStoreyBuildingModel | null | undefined): string {
-  if (!building) return '';
-  return getTypologyProfile(building.building_typology).label;
-}
-
 export function generatedTypologyMatches(
   building: MultiStoreyBuildingModel | null | undefined,
   requestedTypology?: string

@@ -26,7 +26,7 @@ export const FAR_DISCLOSURE: React.JSX.Element = (
     sections={[
       {
         label: 'Derivation',
-        text: 'Total built-up area ÷ captured plot area. Built-up is recovered as base cost ÷ the CPWD rate per sq ft, so it is the plinth area the cost engine actually used.',
+        text: 'Total built-up area ÷ plot area. Built-up is recovered as base cost ÷ the CPWD rate per sq ft, so it is the plinth area the cost engine actually used. The plot-area tile names where its number came from: captured boundary, client-supplied area, or built-up ÷ coverage.',
       },
       {
         label: 'Not a bylaw ceiling',

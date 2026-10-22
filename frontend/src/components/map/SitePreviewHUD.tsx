@@ -82,8 +82,19 @@ export const SitePreviewHUD: React.FC<SitePreviewHUDProps> = ({
                 {preview.footprint.area_sqm.toFixed(0)} m² footprint
               </span>
               {typeof cert.ground_coverage_actual_pct === 'number' && (
-                <span className="px-2 py-0.5 rounded-full bg-[var(--fill)] text-[10.5px] ui-font-tabular text-[var(--text-1)]">
-                  {cert.ground_coverage_actual_pct.toFixed(0)}% coverage
+                <span
+                  className="px-2 py-0.5 rounded-full bg-[var(--fill)] text-[10.5px] ui-font-tabular text-[var(--text-1)]"
+                  title={
+                    typeof cert.ground_coverage_limit_pct === 'number'
+                      ? `Footprint covers ${cert.ground_coverage_actual_pct.toFixed(1)}% of the plot; the max envelope coverage is ${cert.ground_coverage_limit_pct.toFixed(0)}%`
+                      : 'Footprint area as a share of the plot area'
+                  }
+                >
+                  {cert.ground_coverage_actual_pct.toFixed(0)}% of{' '}
+                  {typeof cert.ground_coverage_limit_pct === 'number'
+                    ? `${cert.ground_coverage_limit_pct.toFixed(0)}%`
+                    : '—'}{' '}
+                  max envelope coverage
                 </span>
               )}
               <span className="px-2 py-0.5 rounded-full bg-[var(--fill)] text-[10.5px] ui-font-tabular text-[var(--text-2)]">

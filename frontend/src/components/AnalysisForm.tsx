@@ -342,7 +342,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
   }[] = [
     {
       id: 'groq',
-      label: 'Groq Cloud (Llama 3.3 70B)',
+      label: 'Groq Cloud (gpt-oss-120b)',
       description: hostedDescription(Boolean(providerAvailability?.groq)),
       state: !statusKnown ? 'unknown' : providerAvailability?.groq ? 'live' : 'fallback',
     },
@@ -409,14 +409,26 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({
     : null;
   const briefLength = (request.client_requirements || '').length;
 
+  // The example chips append to the LATEST brief, not to the brief captured by
+  // the last render. Two chips clicked in quick succession used to race: the
+  // second handler still closed over the pre-first-click text and overwrote it,
+  // so the audit (and a fast user) got only the last example. The ref advances
+  // synchronously on every insert and re-syncs whenever the controlled value
+  // changes from anywhere else (typing, paste, preset).
+  const briefRef = useRef(request.client_requirements || '');
+  useEffect(() => {
+    briefRef.current = request.client_requirements || '';
+  }, [request.client_requirements]);
+
   const insertExample = useCallback(
     (example: string) => {
-      const current = request.client_requirements || '';
+      const current = briefRef.current;
       const next = (current ? `${current.replace(/,\s*$/, '')}, ` : '') + example;
       if (next.length > 240) return;
+      briefRef.current = next;
       onChange({ client_requirements: next });
     },
-    [request.client_requirements, onChange]
+    [onChange]
   );
 
   const handleCta = useCallback(() => {

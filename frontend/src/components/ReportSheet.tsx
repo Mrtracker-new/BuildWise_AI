@@ -12,6 +12,7 @@ import { CollapsibleSection } from './report/CollapsibleSection';
 import { WarningsBanner } from './report/WarningsBanner';
 import { ProvenanceFactorCard } from './report/ProvenanceFactorCard';
 import { CertificatePanel } from './report/CertificatePanel';
+import { LandEconomicsPanel } from './report/LandEconomicsPanel';
 import { ArrivalSlice } from './report/ArrivalSlice';
 import { CostRangeBar } from './report/CostRangeBar';
 import { WindRose } from './report/WindRose';
@@ -175,6 +176,7 @@ const TAB_SECTION_LINKS: Partial<Record<ResultsTab, { id: string; label: string 
     { id: 'breakdown', label: 'Cost Breakdown' },
     { id: 'landvalue', label: 'Land Value' },
     { id: 'certificate', label: 'Certificate' },
+    { id: 'land', label: 'Land & Space' },
     { id: 'blueprint', label: 'Blueprint' },
   ],
 };
@@ -567,12 +569,20 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
    * before that the tray has no pill pointing at nothing. Declared with the
    * other hooks — above the `!isOpen` early return, where a hook is illegal.
    */
+  // Land economics rides on the same response as the blueprint: no plan, no
+  // certificate, so the tray link is withheld until the certificate exists.
+  const landEconomics =
+    floorPlanData?.land_economics ?? floorPlanData?.multi_storey?.land_economics ?? null;
   const sectionLinks = useMemo(() => {
     const links = TAB_SECTION_LINKS[activeTab] ?? [];
-    return links.filter((link) => link.id !== 'certificate' || Boolean(floorPlanData?.qa));
+    return links.filter((link) => {
+      if (link.id === 'certificate') return Boolean(floorPlanData?.qa);
+      if (link.id === 'land') return Boolean(landEconomics);
+      return true;
+    });
     // Keyed on the IMMEDIATE tab: the tray is chrome, so it must describe the tab
     // the pill just moved to, not the one the pane is still showing.
-  }, [activeTab, floorPlanData?.qa]);
+  }, [activeTab, floorPlanData?.qa, landEconomics]);
 
   // Initial read for the tab that is about to paint (a layout effect, so the
   // first frame already highlights the right pill instead of flashing an
@@ -1334,9 +1344,19 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                             fallbackHeight={CERTIFICATE_FALLBACK_HEIGHT}
                             label="Validation gate certificate"
                           >
-                            <CertificatePanel qa={floorPlanData.qa} />
+                            <CertificatePanel qa={floorPlanData.qa} variant="sheet" />
                           </ArrivalSlice>
                         ) : null}
+                      </div>
+                    )}
+
+                    {landEconomics && (
+                      <div
+                        className="w-full min-w-0 lg:col-span-2"
+                        data-report-section="land"
+                        id="sec-land"
+                      >
+                        <LandEconomicsPanel report={landEconomics} />
                       </div>
                     )}
 

@@ -1924,7 +1924,7 @@ export const CaptureSheet: React.FC<CaptureSheetProps> = ({
               </div>
               {activeFrontage !== null && (
                 <div className="text-[11px] text-[var(--text-2)] ui-font-tabular">
-                  Frontage: edge P{activeFrontage + 1}–P{(activeFrontage % vertices.length) + 1}
+                  Frontage: edge P{(activeFrontage % vertices.length) + 1}–P{((activeFrontage + 1) % vertices.length) + 1}
                   {!frontageConfirmed && suggestion !== null && suggestion.edgeIndex === activeFrontage ? ' (suggested)' : ''}
                 </div>
               )}

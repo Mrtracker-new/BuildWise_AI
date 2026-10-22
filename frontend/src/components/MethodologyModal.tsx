@@ -103,7 +103,7 @@ export const MethodologyModal: React.FC<MethodologyModalProps> = ({ isOpen, onCl
               Multiplier = RoadWidth (0.90-1.15) &times; Zoning (1.00-1.10) &times; Frontage (0.95-1.05) &times; Corner (0.95-1.05)
             </div>
             <p className="text-[11px] text-[var(--text-2)]">
-              The aggregate locality multiplier is strictly clamped to the range <b>[0.85, 1.25]</b>. Plot area is derived from built-up area and assumed Ground Coverage Ratio (default 60%, configurable 40-75%). Users may supply custom overrides which recompute totals instantly in the browser.
+              The aggregate locality multiplier is strictly clamped to the range <b>[0.85, 1.25]</b>. The plot area comes from the captured boundary when one exists (server-recomputed shoelace area, authoritative); otherwise from a client-supplied area, and only then from built-up ÷ Ground Coverage Ratio (default 60%, configurable 40-75%). Every surface labels which basis was used. Users may supply custom overrides which recompute totals instantly in the browser.
             </p>
           </div>
 

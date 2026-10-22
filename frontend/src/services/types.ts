@@ -164,6 +164,12 @@ export interface LandValueEstimate {
   locality_multiplier: number;
   multiplier_breakdown: MultiplierBreakdown;
   plot_area_sqft: number;
+  /** Where plot_area_sqft came from. The report may only label the number a
+   *  "captured boundary" when this is 'captured_boundary' (audit F07). */
+  plot_area_source?: 'captured_boundary' | 'client_plot_area' | 'derived_from_coverage';
+  /** Shoelace area of the captured boundary, in sq ft (null when none). */
+  boundary_area_sqft?: number | null;
+  plot_area_warnings?: string[];
   ground_coverage_ratio_applied: number;
   land_cost_inr?: number | null;
   construction_cost_inr: number;
@@ -275,6 +281,32 @@ export interface AnalysisResponse {
   /** Per-source fetch provenance: real server ISO8601 fetch timestamps; null
    *  means the upstream degraded to its disclosed fallback model. */
   data_sources?: Record<string, DataSourceProvenance>;
+  /** Server-validated echo of the captured boundary (audit F22). */
+  boundary_summary?: BoundarySummary | null;
+}
+
+/** Server-validated boundary echo: every value recomputed server-side. */
+export interface BoundarySummary {
+  vertex_count: number;
+  area_sqm: number;
+  area_sqft: number;
+  perimeter_m: number;
+  shape_type: string;
+  source: string;
+  frontage_edge_index?: number | null;
+  frontage_annotation?: string | null;
+  origin: { lat: number; lon: number };
+  winding: 'cw' | 'ccw' | string;
+  captured: boolean;
+  authoritative: boolean;
+  client_area_sqm?: number | null;
+  area_delta_pct?: number | null;
+  provenance: {
+    boundary_source: string;
+    projection: string;
+    origin: { lat: number; lon: number };
+    area_method?: string;
+  };
 }
 
 export interface DataSourceProvenance {
@@ -410,6 +442,8 @@ export interface FloorPlanQA {
   critic_notes?: string[];
   validation_gate?: ValidationGateReport;
   validation_gate_status?: 'PASS' | 'WARN' | 'FAIL';
+  invariants_verified?: number;
+  invariants_total?: number;
 }
 
 export interface RectanglesModel {
@@ -587,8 +621,8 @@ export interface SingleFloorPlanModel {
   doors: MultiFloorDoorGeometry[];
   windows: MultiFloorWindowGeometry[];
   circulation_status: 'connected' | 'disconnected';
-  vastu_score_pct: number;
-  plumbing_stack_alignment_pct: number;
+  vastu_score_pct: number | null;
+  plumbing_stack_alignment_pct: number | null;
   built_up_area_sqm: number;
   carpet_area_sqm: number;
   svg_blueprint_cad: string;
@@ -636,7 +670,121 @@ export interface MathematicalValidityCertificate {
   overall_layer_status?: 'PASS' | 'WARN' | 'FAIL';
   certificate_id?: string;
   certified_rules?: string[];
+  /** One human-readable reason per failing invariant, naming the offending rooms. */
+  failures?: string[];
   details?: Record<string, any>;
+}
+
+// ----------------------------------------------------
+// Land economics (backend app/schemas/land_economics.py)
+// ----------------------------------------------------
+
+export interface LandEconomicsCertificate {
+  status: 'PASS' | 'WARN' | 'FAIL' | string;
+  checks: Record<string, boolean>;
+  warnings: string[];
+}
+
+export interface ResidualSliver {
+  sliver_id: string;
+  area_sqm: number;
+  centroid: [number, number];
+  polygon_coords?: Array<[number, number]>;
+  absorbed_as?: string;
+  rationale?: string;
+}
+
+export interface LandEconomicsReport {
+  program_needed_area_m2: number;
+  buildable_area_sqm: number;
+  coverage_limit_area_sqm: number;
+  footprint_area_sqm: number;
+  footprint_source: string;
+  program_aware_footprint: boolean;
+  program_deficit_sqm: number;
+  ground_program_area_sqm: number;
+  ground_circulation_area_sqm: number;
+  total_gfa_sqm: number;
+  land_use_efficiency_pct: number;
+  footprint_utilization_pct: number;
+  floor_area_ratio: number;
+  circulation_ratio_pct: number;
+  wedge_area_sqm: number;
+  outdoor_area_sqm: number;
+  occupied_area_sqm: number;
+  waste_area_sqm: number;
+  waste_pct: number;
+  anonymous_outdoor_area_sqm: number;
+  dead_corner_area_sqm: number;
+  sliver_count: number;
+  slivers: ResidualSliver[];
+  absorbed_residual_count: number;
+  furniture_fit_pct?: number | null;
+  warnings: string[];
+  certificate: LandEconomicsCertificate;
+}
+
+// ----------------------------------------------------
+// Scheme portfolio (backend app/schemas/scheme.py)
+// ----------------------------------------------------
+
+export interface SchemeMetrics {
+  land_use_efficiency_pct: number;
+  circulation_ratio_pct: number;
+  vastu_score: number;
+  daylight_score: number;
+  relation_score: number;
+  compactness_score: number;
+  total_score: number;
+  forbidden_violations: number;
+  must_adjacency_score: number;
+  prefer_score: number;
+  egress_connected: boolean;
+  min_area_violations: number;
+  min_width_violations: number;
+  aspect_violations: number;
+  furniture_fit_pct: number;
+  program_area_sqm: number;
+  circulation_area_sqm: number;
+  envelope_area_sqm: number;
+  program_deficit_sqm: number;
+  dropped_rooms: string[];
+}
+
+export interface SchemeAlternative {
+  scheme_id: string;
+  profile: 'max_area' | 'max_vastu' | 'max_light_vent' | string;
+  label: string;
+  rank: number;
+  feasible: boolean;
+  score: number;
+  weights: Record<string, number>;
+  metrics: SchemeMetrics;
+  delta_vs_engine: Record<string, number | null>;
+  delta_vs_best: Record<string, number | null>;
+  floors: Array<{
+    floor_index: number;
+    floor_name: string;
+    envelope: Record<string, any>;
+    rooms: any[];
+    doors?: any[];
+    windows?: any[];
+    svg_blueprint_cad?: string | null;
+    svg_blueprint_paper?: string | null;
+    metrics?: Record<string, any>;
+  }>;
+  warnings: string[];
+  provenance: Record<string, any>;
+}
+
+export interface SchemePortfolio {
+  seed: number;
+  typology: string;
+  reference_metrics: SchemeMetrics;
+  alternatives: SchemeAlternative[];
+  selected_scheme_id?: string | null;
+  selection_source: string;
+  provenance: Record<string, any>;
 }
 
 // ----------------------------------------------------
@@ -832,6 +980,8 @@ export interface MultiStoreyBuildingModel {
   seed: number;
   solver_timing_ms: number;
   mathematical_certificate?: MathematicalValidityCertificate;
+  validation_gate?: ValidationGateReport;
+  land_economics?: LandEconomicsReport;
   plot_polygon?: PlotPolygon;
   site_plan?: SitePlanModel;
 }
@@ -889,6 +1039,11 @@ export interface FloorPlanRequest {
   design_intent?: 'maximize_enclosed' | 'passive_ventilation';
   include_service_layer?: boolean;
   include_structural_sheet?: boolean;
+  include_scheme_alternatives?: boolean;
+  selected_scheme_id?: string;
+  // Size the plate from the programme need (capped by the statutory ceiling)
+  // instead of the typology's comfortable plate (audit F01/F14).
+  program_aware_footprint?: boolean;
 }
 
 export interface RoomPlacement {
@@ -908,12 +1063,13 @@ export interface RoomPlacement {
 }
 
 export interface FloorPlanMetrics {
-  vastu_compliance_pct: number;
-  plumbing_adjacency_score: number;
-  space_utilization_pct: number;
+  // Measured by the engine; null means the plan carried nothing to measure.
+  vastu_compliance_pct: number | null;
+  plumbing_adjacency_score: number | null;
+  space_utilization_pct: number | null;
   plot_coverage_pct?: number;
   total_built_up_sqm: number;
-  circulation_efficiency_pct: number;
+  circulation_efficiency_pct: number | null;
   circulation_status?: string;
 }
 
@@ -939,6 +1095,14 @@ export interface FloorPlanParamsSnapshot {
   include_service_layer?: boolean;
   include_structural_sheet?: boolean;
   seed?: string;
+  /** Ask the solver for the ranked Max Area / Max Vastu / Max Light+Vent portfolio. */
+  include_scheme_alternatives?: boolean;
+  /** Chosen profile; the plate is re-solved with that profile's weights. */
+  selected_scheme_id?: string;
+  /** Backend-recorded outcome of a scheme selection. */
+  scheme_selection_status?: 'applied' | 'rejected_non_compliant' | 'recorded_only' | string;
+  scheme_selection_failing_layers?: string[];
+  scheme_profile?: string | null;
 }
 
 export interface FloorPlanResponse {
@@ -968,6 +1132,10 @@ export interface FloorPlanResponse {
   mathematical_certificate?: MathematicalValidityCertificate;
   plot_polygon?: PlotPolygon;
   site_plan?: SitePlanModel;
+  land_economics?: LandEconomicsReport;
+  scheme_alternatives?: SchemeAlternative[];
+  scheme_portfolio?: SchemePortfolio;
+  selected_scheme_id?: string;
 }
 
 export interface ReportRequestPayload {

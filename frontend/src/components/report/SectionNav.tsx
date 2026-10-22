@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 export interface ReportSectionLink {
   id: string;
@@ -45,6 +45,34 @@ interface SectionNavProps {
  * cost breakdown down to the end of the report. The tray is the read-out now.
  */
 export const SectionNav: React.FC<SectionNavProps> = ({ sections, activeSection, onNavigate }) => {
+  const trayRef = useRef<HTMLDivElement>(null);
+  const [overflow, setOverflow] = useState({ start: false, end: false });
+
+  /* The tray scrolls at 390px, but a hidden scrollbar plus a pill flush against
+     the edge reads as "this is all of it". Measure the two edges and fade only
+     the side that still has pills behind it (audit F29). Runs on scroll,
+     container resize and pill-set changes, so the fade can never lie about
+     content being clipped. */
+  useEffect(() => {
+    const el = trayRef.current;
+    if (!el) return;
+    const measure = () => {
+      const max = el.scrollWidth - el.clientWidth;
+      setOverflow({
+        start: el.scrollLeft > 1,
+        end: max > 1 && el.scrollLeft < max - 1,
+      });
+    };
+    measure();
+    el.addEventListener('scroll', measure, { passive: true });
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    ro?.observe(el);
+    return () => {
+      el.removeEventListener('scroll', measure);
+      ro?.disconnect();
+    };
+  }, [sections.length]);
+
   if (sections.length === 0) return null;
 
   /* py-[3px]: the tray has to fit the sub-header row's own height (38px) so
@@ -60,7 +88,17 @@ export const SectionNav: React.FC<SectionNavProps> = ({ sections, activeSection,
     >
       {/* The app's tab-strip treatment: the tray scrolls horizontally on
           narrow panes instead of wrapping or squashing the pills. */}
-      <div className="flex items-center gap-1 rounded-full bg-[var(--fill)] p-[3px] min-w-0 max-w-full overflow-x-auto bw-tab-strip">
+      <div
+        ref={trayRef}
+        data-overflow={overflow.start ? (overflow.end ? 'both' : 'start') : overflow.end ? 'end' : 'none'}
+        style={
+          {
+            '--bw-nav-fade-l': overflow.start ? '18px' : '0px',
+            '--bw-nav-fade-r': overflow.end ? '18px' : '0px',
+          } as React.CSSProperties
+        }
+        className="bw-section-nav-scroll flex items-center gap-1 rounded-full bg-[var(--fill)] p-[3px] min-w-0 max-w-full overflow-x-auto bw-tab-strip"
+      >
         {sections.map((s) => {
           const active = s.id === activeSection;
           return (

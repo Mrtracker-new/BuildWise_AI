@@ -676,9 +676,9 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
         doors: [],
         windows: [],
         circulation_status: 'connected' as const,
-        vastu_score_pct: 0,
-        vastu_compliance_pct: 0,
-        plumbing_stack_alignment_pct: 100,
+        vastu_score_pct: null,
+        vastu_compliance_pct: null,
+        plumbing_stack_alignment_pct: null,
         svg_blueprint_cad: svgString,
         svg_blueprint_paper: svgPaperString || svgString,
         envelope: { x: 0, y: 0, width: plotWidthM || 10, depth: plotDepthM || 12, area_sqm: 120 }

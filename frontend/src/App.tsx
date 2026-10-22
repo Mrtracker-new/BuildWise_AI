@@ -242,6 +242,10 @@ const AppShell: React.FC = () => {
   } = useSitePreview({
     getMap: getMapInstance,
     boundary,
+    // The preview must be measured with the SAME coverage the solver applies.
+    // Without it the HUD reported an unconstrained inscribed footprint (89 %)
+    // beside a 60 % statutory cap (audit F18).
+    coverageRatio: request.ground_coverage_ratio ?? 0.6,
     enabled: !captureOpen && !previewDismissed,
   });
   const handleDismissPreview = useCallback((): void => {

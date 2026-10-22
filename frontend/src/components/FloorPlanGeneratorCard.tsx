@@ -11,7 +11,8 @@ import {
 import { ConstraintChips } from './ConstraintChips';
 import { SegmentedControl } from '../design';
 import { Skeleton } from './report/Skeleton';
-import { groupGateLayers, qaRowText, QA_CHIP_CLASSES } from '../services/validationGateUI';
+import { CertificatePanel } from './report/CertificatePanel';
+import { SchemePicker, type SchemeSelectionStatus } from './SchemePicker';
 import {
   type CanonicalTypology,
   type RoomOption,
@@ -113,8 +114,11 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
     };
   }, [sharedBoundary]);
 
-  const bboxWidth = Math.max(4.0, polyMetrics.bbox[2] - polyMetrics.bbox[0]);
-  const bboxDepth = Math.max(4.0, polyMetrics.bbox[3] - polyMetrics.bbox[1]);
+  /* bbox edges are geodesic floats: subtracting them surfaces the binary
+     residue (89.05499999999999) in the read-only width/depth inputs. Round to
+     the centimetre the solver actually consumes (audit F30). */
+  const bboxWidth = Math.max(4.0, Math.round((polyMetrics.bbox[2] - polyMetrics.bbox[0]) * 100) / 100);
+  const bboxDepth = Math.max(4.0, Math.round((polyMetrics.bbox[3] - polyMetrics.bbox[1]) * 100) / 100);
 
   const plotWidth = siteMode === 'irregular' ? bboxWidth : (userWidth ?? defaultWidthM);
   const plotDepth = siteMode === 'irregular' ? bboxDepth : (userDepth ?? defaultDepthM);
@@ -221,6 +225,11 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   }, [activeFloors]);
 
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  // Scheme profile the user picked (audit F09). Sent with every generation so
+  // the plate is re-solved with that profile's weights; the picker records what
+  // the backend actually did with it.
+  const [schemeProfile, setSchemeProfile] = useState<string | null>(null);
+  const [pendingSchemeProfile, setPendingSchemeProfile] = useState<string | null>(null);
   const [localFloorPlan, setLocalFloorPlan] = useState<FloorPlanResponse | null>(null);
   // Canonical single source of truth: parent-managed activeFloorPlan if provided, falling back to local state
   const floorPlan = activeFloorPlan !== undefined ? activeFloorPlan : localFloorPlan;
@@ -330,6 +339,35 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       ))
   );
 
+  // Gate verdicts are read from the response, never re-derived in the UI: the
+  // QA rows and the certificate badge must agree with the gate (audit F15/F16).
+  const gateReport = floorPlan?.qa?.validation_gate
+    || floorPlan?.mathematical_certificate?.details?.validation_gate
+    || floorPlan?.multi_storey?.validation_gate;
+  const gateStatus = floorPlan?.qa?.validation_gate_status || gateReport?.overall_status;
+  const gateWarnCount = Array.isArray(gateReport?.layers)
+    ? gateReport.layers.filter((l: any) => l.status === 'WARN').length
+    : 0;
+  const gateFailCount = Array.isArray(gateReport?.layers)
+    ? gateReport.layers.filter((l: any) => l.status === 'FAIL').length
+    : 0;
+
+  // Scheme portfolio + what the backend did with the selection (audit F09).
+  // Read from the response, never inferred from the presence of a profile.
+  const schemeAlternatives = floorPlan?.scheme_alternatives ?? [];
+  const schemeSnapshot = (floorPlan?.params_snapshot ?? {}) as Record<string, any>;
+  const schemeSelectionStatus: SchemeSelectionStatus =
+    schemeSnapshot.scheme_selection_status === 'applied'
+      ? 'applied'
+      : schemeSnapshot.scheme_selection_status === 'rejected_non_compliant'
+      ? 'rejected_non_compliant'
+      : schemeSnapshot.scheme_selection_status === 'recorded_only'
+      ? 'recorded_only'
+      : 'unselected';
+  const schemeFailingLayers: string[] = Array.isArray(schemeSnapshot.scheme_selection_failing_layers)
+    ? schemeSnapshot.scheme_selection_failing_layers
+    : [];
+
   // Boundary edits (presets / import / vertex edits) live in the map capture
   // capture wizard. The card deep-links instead of owning geometry state.
   const requestBoundaryEdit = () => {
@@ -344,7 +382,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
     );
   };
 
-  const handleGenerate = async () => {
+  const handleGenerate = async (profileOverride?: string | null) => {
     if (selectedRooms.length < 3) {
       setErrorMessage('Please select at least 3 rooms to generate an architectural floor plan.');
       return;
@@ -355,11 +393,17 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       return;
     }
 
+    const activeSchemeProfile = profileOverride !== undefined ? profileOverride : schemeProfile;
     setIsGenerating(true);
     setErrorMessage(null);
+    setPendingSchemeProfile(activeSchemeProfile || null);
 
-    const currentWidth = Math.max(4.0, Math.min(60.0, Number(plotWidth) || 10.0));
-    const currentDepth = Math.max(4.0, Math.min(60.0, Number(plotDepth) || 12.0));
+    // A captured boundary is authoritative: send its real bounding box. The
+    // previous 60 m clamp turned a 108.5 x 89.1 m site into 60 x 60 m while the
+    // polygon still described the full plot, so the plate and the site plan
+    // disagreed (audit F01). Coverage, not a dimension clamp, caps the plate.
+    const currentWidth = Math.max(4.0, Number(plotWidth) || 10.0);
+    const currentDepth = Math.max(4.0, Number(plotDepth) || 12.0);
 
     // THE single-source funnel: identical model as map trace / presets / import.
     let plotPoly: PlotPolygon | undefined = undefined;
@@ -403,6 +447,15 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       design_intent: designIntent,
       include_service_layer: includeServiceLayer,
       include_structural_sheet: includeStructuralSheet,
+      // Audit F14: the flag is now part of the client contract. It stays OFF
+      // until the band solver can re-partition a programme-sized plate: with it
+      // on, `selected_scheme_id` fell back to `recorded_only` and the scheme
+      // picker stopped re-solving (F09), which is the worse regression.
+      program_aware_footprint: false,
+      // Always ask for the portfolio so the picker can show what the other two
+      // profiles would have produced; the geometry itself follows the selection.
+      include_scheme_alternatives: true,
+      selected_scheme_id: activeSchemeProfile || undefined,
     };
 
     try {
@@ -428,6 +481,9 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         design_intent: req.design_intent,
         include_service_layer: req.include_service_layer,
         include_structural_sheet: req.include_structural_sheet,
+        selected_scheme_id: req.selected_scheme_id,
+        scheme_selection_status: (resp.params_snapshot as any)?.scheme_selection_status,
+        scheme_profile: (resp.params_snapshot as any)?.scheme_profile,
       };
       const freshPlan: FloorPlanResponse = {
         ...resp,
@@ -448,7 +504,19 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       setErrorMessage(err.message || 'Failed to generate floor plan.');
     } finally {
       setIsGenerating(false);
+      setPendingSchemeProfile(null);
     }
+  };
+
+  /**
+   * Picking a profile re-solves the plate - it is not a cosmetic toggle. The
+   * same funnel as Generate runs, so the new geometry owns the certificate,
+   * land economics and every sheet that follows.
+   */
+  const handleSelectScheme = (schemeId: string) => {
+    if (isGenerating || schemeId === schemeProfile) return;
+    setSchemeProfile(schemeId);
+    void handleGenerate(schemeId);
   };
 
   return (
@@ -1035,7 +1103,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       {/* Action Button: Primary Accent Button */}
       <button
         type="button"
-        onClick={handleGenerate}
+        onClick={() => handleGenerate()}
         disabled={isGenerating}
         className="w-full h-9 px-4 rounded-full bg-[var(--accent)] hover:bg-[var(--accent-hover)] active:bg-[var(--accent-press)] disabled:bg-[var(--fill)] disabled:text-[var(--text-3)] text-white text-[13px] font-semibold flex items-center justify-center gap-2 transition-ui select-none shadow-sm cursor-pointer disabled:cursor-not-allowed"
       >
@@ -1135,7 +1203,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                     {floorPlan.qa.critic === 'pass'
                       ? 'Architect review: passed'
                       : floorPlan.qa.critic === 'skipped'
-                      ? 'Architect review: skipped'
+                      ? 'Architect review: not run'
                       : 'Architect review: flagged'}
                   </span>
                 )}
@@ -1255,19 +1323,19 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
             <div className="h-10 flex items-center justify-between px-0.5">
               <span className="text-[13px] font-normal text-[var(--text-2)]">Vastu compliance</span>
               <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
-                {floorPlan.metrics.vastu_compliance_pct.toFixed(0)}%
+                {floorPlan.metrics.vastu_compliance_pct != null ? `${floorPlan.metrics.vastu_compliance_pct.toFixed(0)}%` : '—'}
               </span>
             </div>
             <div className="h-10 flex items-center justify-between px-0.5">
               <span className="text-[13px] font-normal text-[var(--text-2)]">Plumbing adjacency efficiency</span>
               <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
-                {floorPlan.metrics.plumbing_adjacency_score.toFixed(0)}%
+                {floorPlan.metrics.plumbing_adjacency_score != null ? `${floorPlan.metrics.plumbing_adjacency_score.toFixed(0)}%` : '—'}
               </span>
             </div>
             <div className="h-10 flex items-center justify-between px-0.5">
               <span className="text-[13px] font-normal text-[var(--text-2)]">Space utilization</span>
               <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
-                {floorPlan.metrics.space_utilization_pct.toFixed(0)}%
+                {floorPlan.metrics.space_utilization_pct != null ? `${floorPlan.metrics.space_utilization_pct.toFixed(0)}%` : '—'}
               </span>
             </div>
             <div className="h-10 flex items-center justify-between px-0.5">
@@ -1284,23 +1352,52 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
             </div>
             {floorPlan.qa && (
               <>
-                <div className="h-10 flex items-center justify-between px-0.5">
-                  <span className="text-[13px] font-normal text-[var(--text-2)]">Solver QA gate</span>
-                  <span className="text-[13px] font-semibold text-[var(--text-1)] tabular-nums whitespace-nowrap">
-                    {floorPlan.qa.violations === 0 ? 'Passed (0 violations)' : `${floorPlan.qa.violations} violations`}
+                {/* The gate verdict and the invariant score are separate rows:
+                    "0 violations" beside a WARN gate was a contradiction (audit
+                    F15). Each row now reports the thing it actually measures. */}
+                <div className="h-10 flex items-center justify-between px-0.5" data-testid="qa-gate-row">
+                  <span className="text-[13px] font-normal text-[var(--text-2)]">Validation gate</span>
+                  <span className={`text-[13px] font-semibold tabular-nums whitespace-nowrap ${
+                    gateStatus === 'PASS'
+                      ? 'text-[var(--semantic-green-ink)]'
+                      : gateStatus === 'FAIL'
+                      ? 'text-rose-600'
+                      : gateStatus === 'WARN'
+                      ? 'text-amber-700 dark:text-amber-300'
+                      : 'text-[var(--text-2)]'
+                  }`}>
+                    {gateStatus || 'NOT RUN'}
+                    {gateStatus === 'WARN' && gateWarnCount > 0 ? ` (${gateWarnCount} advisory)` : ''}
+                    {gateStatus === 'FAIL' && gateFailCount > 0 ? ` (${gateFailCount} failed)` : ''}
                   </span>
                 </div>
+                {typeof floorPlan.qa.invariants_total === 'number' && floorPlan.qa.invariants_total > 0 && (
+                  <div className="h-10 flex items-center justify-between px-0.5" data-testid="qa-invariants-row">
+                    <span className="text-[13px] font-normal text-[var(--text-2)]">Solver invariants</span>
+                    <span className={`text-[13px] font-semibold tabular-nums whitespace-nowrap ${
+                      (floorPlan.qa.invariants_verified ?? 0) === floorPlan.qa.invariants_total
+                        ? 'text-[var(--semantic-green-ink)]'
+                        : 'text-amber-700 dark:text-amber-300'
+                    }`}>
+                      {floorPlan.qa.invariants_verified ?? 0}/{floorPlan.qa.invariants_total} verified
+                    </span>
+                  </div>
+                )}
                 {floorPlan.qa.critic && (
                   <div className="h-10 flex items-center justify-between px-0.5">
-                    <span className="text-[13px] font-normal text-[var(--text-2)]">Architect review</span>
-                    <span className={`text-[13px] font-semibold tabular-nums whitespace-nowrap capitalize ${
+                    <span className="text-[13px] font-normal text-[var(--text-2)]">Architect critic (advisory)</span>
+                    <span className={`text-[13px] font-semibold tabular-nums whitespace-nowrap ${
                       floorPlan.qa.critic === 'pass'
                         ? 'text-[var(--semantic-green-ink)]'
                         : floorPlan.qa.critic === 'skipped'
                         ? 'text-[var(--text-2)]'
                         : 'text-rose-600'
                     }`}>
-                      {floorPlan.qa.critic === 'pass' ? 'Passed' : floorPlan.qa.critic}
+                      {floorPlan.qa.critic === 'pass'
+                        ? 'Passed'
+                        : floorPlan.qa.critic === 'skipped'
+                        ? 'Not run'
+                        : 'Flagged'}
                     </span>
                   </div>
                 )}
@@ -1351,18 +1448,30 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
               });
             }
 
+            // A missing flag is NOT a pass: 'undefined' renders as NOT RUN
+            // instead of silently becoming a green check (audit F16).
             const certChecks = [
               { name: 'Non-Overlap & Containment', pass: cert.non_overlap && cert.containment, ref: 'REL-01 / CONT-01' },
               { name: 'Zero Forbidden Wall Pairs', pass: cert.zero_forbidden_violations, ref: 'REL-02 / FORBIDDEN' },
               { name: 'BFS Circulation Reachability', pass: cert.connectivity_bfs, ref: 'CIRC-01 / BFS-GRAPH' },
               { name: 'Dimension Chains Sum (≤1mm)', pass: cert.chain_sums_match, ref: 'DIM-01 / NBC-TOLERANCE' },
               { name: 'NBC Egress Travel Distance', pass: cert.egress_distances_satisfied, ref: 'NBC-03 / EGRESS-30M' },
-              { name: 'Vertical Stack Alignment', pass: cert.vertical_stack_valid ?? true, ref: 'VERT-01..05 / CORE-STACK' },
+              { name: 'Vertical Stack Alignment', pass: cert.vertical_stack_valid, ref: 'VERT-01..05 / CORE-STACK' },
+              { name: 'NBC Room Minimums', pass: cert.min_dimensions_satisfied, ref: 'NBC-01 / ROOM-MIN' },
+              { name: 'Aspect Ratio Limits', pass: cert.aspect_ratios_satisfied, ref: 'NBC-02 / ASPECT' },
+              { name: 'NBC Sanitation Count', pass: cert.sanitation_wc_count_satisfied, ref: 'SAN-01 / NBC-TABLE-12' },
             ];
 
-            const certifiedRules = cert.certified_rules || [
-              'NBC-01', 'NBC-02', 'NBC-03', 'REL-01', 'REL-02', 'VERT-01', 'VERT-02', 'CIRC-01', 'DIM-01', 'VASTU-01', 'SAN-01'
-            ];
+            // Only rules the certificate actually verified are listed; there is
+            // no optimistic fallback list (audit F16).
+            const certifiedRules: string[] = cert.certified_rules || [];
+            const certFailures: string[] = Array.isArray(cert.failures) ? cert.failures : [];
+            const effectiveGateStatus = gateStatus || (cert.details && cert.details.validation_gate && cert.details.validation_gate.overall_status);
+            const badge = !isValid || effectiveGateStatus === 'FAIL'
+              ? { text: 'NON-COMPLIANT', cls: 'bg-rose-600 text-white' }
+              : effectiveGateStatus === 'WARN'
+              ? { text: 'CERTIFIED · ADVISORIES', cls: 'bg-amber-500 text-white' }
+              : { text: 'VERIFIED & CERTIFIED', cls: 'bg-emerald-600 text-white' };
 
             return (
               <div className="p-3 rounded-[12px] bg-emerald-500/5 border border-emerald-500/20 text-[12px] space-y-2.5">
@@ -1374,10 +1483,11 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                       {certId}
                     </span>
                   </div>
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                    isValid ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
-                  }`}>
-                    {isValid ? 'VERIFIED & CERTIFIED' : 'NON-COMPLIANT'}
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${badge.cls}`}
+                    data-testid="certificate-verdict"
+                  >
+                    {badge.text}
                   </span>
                 </div>
 
@@ -1392,68 +1502,57 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                       <div className="flex items-center gap-1 shrink-0 font-mono text-[10px]">
                         <span className="text-[var(--text-3)]">{chk.ref}</span>
                         <span className={`font-bold px-1.5 py-0.2 rounded ${
-                          chk.pass
+                          chk.pass === true
                             ? 'bg-emerald-500/15 text-[var(--semantic-green-ink)]'
-                            : 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
+                            : chk.pass === false
+                            ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
+                            : 'bg-[var(--fill)] text-[var(--text-3)]'
                         }`}>
-                          {chk.pass ? 'PASS' : 'FAIL'}
+                          {chk.pass === true ? 'PASS' : chk.pass === false ? 'FAIL' : 'NOT RUN'}
                         </span>
                       </div>
                     </div>
                   ))}
                 </div>
 
-                {/* UNIVERSAL VALIDATION GATE - QA PANEL (L1-L15, never hidden) */}
+                {/* WHY THE CERTIFICATE WAS WITHHELD (audit F16): the headline
+                    rows above can all pass while a non-headline invariant fails;
+                    the badge is never left unexplained. */}
+                {(!isValid || certFailures.length > 0) && (
+                  <div
+                    className="p-2 rounded-[8px] bg-rose-500/10 border border-rose-500/25 text-[11px] text-rose-900 dark:text-rose-100 space-y-1"
+                    data-testid="certificate-failures"
+                  >
+                    <div className="font-semibold">
+                      Non-compliance reasons ({certFailures.length})
+                    </div>
+                    {certFailures.length > 0 ? (
+                      <ul className="space-y-0.5 pl-4 list-disc">
+                        {certFailures.map((f, idx) => (
+                          <li key={idx} className="leading-snug">{f}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="leading-snug">
+                        The certificate was withheld without a stated invariant — treat this plan as unverified.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* UNIVERSAL VALIDATION GATE - single renderer (audit F28).
+                    Rows, N/A reasons, WARN chips and the incomplete-gate flag
+                    all come from CertificatePanel so this card and the report
+                    sheet cannot drift. */}
                 {(() => {
                   const gate = (cert.details && cert.details.validation_gate) || floorPlan.qa?.validation_gate;
                   if (!gate || !Array.isArray(gate.layers) || gate.layers.length === 0) return null;
-                  const { naRows, warnChips, incompleteIds } = groupGateLayers(gate);
-                  const chipCls = QA_CHIP_CLASSES;
                   return (
-                    <div className="pt-2 border-t border-emerald-500/20 space-y-1.5" data-testid="validation-gate-layer-table">
-                      <div className="flex items-center justify-between text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">
-                        <span>Validation Gate - Layers L1-L15</span>
-                        <span className={`font-mono text-[10px] px-1.5 py-0.2 rounded ${chipCls[gate.overall_status] || chipCls.PASS}`}>
-                          OVERALL: {gate.overall_status}
-                        </span>
-                      </div>
-                      <div className="space-y-1">
-                        {gate.layers.map((ld: any) => (
-                          <div
-                            key={ld.layer_id}
-                            className="p-1.5 px-2 rounded-[6px] bg-white/60 dark:bg-black/20 border border-[var(--hairline)] flex items-center justify-between gap-2 text-[11px]"
-                            title={ld.citation || undefined}
-                          >
-                            <span className="font-medium text-[var(--text-1)] truncate">
-                              <span className="font-mono text-[10px] text-[var(--text-3)] mr-1">{ld.layer_id}</span>
-                              {qaRowText(ld)}
-                            </span>
-                            <span className={`font-bold px-1.5 py-0.2 rounded shrink-0 font-mono text-[10px] ${chipCls[ld.status] || chipCls['N/A']}`}>
-                              {ld.status}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                      {incompleteIds.length > 0 && (
-                        <div className="text-[10px] font-semibold text-rose-700 dark:text-rose-300" data-testid="validation-gate-incomplete">
-                          Gate incomplete: missing {incompleteIds.join(', ')}
-                        </div>
-                        )}
-                      {warnChips.length > 0 && (
-                        <div className="flex flex-wrap gap-1 pt-1" data-testid="validation-gate-warn-chips">
-                          {warnChips.map((ld) => (
-                            <span key={ld.layer_id} className="px-1.5 py-0.2 rounded-full bg-amber-500/15 text-amber-800 dark:text-amber-200 text-[10px] font-semibold inline-flex items-center gap-1">
-                              <Icon name="alert-triangle" size={10} className="shrink-0" />
-                              {ld.layer_id} {ld.title}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      {naRows.length > 0 && (
-                        <div className="text-[10px] text-[var(--text-3)]" data-testid="validation-gate-na-reasons">
-                          N/A layers never gate validity: {naRows.map((l) => `${l.layer_id} (${l.reason || 'not applicable'})`).join('; ')}
-                        </div>
-                        )}
+                    <div className="pt-2 border-t border-emerald-500/20">
+                      <CertificatePanel
+                        qa={{ ...(floorPlan.qa || {}), validation_gate: gate } as any}
+                        relaxationsCount={relaxations.length}
+                      />
                     </div>
                   );
                 })()}
@@ -1486,14 +1585,32 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                       ))}
                     </div>
                   </div>
-                ) : (
-                  <div className="text-[10px] text-[var(--semantic-green-ink)] dark:text-emerald-400 font-medium">
-                    Zero Relaxations: Strict statutory compliance across all spaces.
-                  </div>
-                )}
+                ) : null}
               </div>
             );
           })()}
+
+          {/* Scheme alternatives: selecting one re-solves the plate. */}
+          {schemeAlternatives.length > 0 && (
+            <div className="space-y-1.5">
+              <SchemePicker
+                alternatives={schemeAlternatives}
+                selectedSchemeId={schemeProfile}
+                selectionStatus={schemeSelectionStatus}
+                pendingProfile={pendingSchemeProfile}
+                onSelect={handleSelectScheme}
+                disabled={isGenerating}
+              />
+              {schemeSelectionStatus === 'rejected_non_compliant' && schemeFailingLayers.length > 0 && (
+                <div
+                  className="text-[10px] text-[var(--semantic-red-ink)] leading-snug"
+                  data-testid="scheme-rejected-layers"
+                >
+                  Failing layers: {schemeFailingLayers.join(', ')}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Blueprint SVG Viewer with Stale Plan Guard & Site Plan Tab.
               Mounted one idle slice after the plan lands (see `viewerReady`),

@@ -83,6 +83,21 @@ export const LandValueCard: React.FC<LandValueCardProps> = ({
     landValue.jurisdiction_zone ||
     (isRateKnown ? 'SRO valuation baseline' : 'No guidance table match');
 
+  // Plot-area provenance (audit F07): the same number the hero tile prints,
+  // and the basis it came from - never assumed to be a captured boundary.
+  const plotAreaBasis =
+    landValue.plot_area_source === 'captured_boundary'
+      ? `captured boundary${
+          landValue.boundary_area_sqft != null
+            ? ` (${formatIN(Math.round(landValue.boundary_area_sqft))} sq ft)`
+            : ''
+        }`
+      : landValue.plot_area_source === 'client_plot_area'
+      ? 'client-supplied area'
+      : landValue.plot_area_source === 'derived_from_coverage'
+      ? 'derived from built-up ÷ coverage'
+      : 'source not stated';
+
   return (
     <div className="bw-card rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-3.5 w-full min-w-0">
       {/* Header */}
@@ -240,6 +255,26 @@ export const LandValueCard: React.FC<LandValueCardProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Plot-area basis + any physical reconciliation warning */}
+      <div
+        className="text-[11px] text-[var(--text-3)] flex items-baseline justify-between gap-2 min-w-0"
+        data-testid="plot-area-basis"
+      >
+        <span className="shrink-0">Plot area basis</span>
+        <span className="text-[var(--text-2)] truncate" title={plotAreaBasis}>
+          {plotAreaBasis}
+        </span>
+      </div>
+      {landValue.plot_area_warnings?.map((warning) => (
+        <div
+          key={warning}
+          className="p-2.5 rounded-[10px] bg-amber-500/10 border border-amber-500/20 text-[11px] text-[var(--semantic-amber-ink)] leading-snug"
+          data-testid="plot-area-warning"
+        >
+          {warning}
+        </div>
+      ))}
 
       {/* Confidence Disclosure (staleness / table miss) - never silently dropped */}
       {landValue.confidence_warning && (

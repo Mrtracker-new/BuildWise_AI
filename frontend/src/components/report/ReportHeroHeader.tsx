@@ -85,6 +85,18 @@ export const ReportHeroHeader: React.FC<ReportHeroHeaderProps> = ({
   const builtUpAreaSqft =
     cost && baseRate > 0 ? cost.base_cost_inr / baseRate : 0;
   const plotAreaSqft = data.land_value?.plot_area_sqft ?? 0;
+  // The label must name where the number came from (audit F07). Only a
+  // boundary-derived area may read "captured boundary".
+  const plotAreaSource = data.land_value?.plot_area_source;
+  const plotAreaSourceLabel =
+    plotAreaSource === 'captured_boundary'
+      ? 'captured boundary'
+      : plotAreaSource === 'client_plot_area'
+      ? 'client-supplied'
+      : plotAreaSource === 'derived_from_coverage'
+      ? 'derived from coverage'
+      : null;
+  const boundary = data.boundary_summary ?? null;
   const coveragePct = (data.land_value?.ground_coverage_ratio_applied ?? 0.6) * 100;
   const far =
     builtUpAreaSqft > 0 && plotAreaSqft > 0 ? builtUpAreaSqft / plotAreaSqft : null;
@@ -108,7 +120,10 @@ export const ReportHeroHeader: React.FC<ReportHeroHeaderProps> = ({
     {
       label: 'Plot area',
       value: plotAreaValue,
-      sub: plotAreaSqft > 0 ? (area === 'sqft' ? 'sq ft (captured boundary)' : 'm² (captured boundary)') : 'boundary not captured',
+      sub:
+        plotAreaSqft > 0
+          ? `${area === 'sqft' ? 'sq ft' : 'm²'}${plotAreaSourceLabel ? ` (${plotAreaSourceLabel})` : ''}`
+          : 'no plot area',
     },
     {
       label: 'Ground coverage',
@@ -335,6 +350,29 @@ export const ReportHeroHeader: React.FC<ReportHeroHeaderProps> = ({
               </div>
             ))}
           </div>
+
+          {/* Boundary provenance: the area the tiles report, and the shape it
+              was measured from (audit F07/F22). The client-reported area is
+              disclosed when it disagrees with the server shoelace value. */}
+          {boundary ? (
+            <p
+              data-testid="boundary-provenance"
+              className="text-[11px] text-[var(--text-3)] leading-snug"
+              title={boundary.provenance?.area_method || 'server-recomputed shoelace area'}
+            >
+              Captured boundary: {boundary.vertex_count} vertices ·{' '}
+              {boundary.area_sqm.toLocaleString()} m² · {boundary.perimeter_m.toLocaleString()} m
+              perimeter · {String(boundary.winding).toUpperCase()} · source{' '}
+              {boundary.source}
+              {boundary.area_delta_pct != null && boundary.area_delta_pct > 1
+                ? ` · client reported ${(boundary.client_area_sqm ?? 0).toLocaleString()} m² (${boundary.area_delta_pct.toFixed(1)}% apart; server value used)`
+                : ''}
+            </p>
+          ) : plotAreaSqft > 0 ? (
+            <p data-testid="boundary-provenance" className="text-[11px] text-[var(--text-3)] leading-snug">
+              No boundary captured · plot area {plotAreaSourceLabel ?? 'source not stated'}
+            </p>
+          ) : null}
 
           {/* Row 3: provenance census */}
           <DataHealthStrip data={data} />
