@@ -20,6 +20,7 @@ export interface GateLayer {
   reason?: string;
   findings?: string[];
   citation?: string;
+  details?: Record<string, any>;
 }
 
 export interface GateReport {
@@ -29,7 +30,7 @@ export interface GateReport {
 }
 
 /** Canonical gate order — a report missing any of these is incomplete. */
-export const GATE_LAYER_IDS: string[] = Array.from({ length: 15 }, (_, i) => `L${i + 1}`);
+export const GATE_LAYER_IDS: string[] = Array.from({ length: 16 }, (_, i) => `L${i + 1}`);
 
 /** Status chip classes shared by every QA surface (design-token adjacent). */
 export const QA_CHIP_CLASSES: Record<string, string> = {
