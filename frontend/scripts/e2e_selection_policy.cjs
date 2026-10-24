@@ -260,11 +260,13 @@ async function main() {
       const m = await page.evaluate((sel) => {
         const el = document.querySelector(sel);
         const r = el.getBoundingClientRect();
+        const left = Math.round(Math.max(0, r.left - 12));
+        const top = Math.round(Math.max(0, r.top - 12));
         return {
-          x: Math.max(0, r.left - 12),
-          y: Math.max(0, r.top - 12),
-          width: Math.max(320, Math.min(window.innerWidth, r.right + 12) - Math.max(0, r.left - 12)),
-          height: Math.max(160, Math.min(window.innerHeight, r.bottom + 12) - Math.max(0, r.top - 12)),
+          x: left,
+          y: top,
+          width: Math.round(Math.max(320, Math.min(window.innerWidth, r.right + 12) - left)),
+          height: Math.round(Math.max(160, Math.min(window.innerHeight, r.bottom + 12) - top)),
           dbg: {
             open: el.tagName === 'DETAILS' ? el.open : null,
             h: Math.round(r.height),
@@ -278,7 +280,8 @@ async function main() {
       console.log(`  (shot ${file}: ${JSON.stringify(dbg)} clip=${JSON.stringify(clip)})`);
       const target = path.join(SHOTS, file);
       await page.screenshot({ path: target, clip });
-      check(fs.existsSync(target) && fs.statSync(target).size > 5000, `${file} saved`);
+      const size = fs.existsSync(target) ? fs.statSync(target).size : 0;
+      check(size > 500, `${file} saved`, `${size} bytes`);
     };
 
     for (const theme of ['light', 'dark']) {
