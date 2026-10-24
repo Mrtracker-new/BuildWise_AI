@@ -1,6 +1,7 @@
 import io
 import os
 import html
+import re
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -171,6 +172,70 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
         val = obj.get(key)
         return val if val is not None else default
     return default
+
+
+# PAGE-1 PLAN WARNINGS — the canonical list printed in the red verdict banner.
+# Kept in lockstep with frontend/src/services/planWarnings.ts so the in-app
+# Print Report and the downloaded PDF show the same named rows.
+PAGE1_PLAN_WARNING_RE = re.compile(
+    r"^(PROP-|PROGRAMME-|PLINTH:|ROOM-MIN|ROOM-MAX|ROOM-OVERLAP|"
+    r"SELECTION-FALLBACK|GATE-FAIL|PLATE-SHORT)"
+)
+
+
+def page1_plan_warnings(warnings: Any) -> List[str]:
+    """Filter a plan's warnings to the rows page 1 must print, in order.
+
+    Any warning source (a FloorPlanResponse, its model_dump, a bare list) is
+    accepted.  Rows are returned verbatim: the caller may not reword them, so
+    the print banner and the PDF banner are the same strings.
+    """
+    if isinstance(warnings, dict):
+        warnings = warnings.get("warnings")
+    elif hasattr(warnings, "warnings"):
+        warnings = getattr(warnings, "warnings")
+    out: List[str] = []
+    for raw in warnings or []:
+        text = str(raw).strip()
+        if text and PAGE1_PLAN_WARNING_RE.match(text):
+            out.append(text)
+    return out
+
+
+def _plan_banner_table(
+    *,
+    title_html: str,
+    lead_html: str,
+    lines: List[str],
+    style: ParagraphStyle,
+    background: Any,
+    border: Any,
+    rule_color: Any,
+    rule_width: float,
+) -> Table:
+    """One banner, one ROW PER WARNING so ReportLab can paginate it.
+
+    A single cell holding every bullet is an unsplittable flowable: a plate with
+    84 named rows produced a 1937 pt cell and LayoutError killed the whole
+    export (HTTP 500).  Rows split cleanly and keep every line verbatim.
+    """
+    rows: List[List[Any]] = [[Paragraph(f"{title_html}{lead_html}", style)]]
+    rows.extend([Paragraph(f"• {html.escape(w)}", style)] for w in lines)
+    tbl = Table(rows, colWidths=[CONTENT_WIDTH_PT], repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), background),
+        ('ROUNDEDCORNERS', [6, 6, 6, 6]),
+        ('LINEBEFORE', (0, 0), (0, -1), rule_width, rule_color),
+        ('BOX', (0, 0), (-1, -1), 0.6, border),
+        ('TOPPADDING', (0, 0), (-1, 0), 7.0),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 2.0),
+        ('TOPPADDING', (0, 1), (-1, -1), 0.5),
+        ('BOTTOMPADDING', (0, 1), (-1, -2), 0.5),
+        ('BOTTOMPADDING', (0, -1), (-1, -1), 7.0),
+        ('LEFTPADDING', (0, 0), (-1, -1), 10.0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8.0),
+    ]))
+    return tbl
 
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
@@ -673,7 +738,11 @@ def make_construction_schedules_table(
     flowables.append(Spacer(1, 3))
     room_headers = ["No.", "Room Name", "Clear Area", "Clear Dimensions (W x D)", "Finish Specification"]
     room_table_data = [[Paragraph(h, p_th) for h in room_headers]]
-    for r in (r_sched or [])[:10]:
+    # Every scheduled room is printed: truncating at ten silently dropped
+    # rows once the proportion law split a room (store_0_1 fell off the sheet
+    # while the wall graph still carried it).  The table repeats its header
+    # when ReportLab paginates it.
+    for r in (r_sched or []):
         r_num = str(_get(r, "room_number", 1))
         r_name = str(_get(r, "room_name", "Room"))
         r_area = f"{_safe_float(_get(r, 'clear_area_sqm', 0.0)):.2f} m²"
@@ -1158,7 +1227,7 @@ def make_universal_gate_table(gate: Dict[str, Any]) -> List[Any]:
     UNIVERSAL VALIDATION GATE layer table as ReportLab flowables.
     Shared by the Sheet 10.0 dossier and the single-floor blueprint page so the
     gate is a content layer on every blueprint-bearing PDF (SVG/PDF parity).
-    Every generation lists ALL layers L1-L15 with per-layer status
+    Every generation lists ALL layers L1-L16 with per-layer status
     (PASS | WARN | FAIL | N/A-with-reason); overall = worst layer.
     """
     flowables: List[Any] = []
@@ -1178,7 +1247,7 @@ def make_universal_gate_table(gate: Dict[str, Any]) -> List[Any]:
     }
     _gate_rows = [
         [
-            Paragraph("<b>UNIVERSAL VALIDATION GATE - LAYERS L1-L15</b>", _g_head),
+            Paragraph("<b>UNIVERSAL VALIDATION GATE - LAYERS L1-L16</b>", _g_head),
             Paragraph("", _g_cell),
             Paragraph(f"<b>OVERALL: {_g_overall}</b>",
                       _g_status.get(_g_overall, _g_cell)),
@@ -1189,7 +1258,7 @@ def make_universal_gate_table(gate: Dict[str, Any]) -> List[Any]:
             Paragraph("<b>Status</b>", _g_th),
         ],
     ]
-    for _ld in _gate_layers[:15]:
+    for _ld in _gate_layers[:16]:
         _lid = str(_ld.get("layer_id", "?"))
         _lt = str(_ld.get("title", ""))
         _lst = str(_ld.get("status", "PASS"))
@@ -1346,7 +1415,7 @@ def make_land_economics_table(land: Optional[Dict[str, Any]]) -> List[Any]:
 
 
 def make_scheme_selection_line(floorplan: Optional[Dict[str, Any]]) -> List[Any]:
-    """Provenance line for a user-selected scheme profile (audit F09)."""
+    """Provenance line for a user-selected scheme profile."""
     flowables: List[Any] = []
     if not floorplan:
         return flowables
@@ -1588,6 +1657,84 @@ def generate_pdf_report(
         ]))
         story.append(banner_tbl)
         story.append(Spacer(1, 8))
+
+    # -------------------------------------------------------------------------
+    # PLAN VERDICT BANNER: a withheld certificate or a named
+    # programme deficit is a PAGE-1 fact.  The plan is still drawn and exported;
+    # it must never leave the printer looking certified.  The squeezed rooms are
+    # listed by id (the same ROOM-MIN / PLATE-SHORT / PROGRAMME lines the screen
+    # renders) rather than hidden behind a count.
+    # -------------------------------------------------------------------------
+    _plan_payload = floor_plan or data.get("multi_storey") or {}
+    if hasattr(_plan_payload, "model_dump"):
+        _plan_payload = _plan_payload.model_dump()
+    if isinstance(_plan_payload, dict):
+        _plan_cert = (
+            _plan_payload.get("mathematical_certificate")
+            or ((_plan_payload.get("multi_storey") or {}).get("mathematical_certificate") if isinstance(_plan_payload.get("multi_storey"), dict) else None)
+        ) or {}
+        _plan_gate = _plan_payload.get("validation_gate") or {}
+        # The ONE canonical page-1 list (same filter as the in-app print view).
+        # It is printed verbatim and in full: a count or "+N more" line would
+        # make the print banner and the PDF banner disagree.
+        _deficit_lines = page1_plan_warnings(_plan_payload.get("warnings"))
+        if not _deficit_lines:
+            # Some API payloads carry warnings only on the analysis object; the
+            # page-1 verdict must still name the squeezed rooms.
+            _deficit_lines = page1_plan_warnings(pdf_warnings)
+        # A withheld certificate or a FAIL gate is the trigger.  A plain
+        # ROOM-MAX advisory on a certified plan is not a "plan not certified"
+        # banner; the amber warnings section already carries it.
+        if _plan_cert.get("is_valid") is False or str(_plan_gate.get("overall_status")).upper() == "FAIL":
+            _verdict_bits: List[str] = []
+            if _plan_cert.get("is_valid") is False:
+                _verdict_bits.append("mathematical certificate WITHHELD")
+            if str(_plan_gate.get("overall_status")).upper() == "FAIL":
+                _verdict_bits.append("validation gate FAIL")
+            if _deficit_lines:
+                _verdict_bits.append(f"{len(_deficit_lines)} named deficit row(s)")
+            _verdict_p = ParagraphStyle(
+                'PlanVerdictBanner', fontName=FONT_REGULAR, fontSize=8.2, leading=11.8,
+                textColor=COLOR_TEXT_PRIMARY, alignment=0,
+            )
+            _verdict_tbl = _plan_banner_table(
+                title_html='<font color="#B42318"><b>PLAN NOT CERTIFIED - DRAWN WITH A FAIL STAMP</b></font>',
+                lead_html=(
+                    f'<br/>{"; ".join(_verdict_bits)}. The plan is still exported; '
+                    'refusal is reserved for statutory, egress and stacking violations.'
+                ),
+                lines=_deficit_lines,
+                style=_verdict_p,
+                background=colors.HexColor("#FEF2F2"),
+                border=colors.HexColor("#E5A9A9"),
+                rule_color=colors.HexColor("#B42318"),
+                rule_width=2.4,
+            )
+            story.append(_verdict_tbl)
+            story.append(Spacer(1, 8))
+        elif _deficit_lines:
+            # A passing/advised plan still publishes its page-1 evidence.  The
+            # in-app print banner shows these rows on every plan; printing them
+            # only when the certificate fails made the two page-1 lists differ.
+            _adv_p = ParagraphStyle(
+                'PlanAdvisoryBanner', fontName=FONT_REGULAR, fontSize=8.2, leading=11.8,
+                textColor=COLOR_TEXT_PRIMARY, alignment=0,
+            )
+            _adv_tbl = _plan_banner_table(
+                title_html=(
+                    f'<font color="{COLOR_AMBER_TEXT.hexval()}"><b>'
+                    'PLAN ADVISORIES — DISCLOSED ON THE DRAWING</b></font>'
+                ),
+                lead_html="",
+                lines=_deficit_lines,
+                style=_adv_p,
+                background=COLOR_AMBER_TINT,
+                border=COLOR_AMBER_BORDER,
+                rule_color=COLOR_AMBER_BORDER,
+                rule_width=2.0,
+            )
+            story.append(_adv_tbl)
+            story.append(Spacer(1, 8))
 
     if not is_dossier_only:
         # -------------------------------------------------------------------------
@@ -2375,11 +2522,11 @@ def generate_pdf_report(
         cert = _get(multi_storey, "mathematical_certificate") or _get(floorplan, "mathematical_certificate") or {}
         # The printed verdict must be derived, exactly like the screen: gate
         # status, warnings and every invariant flag are read from the payload
-        # (audit F16/F17). Nothing is printed as satisfied unconditionally.
+        # Nothing is printed as satisfied unconditionally.
         _cert_warnings = list(_get(floorplan, "warnings", []) or []) + list(_get(multi_storey, "warnings", []) or [])
         _cert_gate = ((cert or {}).get("details") or {}).get("validation_gate") or _get(multi_storey, "validation_gate") or {}
         _cert_gate_status = str(_cert_gate.get("overall_status") or "").upper()
-        # A gate that never ran is NOT a pass (audit F16): "" must not fall
+        # A gate that never ran is NOT a pass: "" must not fall
         # through to the all-clear verdict below.
         _gate_ran = _cert_gate_status in ("PASS", "WARN", "FAIL")
         _gate_fail_ids = [
@@ -2452,7 +2599,7 @@ def generate_pdf_report(
                 ])
 
             # Only rules the certificate actually verified are printed; a
-            # failing rule is never in this list (audit F16).
+            # Failing rule is never in this list.
             rules_list = cert.get("certified_rules") or []
             _passed = sum(1 for _, s, _ in cert_checks if s == "PASS")
             _total = len(cert_checks)
@@ -2517,7 +2664,7 @@ def generate_pdf_report(
 
         # =========================================================================
         # UNIVERSAL VALIDATION GATE - LAYER TABLE (SHEET 10.0)
-        # Every generation lists ALL layers L1-L15 with per-layer status
+        # Every generation lists ALL layers L1-L16 with per-layer status
         # (PASS | WARN | FAIL | N/A-with-reason); overall = worst layer.
         # Rendering extracted to make_universal_gate_table so the
         # single-floor blueprint path emits the same content layer.
@@ -2526,7 +2673,7 @@ def generate_pdf_report(
         if _gate_flowables:
             story.extend(_gate_flowables)
 
-        # LAND ECONOMICS (audit F08/F10/F24): the space-efficiency certificate
+        # LAND ECONOMICS: the space-efficiency certificate
         # and the residuals it accounts for are printed on the dossier page too.
         _land_dossier = _get(floorplan, "land_economics") or _get(multi_storey, "land_economics")
         if hasattr(_land_dossier, "model_dump"):
@@ -2881,7 +3028,7 @@ def generate_pdf_report(
         if _gate_sf_flowables:
             story.extend(_gate_sf_flowables)
 
-        # LAND ECONOMICS (audit F08/F10/F24) + the scheme selection that
+        # LAND ECONOMICS + the scheme selection that
         # produced this geometry, on the single-floor blueprint page.
         _land_sf = _get(floorplan, "land_economics") or _get(multi_storey, "land_economics")
         if hasattr(_land_sf, "model_dump"):

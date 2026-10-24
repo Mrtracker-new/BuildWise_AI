@@ -367,8 +367,15 @@ async def fetch_nearest_road(
             "Overpass nearest-road query failed (attempt %d/%d, %.1fs): %s",
             attempt, _MAX_ATTEMPTS, elapsed, failure,
         )
-        if resp.status_code not in _RETRYABLE_STATUS:
-            outage = False
+        # A retryable status IS an outage: 429/5xx come from the public instance
+        # refusing or timing out our slot, not from our query.  This used to stay
+        # False (only the transport-error branch set it), so a 502 opened no
+        # cooldown and the NEXT lookup - every pin move, every re-analysis -
+        # paid the full ~10 s timeout again to reach the same ASSUMED fallback.
+        # Measured before the fix: two consecutive analyses both burned the whole
+        # read budget on a 502; the cooldown never engaged.
+        outage = resp.status_code in _RETRYABLE_STATUS
+        if not outage:
             break  # 4xx (other than 429): the query itself is wrong, not the weather
 
     if failure:

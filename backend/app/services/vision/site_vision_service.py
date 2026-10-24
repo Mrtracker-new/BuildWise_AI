@@ -1,3 +1,4 @@
+import asyncio
 import time
 import math
 import logging
@@ -40,7 +41,12 @@ from app.schemas.site_vision import (
 
 logger = logging.getLogger(__name__)
 
-SERVER_BUDGET_SECONDS: float = 20.0
+# End-to-end ceiling for one scan, used only to disclose a slow run.  It is the
+# imagery budget (26 s cold COG range read) plus SegFormer CPU inference (up to
+# ~9 s), because those two are the honest floor on a cold cache; the previous
+# 20 s predated the COG reads being measured and fired on every successful cold
+# scan, reading as a fault when the scan had in fact completed.
+SERVER_BUDGET_SECONDS: float = 40.0
 
 def _generate_footprint_polygon(
     center_lat: float,
@@ -227,12 +233,19 @@ async def analyze_site_vision(
     )
 
     # Step 2: Fetch windowed COG imagery
+    #
+    # IN A WORKER THREAD.  This is a synchronous GDAL /vsicurl/ read over a
+    # ThreadPoolExecutor; called directly from this coroutine it BLOCKED the
+    # uvicorn event loop for the whole fetch (measured: /api/health took 11.5 s
+    # while one site-vision scan was in flight, so every other request on the
+    # app - analysis, report, floor plan - queued behind a satellite download).
     fetch_t0 = time.time()
     try:
-        imagery = fetch_site_imagery(
+        imagery = await asyncio.to_thread(
+            fetch_site_imagery,
             asset_urls=scene_info["assets"],
             center_lat=latitude,
-            center_lon=longitude
+            center_lon=longitude,
         )
         timing["fetch_ms"] = round((time.time() - fetch_t0) * 1000.0, 1)
     except (ImageryFetchError, Exception) as exc:
@@ -272,13 +285,25 @@ async def analyze_site_vision(
     seg_water_mask = None
     inference_t0 = time.time()
 
-    if mode_override != "index-only":
+    if "B02" not in bands:
+        # The optional blue band did not arrive; SegFormer cannot run on
+        # red/green alone.  Say so instead of failing the scan.
+        warnings.append(
+            "SegFormer segmentation skipped: the blue (B02) band was unavailable. "
+            "Spectral-index vegetation and water detection are unaffected."
+        )
+        timing["inference_ms"] = 0.0
+    elif mode_override != "index-only":
         try:
-            adapter = get_segformer_adapter()
-            seg_tree_mask, seg_water_mask = adapter.predict_classes(
-                b04_red=bands["B04"],
-                b03_green=bands["B03"],
-                b02_blue=bands["B02"]
+            # Model load + CPU inference are blocking work too - keep them off
+            # the event loop like the imagery read above.
+            adapter = await asyncio.to_thread(get_segformer_adapter)
+            seg_tree_mask, seg_water_mask = await asyncio.to_thread(
+                lambda: adapter.predict_classes(
+                    b04_red=bands["B04"],
+                    b03_green=bands["B03"],
+                    b02_blue=bands["B02"],
+                )
             )
             active_mode = "segformer"
             timing["inference_ms"] = round((time.time() - inference_t0) * 1000.0, 1)

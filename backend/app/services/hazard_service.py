@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -362,8 +363,24 @@ async def evaluate_hazard_profile(
     """
     warnings: List[str] = []
 
+    # The three hazard telemetry sources are independent upstreams with their
+    # own caches and timeouts.  Sequentially they cost the SUM of their
+    # latencies on a cold site (measured 8.8 s: USGS -> GloFAS -> ERA5), and the
+    # analysis endpoint waits on all of it.  Fetching them together makes the
+    # hazard block cost the SLOWEST source instead.  The results are still
+    # consumed in the original seismic -> flood -> storm order below, so warning
+    # order and every profile field are unchanged.
+    (
+        (seismic_res, s_fallback),
+        (flood_ratio, f_fallback),
+        (storm_gust, storm_extreme_days, st_fallback),
+    ) = await asyncio.gather(
+        fetch_usgs_seismic_data(lat, lon),
+        fetch_open_meteo_flood_data(lat, lon),
+        fetch_era5_storm_data(lat, lon),
+    )
+
     # 1. Seismic
-    seismic_res, s_fallback = await fetch_usgs_seismic_data(lat, lon)
     if s_fallback:
         warnings.append("USGS earthquake catalog unreachable. Regional seismic baseline applied.")
 
@@ -409,7 +426,7 @@ async def evaluate_hazard_profile(
         cyclone_prone_ndma = False
     else:
         flood_prone_ndma, cyclone_prone_ndma = check_ndma_flags(address)
-    ratio, f_fallback = await fetch_open_meteo_flood_data(lat, lon)
+    ratio = flood_ratio
 
     f_warning: Optional[str] = None
     f_confidence = "low"
@@ -458,7 +475,7 @@ async def evaluate_hazard_profile(
     )
 
     # 3. Storm & Cyclone Exposure
-    max_gust, ext_days, st_fallback = await fetch_era5_storm_data(lat, lon)
+    max_gust, ext_days = storm_gust, storm_extreme_days
     st_warning = None
     if st_fallback:
         st_warning = "ERA5 historical climate archive unreachable. Regional wind model applied."
