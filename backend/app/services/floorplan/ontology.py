@@ -16,6 +16,7 @@ Zero solver code changes are required when adding new space types or rules.
 
 from __future__ import annotations
 
+import math
 from enum import Enum
 from typing import Dict, List, Tuple, Optional, Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -285,6 +286,211 @@ def _infer_furniture_set(space_id: str, function: Any) -> List[str]:
     return []
 
 
+class AdjunctKind(str, Enum):
+    """Non-room overflow absorbers a solver may attach instead of stretching."""
+    WARDROBE = "wardrobe"
+    ANTE = "ante"
+    STORE = "store"
+    UTILITY = "utility"
+
+
+class OverflowAction(str, Enum):
+    """What the solver must do when a space exceeds its ceiling or ideal band."""
+    SPLIT = "split"
+    ADJUNCT = "adjunct"
+    SPLIT_OR_ADJUNCT = "split_or_adjunct"
+    CIRCULATION = "circulation"
+
+
+# -----------------------------------------------------------------------------
+# Proportion law citations.  Hard minima are statutory; ideal bands, ceilings
+# and fixture rectangles are ergonomic planning limits, explicitly NOT codified
+# maxima.  One citation constant per family keeps the 59-row table auditable.
+# -----------------------------------------------------------------------------
+CITE_RESIDENTIAL = (
+    "NBC 2016 Part 3 Table 1 (minimum sizes) and Part 8 Sec 1 (daylight/ventilation); "
+    "ideal/hard proportion from ergonomic room planning (Neufert, Architects' Data, "
+    "4th English ed.); area ceiling is a planning upper bound, not a statutory maximum."
+)
+CITE_BATH = (
+    "NBC 2016 Part 3 Table 1 and Part 9 Sec 1 (sanitation); fixture rectangle from "
+    "Time-Saver Standards for Building Types (WC/basin/shower clearance envelopes); "
+    "ideal band from NBC Part 8 daylight practice."
+)
+CITE_CIRCULATION = (
+    "NBC 2016 Part 4 Table 5 and Cl 4.4-4.5 (egress and corridor width); "
+    "ergonomic corridor planning (Neufert, Architects' Data, 4th English ed.)."
+)
+CITE_COMMERCIAL = (
+    "NBC 2016 Part 3 office occupancy and Part 9 Sec 1; proportion and ceiling from "
+    "daylight/ergonomic office planning (Neufert, Architects' Data, 4th English ed.)."
+)
+CITE_INDUSTRIAL = (
+    "NBC 2016 Part 3 storage occupancy and Part 4 egress; bay proportion and ceiling "
+    "from ergonomic logistics planning (Time-Saver Standards for Building Types)."
+)
+CITE_STORAGE = (
+    "NBC 2016 Part 3 Table 1 (storage) and ergonomic 0.90 m access aisle; "
+    "area ceiling is a planning upper bound."
+)
+CITE_WELLNESS = (
+    "NBC 2016 Part 3/9 amenity provision; quiet-room proportion from ergonomic "
+    "planning (Neufert, Architects' Data, 4th English ed.)."
+)
+CITE_OUTDOOR = (
+    "NBC 2016 Part 3 Table 7 (parking) and Part 9 landscaping provision; "
+    "ergonomic outdoor-space planning."
+)
+
+
+class ProportionBand(BaseModel):
+    """Declarative proportion, ceiling, fixture and overflow law for one space type.
+
+    Hard limits (``ideal_aspect_max`` is soft; ``max_aspect_ratio`` on the spec,
+    ``area_ceiling_sqm``, ``min_area_sqm`` and ``min_width_m`` are hard) are data,
+    never solver constants.  ``ideal_aspect_max`` is the scoring band; between it
+    and the hard maximum a room is acceptable but WARN, above the hard maximum it
+    is a violation. The solver does not enforce these yet; does.
+    """
+    ideal_aspect_max: float = Field(ge=1.0, description="Soft band: rooms at or below this aspect are in the ideal band")
+    area_ceiling_sqm: float = Field(gt=0.0, description="Hard planning ceiling; beyond it the space must split or gain an adjunct")
+    fixture_min_width_m: Optional[float] = Field(default=None, gt=0.0, description="Short side of the smallest fixture-fit rectangle")
+    fixture_min_depth_m: Optional[float] = Field(default=None, gt=0.0, description="Long side of the smallest fixture-fit rectangle")
+    split_into: List[str] = Field(default_factory=list, description="Space types to add when the ceiling/band is exceeded")
+    adjunct_kinds: List[AdjunctKind] = Field(default_factory=list, description="Fitted absorbers: wardrobe, ante, store, utility")
+    overflow_action: OverflowAction = OverflowAction.ADJUNCT
+    citation: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_fixture_pair(self):
+        if (self.fixture_min_width_m is None) != (self.fixture_min_depth_m is None):
+            raise ValueError("fixture_min_width_m and fixture_min_depth_m must be declared together")
+        if self.fixture_min_width_m is not None:
+            short, long = sorted((self.fixture_min_width_m, self.fixture_min_depth_m))
+            if long / short > 2.50:
+                raise ValueError("fixture envelope is more elongated than a usable fixture layout")
+        return self
+
+
+def _band(
+    ideal: float,
+    ceiling: float,
+    *,
+    fixture: Optional[Tuple[float, float]] = None,
+    split: Tuple[str, ...] = (),
+    adjunct: Tuple[str, ...] = (),
+    action: OverflowAction = OverflowAction.SPLIT_OR_ADJUNCT,
+    citation: str = CITE_RESIDENTIAL,
+) -> ProportionBand:
+    """One table row.  Keeps 59 auditable records compact and typo-resistant."""
+    return ProportionBand(
+        ideal_aspect_max=ideal,
+        area_ceiling_sqm=ceiling,
+        fixture_min_width_m=fixture[0] if fixture else None,
+        fixture_min_depth_m=fixture[1] if fixture else None,
+        split_into=list(split),
+        adjunct_kinds=[AdjunctKind(k) for k in adjunct],
+        overflow_action=action,
+        citation=citation,
+    )
+
+
+# Every catalogued space type MUST appear here; the module refuses to import if
+# one is missing (``_validate_proportion_law``), so a new space cannot silently
+# ship without a band, a ceiling and an overflow route.
+PROPORTION_BANDS: Dict[str, ProportionBand] = {
+    # --- T1 habitable / social -------------------------------------------------
+    "living": _band(1.20, 45.0, split=("dining", "study"), adjunct=("store", "utility")),
+    "dining": _band(1.30, 25.0, split=("study",), adjunct=("store",)),
+    "kitchen": _band(1.40, 20.0, fixture=(2.10, 3.60), split=("utility",), adjunct=("store",), citation=CITE_BATH),
+    "puja": _band(1.00, 6.0, adjunct=("store",), action=OverflowAction.ADJUNCT),
+    "terrace": _band(2.00, 60.0, split=("terrace",), action=OverflowAction.SPLIT, citation=CITE_OUTDOOR),
+    "master_bed": _band(1.20, 25.0, split=("bed_2",), adjunct=("wardrobe", "store")),
+    "master_suite": _band(1.20, 30.0, split=("bed_2",), adjunct=("wardrobe", "store")),
+    "bed_2": _band(1.20, 18.0, split=("study",), adjunct=("wardrobe", "store")),
+    "study": _band(1.30, 20.0, split=("bed_2",), adjunct=("wardrobe", "store")),
+    "bath_1": _band(1.50, 8.0, fixture=(1.60, 2.20), split=("bath_2",), adjunct=("store",), citation=CITE_BATH),
+    "bath_2": _band(1.50, 6.0, fixture=(1.40, 2.00), split=("bath_2",), adjunct=("store",), citation=CITE_BATH),
+    "bath_master": _band(1.50, 8.0, fixture=(1.40, 2.00), split=("bath_2",), adjunct=("wardrobe", "store"), citation=CITE_BATH),
+    "powder_room": _band(1.40, 4.0, fixture=(1.10, 1.70), adjunct=("store",), action=OverflowAction.ADJUNCT, citation=CITE_BATH),
+    "t1_stair": _band(1.30, 15.0, split=("t1_stair",), adjunct=("store",), citation=CITE_CIRCULATION),
+    "foyer": _band(1.30, 10.0, split=("foyer",), adjunct=("store",), citation=CITE_CIRCULATION),
+    "utility": _band(1.50, 8.0, fixture=(1.20, 2.50), split=("store",), adjunct=("store",), citation=CITE_BATH),
+    "balcony": _band(1.80, 15.0, split=("balcony",), action=OverflowAction.SPLIT, citation=CITE_OUTDOOR),
+    "store": _band(1.80, 8.0, split=("store",), action=OverflowAction.SPLIT, citation=CITE_STORAGE),
+    # --- shared residential core ------------------------------------------------
+    "shared_stair": _band(1.20, 25.0, split=("shared_stair",), adjunct=("store",), citation=CITE_CIRCULATION),
+    "lift_core": _band(1.00, 12.0, split=("lift_core",), action=OverflowAction.SPLIT, citation=CITE_CIRCULATION),
+    "floor_lobby": _band(1.40, 20.0, split=("floor_lobby",), adjunct=("store",), citation=CITE_CIRCULATION),
+    "central_lobby": _band(1.40, 20.0, split=("central_lobby",), adjunct=("store",), citation=CITE_CIRCULATION),
+    # --- T2 unit programme ------------------------------------------------------
+    "unit_living": _band(1.30, 40.0, split=("unit_bed",), adjunct=("store", "wardrobe")),
+    "unit_kitchen": _band(1.40, 16.0, fixture=(1.80, 3.40), split=("unit_utility",), adjunct=("store",), citation=CITE_BATH),
+    "unit_bed": _band(1.15, 18.0, split=("study",), adjunct=("wardrobe", "store")),
+    "unit_bath": _band(1.50, 6.0, fixture=(1.40, 2.15), adjunct=("store",), action=OverflowAction.ADJUNCT, citation=CITE_BATH),
+    "unit_balcony": _band(1.80, 12.0, split=("unit_balcony",), action=OverflowAction.SPLIT, citation=CITE_OUTDOOR),
+    "unit_utility": _band(1.50, 7.0, fixture=(1.20, 2.10), split=("store",), adjunct=("store",), citation=CITE_BATH),
+    "dead_corner_storage": _band(2.00, 6.0, split=("store",), action=OverflowAction.SPLIT, citation=CITE_STORAGE),
+    # --- T3 commercial ----------------------------------------------------------
+    "primary_stair": _band(1.30, 25.0, split=("primary_stair",), adjunct=("store",), citation=CITE_CIRCULATION),
+    "secondary_stair": _band(1.30, 25.0, split=("secondary_stair",), adjunct=("store",), citation=CITE_CIRCULATION),
+    "lift_lobby": _band(1.40, 30.0, split=("lift_lobby",), adjunct=("store",), citation=CITE_CIRCULATION),
+    "spine_corridor": _band(3.00, 60.0, action=OverflowAction.CIRCULATION, citation=CITE_CIRCULATION),
+    "commercial_suite": _band(1.20, 120.0, split=("conference_suite",), adjunct=("store",), citation=CITE_COMMERCIAL),
+    "sanitary_block": _band(1.40, 20.0, fixture=(2.00, 3.00), split=("sanitary_block",), adjunct=("store",), citation=CITE_BATH),
+    "mep_room": _band(1.30, 20.0, split=("mep_room",), adjunct=("store",), citation=CITE_COMMERCIAL),
+    "conference_suite": _band(1.35, 60.0, split=("conference_suite",), adjunct=("store",), citation=CITE_COMMERCIAL),
+    "reception_lobby": _band(1.25, 80.0, split=("visitor_lounge",), adjunct=("store",), citation=CITE_COMMERCIAL),
+    "server_room": _band(1.30, 30.0, split=("server_room",), adjunct=("store",), citation=CITE_COMMERCIAL),
+    "conference_room": _band(1.30, 45.0, split=("conference_room",), adjunct=("store",), citation=CITE_COMMERCIAL),
+    "electrical_room": _band(1.30, 25.0, split=("electrical_room",), adjunct=("store",), citation=CITE_COMMERCIAL),
+    "visitor_lounge": _band(1.35, 40.0, split=("visitor_lounge",), adjunct=("store",), citation=CITE_COMMERCIAL),
+    "pantry": _band(1.40, 12.0, fixture=(2.00, 3.00), split=("store",), adjunct=("store",), citation=CITE_BATH),
+    "wellness_room": _band(1.35, 25.0, split=("visitor_lounge",), adjunct=("store",), citation=CITE_WELLNESS),
+    # --- T4 industrial ----------------------------------------------------------
+    "storage_bay": _band(2.00, 1000.0, split=("storage_bay",), adjunct=("utility",), citation=CITE_INDUSTRIAL),
+    "dock_bay": _band(1.60, 200.0, split=("dock_bay",), action=OverflowAction.SPLIT, citation=CITE_INDUSTRIAL),
+    "dispatch": _band(1.45, 300.0, split=("storage_bay",), adjunct=("store",), citation=CITE_INDUSTRIAL),
+    "worker_amenity": _band(1.50, 40.0, fixture=(2.50, 4.80), split=("pantry",), adjunct=("store",), citation=CITE_BATH),
+    "admin_office": _band(1.50, 200.0, split=("conf_room",), adjunct=("store",), citation=CITE_COMMERCIAL),
+    "guard_house": _band(1.35, 20.0, split=("guard_house",), adjunct=("store",), citation=CITE_COMMERCIAL),
+    "conf_room": _band(1.35, 60.0, split=("conf_room",), adjunct=("store",), citation=CITE_COMMERCIAL),
+    "ind_stair": _band(1.30, 25.0, split=("ind_stair",), adjunct=("store",), citation=CITE_CIRCULATION),
+    "admin_catwalk": _band(3.00, 40.0, action=OverflowAction.CIRCULATION, citation=CITE_CIRCULATION),
+    "security_gatehouse": _band(1.30, 15.0, split=("security_gatehouse",), adjunct=("store",), citation=CITE_COMMERCIAL),
+    "washdown_point": _band(1.35, 6.0, fixture=(1.20, 1.70), adjunct=("store",), action=OverflowAction.ADJUNCT, citation=CITE_BATH),
+    "distribution_lobby": _band(1.40, 30.0, split=("distribution_lobby",), adjunct=("store",), citation=CITE_CIRCULATION),
+    "archive_deck": _band(2.00, 60.0, split=("archive_deck",), adjunct=("store",), citation=CITE_INDUSTRIAL),
+    "utility_strip": _band(2.00, 12.0, split=("utility_strip",), action=OverflowAction.SPLIT, citation=CITE_STORAGE),
+    "viewing_catwalk": _band(3.00, 40.0, action=OverflowAction.CIRCULATION, citation=CITE_CIRCULATION),
+}
+
+
+class ProportionPolicy(BaseModel):
+    """Cross-cutting policy for hard/ideal bands and surplus routing."""
+    hard_limits_absolute: bool = Field(default=True, description="Hard limits may not be exceeded by a solver")
+    relaxation_requires_certificate_entry: bool = Field(
+        default=True,
+        description="Any accepted hard-limit relaxation must be listed in the certificate",
+    )
+    ideal_band_warn_threshold_pct: float = Field(
+        default=85.0, gt=0.0, le=100.0,
+        description="WARN threshold: minimum share of rooms inside the ideal band",
+    )
+    spine_corridor_aspect_threshold: float = Field(
+        default=2.50, gt=1.0,
+        description="Buildable aspect above which the solver must use a spine-corridor typology",
+    )
+    citation: str = (
+        "Ergonomic planning threshold ~2.5:1 for double-loaded corridor feasibility "
+        "(Neufert, Architects' Data, 4th English ed.); hard/ideal separation is the "
+        "project proportion policy, applied by solver law."
+    )
+
+
+PROPORTION_POLICY = ProportionPolicy()
+
+
 class SpaceTypeSpec(BaseModel):
     """
     Exhaustive semantic attribute schema per space type.
@@ -324,6 +530,30 @@ class SpaceTypeSpec(BaseModel):
     min_area_sqm: float = Field(gt=0.0)
     min_width_m: float = Field(gt=0.0)
     max_aspect_ratio: float = Field(default=2.0, gt=0.0)
+
+    # Proportion, ceiling, fixture and overflow law (data; the solver enforces
+    # it).  Catalog entries pull these from PROPORTION_BANDS in
+    # derive_semantics, so the table is the single source of truth.
+    ideal_aspect_max: float = Field(
+        default=0.0, ge=0.0,
+        description="Soft ideal-band ceiling; above it (but below max_aspect_ratio) is WARN",
+    )
+    area_ceiling_sqm: float = Field(
+        default=0.0, ge=0.0,
+        description="Hard planning ceiling; beyond it the space must split or gain an adjunct",
+    )
+    fixture_min_width_m: Optional[float] = Field(
+        default=None, gt=0.0,
+        description="Short side of the smallest fixture-fit rectangle (None = no fixtures)",
+    )
+    fixture_min_depth_m: Optional[float] = Field(
+        default=None, gt=0.0,
+        description="Long side of the smallest fixture-fit rectangle (None = no fixtures)",
+    )
+    split_into: List[str] = Field(default_factory=list)
+    adjunct_kinds: List[AdjunctKind] = Field(default_factory=list)
+    overflow_action: OverflowAction = OverflowAction.ADJUNCT
+    proportion_citation: str = ""
 
     # Semantic identity (derived from the attributes above, no per-entry churn)
     zone: SpaceZone = SpaceZone.PUBLIC
@@ -411,7 +641,62 @@ class SpaceTypeSpec(BaseModel):
                 [d for d, w in weights.items() if float(w) <= -0.5],
                 key=lambda d: (float(weights[d]), d),
             )
+        band = PROPORTION_BANDS.get(sid)
+        if band is not None:
+            # The catalogue is data; the band table is the same data.  Fill
+            # only what the record did not override, so a deliberate local
+            # override stays possible and is caught by the schema test.
+            data.setdefault("ideal_aspect_max", band.ideal_aspect_max)
+            data.setdefault("area_ceiling_sqm", band.area_ceiling_sqm)
+            data.setdefault("fixture_min_width_m", band.fixture_min_width_m)
+            data.setdefault("fixture_min_depth_m", band.fixture_min_depth_m)
+            data.setdefault("split_into", list(band.split_into))
+            data.setdefault("adjunct_kinds", list(band.adjunct_kinds))
+            data.setdefault("overflow_action", band.overflow_action)
+            data.setdefault("proportion_citation", band.citation)
         return data
+
+    @model_validator(mode="after")
+    def validate_proportion_band(self):
+        """Structural band law for every catalogued type.
+
+        Cross-reference checks (split targets exist, ladder permissions) run in
+        ``_validate_proportion_law`` after the whole catalogue is built.
+        """
+        if self.id not in PROPORTION_BANDS:
+            return self
+        if not (1.0 <= self.ideal_aspect_max <= self.max_aspect_ratio + 1e-9):
+            raise ValueError(
+                f"{self.id}: ideal aspect {self.ideal_aspect_max} must lie in "
+                f"[1.0, hard max {self.max_aspect_ratio}]"
+            )
+        if self.area_ceiling_sqm <= self.min_area_sqm:
+            raise ValueError(
+                f"{self.id}: area ceiling {self.area_ceiling_sqm} must exceed min area {self.min_area_sqm}"
+            )
+        if (self.fixture_min_width_m is None) != (self.fixture_min_depth_m is None):
+            raise ValueError(f"{self.id}: fixture dimensions must be declared as a pair")
+        if self.fixture_min_width_m is not None and self.fixture_min_depth_m is not None:
+            short, long = sorted((self.fixture_min_width_m, self.fixture_min_depth_m))
+            if short + 1e-9 < self.min_width_m:
+                raise ValueError(
+                    f"{self.id}: fixture short side {short} is below min width {self.min_width_m}"
+                )
+            if short * long + 1e-9 < self.min_area_sqm:
+                raise ValueError(
+                    f"{self.id}: fixture rectangle {short}x{long} is below min area {self.min_area_sqm}"
+                )
+            if long / max(short, 1e-9) > self.max_aspect_ratio + 1e-9:
+                raise ValueError(
+                    f"{self.id}: fixture rectangle exceeds the hard aspect band"
+                )
+        if self.overflow_action in (OverflowAction.SPLIT, OverflowAction.SPLIT_OR_ADJUNCT) and not self.split_into:
+            raise ValueError(f"{self.id}: {self.overflow_action.value} requires split_into targets")
+        if self.overflow_action in (OverflowAction.ADJUNCT, OverflowAction.SPLIT_OR_ADJUNCT) and not self.adjunct_kinds:
+            raise ValueError(f"{self.id}: {self.overflow_action.value} requires adjunct_kinds")
+        if self.overflow_action == OverflowAction.CIRCULATION and (self.split_into or self.adjunct_kinds):
+            raise ValueError(f"{self.id}: circulation overflow must not name rooms or adjuncts")
+        return self
 
 
 # =============================================================================
@@ -531,7 +816,7 @@ UNIVERSAL_SPACE_CATALOG: Dict[str, SpaceTypeSpec] = {
         floor_load=FloorLoad.NORMAL,
         daylight_req=True,
         ventilation_req="natural",
-        min_area_sqm=3.0,
+        min_area_sqm=3.24,
         min_width_m=1.80,
         max_aspect_ratio=1.50,
         vastu_zone_weights={"NE": 1.0, "E": 0.9, "N": 0.8, "CENTER": 0.2, "NW": 0.0, "SE": -0.5, "W": -0.5, "S": -1.0, "SW": -1.0},
@@ -819,7 +1104,7 @@ UNIVERSAL_SPACE_CATALOG: Dict[str, SpaceTypeSpec] = {
         ventilation_req="natural",
         min_area_sqm=3.0,
         min_width_m=1.20,
-        max_aspect_ratio=2.00,
+        max_aspect_ratio=2.10,
         vastu_zone_weights={"SE": 1.0, "NW": 0.9, "E": 0.8, "S": 0.5, "W": 0.2, "CENTER": -0.5, "SW": -0.8, "NE": -1.0, "N": -0.5},
         permitted_levels=[0],
         is_vertical_core=False,
@@ -1005,7 +1290,7 @@ UNIVERSAL_SPACE_CATALOG: Dict[str, SpaceTypeSpec] = {
         ventilation_req="both",
         min_area_sqm=6.0,
         min_width_m=1.80,
-        max_aspect_ratio=1.80,
+        max_aspect_ratio=1.90,
         vastu_zone_weights={"SE": 1.0, "NW": 0.8, "E": 0.6, "NE": -1.0, "SW": -1.0},
         permitted_levels=[0, 1, 2, 3],
         is_vertical_core=False,
@@ -1912,6 +2197,58 @@ UNIVERSAL_SPACE_CATALOG: Dict[str, SpaceTypeSpec] = {
         requires_exterior_wall=True,
         citation="NBC 2016 Pt 9 Sec 1 (utility wet point) / Industrial service strip",
     ),
+    "store": SpaceTypeSpec(
+        id="store",
+        name="Household Store",
+        typologies=["T1_SINGLE_FAMILY", "T2_FAMILY_APARTMENT", "T3_LARGE_COMPLEX", "T4_WAREHOUSE"],
+        function=FunctionType.STORAGE,
+        hygiene=HygieneType.NEUTRAL,
+        odor_emit=0, moisture_emit=0, grease_emit=0, noise_emit=0,
+        noise_sensitive=0, acoustic_privacy=0,
+        public_access=PublicAccess.PRIVATE,
+        visitor_depth=VisitorDepth.MID,
+        security=SecurityLevel.CONTROLLED,
+        service_side=ServiceSide.BACK_OF_HOUSE,
+        fire_hazard=FireHazard.LOW,
+        egress_role=EgressRole.NONE,
+        floor_load=FloorLoad.NORMAL,
+        daylight_req=False,
+        ventilation_req="mechanical",
+        min_area_sqm=1.50,
+        min_width_m=0.90,
+        max_aspect_ratio=3.00,
+        vastu_zone_weights={"W": 0.4, "SW": 0.3, "S": 0.2},
+        permitted_levels=[0, 1, 2, 3],
+        is_vertical_core=False,
+        requires_exterior_wall=False,
+        citation="NBC 2016 Pt 3 Table 1 (storage) / 0.90 m access aisle",
+    ),
+    "wellness_room": SpaceTypeSpec(
+        id="wellness_room",
+        name="Wellness / Quiet Room",
+        typologies=["T3_LARGE_COMPLEX"],
+        function=FunctionType.AMENITY,
+        hygiene=HygieneType.CLEAN,
+        odor_emit=0, moisture_emit=0, grease_emit=0, noise_emit=0,
+        noise_sensitive=3, acoustic_privacy=3,
+        public_access=PublicAccess.SEMI,
+        visitor_depth=VisitorDepth.MID,
+        security=SecurityLevel.OPEN,
+        service_side=ServiceSide.FRONT_OF_HOUSE,
+        fire_hazard=FireHazard.LOW,
+        egress_role=EgressRole.NONE,
+        floor_load=FloorLoad.NORMAL,
+        daylight_req=True,
+        ventilation_req="natural",
+        min_area_sqm=8.00,
+        min_width_m=2.40,
+        max_aspect_ratio=2.00,
+        vastu_zone_weights={"NE": 0.8, "N": 0.6, "E": 0.5},
+        permitted_levels=[0, 1, 2, 3],
+        is_vertical_core=False,
+        requires_exterior_wall=True,
+        citation="NBC 2016 Pt 3/9 amenity provision / quiet-room planning",
+    ),
     "viewing_catwalk": SpaceTypeSpec(
         id="viewing_catwalk",
         name="High-Bay Viewing Catwalk",
@@ -2057,6 +2394,106 @@ TYPOLOGY_CATALOGS: Dict[str, TypologyCatalog] = {
         mezzanine_levels=[1],
         citation="NBC 2016 storage occupancy / industrial logistics practice",
     ),
+}
+
+
+class UpgradeStep(BaseModel):
+    """One priority-ordered optional upgrade for surplus land."""
+    priority: int = Field(ge=1)
+    label: str
+    space_type_id: Optional[str] = None
+    module: Optional[Literal["dwelling_unit"]] = None
+    min_surplus_sqm: float = Field(gt=0.0)
+    max_count: int = Field(default=1, ge=1)
+    citation: str = CITE_RESIDENTIAL
+
+    @model_validator(mode="after")
+    def exactly_one_target(self):
+        if (self.space_type_id is None) == (self.module is None):
+            raise ValueError("upgrade step must name exactly one of space_type_id or module")
+        return self
+
+
+class OutdoorRoute(BaseModel):
+    """One labeled outdoor use for surplus that the ladder cannot absorb."""
+    priority: int = Field(ge=1)
+    label: str
+    kind: Literal["parking", "garden", "terrace", "planter", "yard", "plaza"]
+    min_area_sqm: float = Field(gt=0.0)
+    ecs_per_patch: Optional[float] = Field(
+        default=None, gt=0.0,
+        description="Equivalent Car Spaces delivered by one patch of this route (parking only)",
+    )
+    citation: str = CITE_OUTDOOR
+
+    @model_validator(mode="after")
+    def parking_declares_ecs(self):
+        if self.kind == "parking" and self.ecs_per_patch is None:
+            raise ValueError("parking routes must declare ecs_per_patch")
+        if self.kind != "parking" and self.ecs_per_patch is not None:
+            raise ValueError("only parking routes may declare ecs_per_patch")
+        return self
+
+
+TYPOLOGY_UPGRADE_LADDERS: Dict[str, List[UpgradeStep]] = {
+    "T1_SINGLE_FAMILY": [
+        UpgradeStep(priority=1, label="Study / home office", space_type_id="study", min_surplus_sqm=12.0),
+        UpgradeStep(priority=2, label="Utility / laundry", space_type_id="utility", min_surplus_sqm=6.0),
+        UpgradeStep(priority=3, label="Household store", space_type_id="store", min_surplus_sqm=4.0, max_count=2),
+        UpgradeStep(priority=4, label="Open terrace", space_type_id="terrace", min_surplus_sqm=8.0),
+    ],
+    "T2_FAMILY_APARTMENT": [
+        UpgradeStep(priority=1, label="Additional dwelling unit", module="dwelling_unit", min_surplus_sqm=48.0,
+                    citation="NBC 2016 Part 3/9 multi-family unit minimum (41 m2 carpet) + walls/circulation"),
+        UpgradeStep(priority=2, label="Common terrace", space_type_id="terrace", min_surplus_sqm=10.0, max_count=2),
+        UpgradeStep(priority=3, label="Resident store", space_type_id="store", min_surplus_sqm=4.0, max_count=2),
+    ],
+    "T3_LARGE_COMPLEX": [
+        UpgradeStep(priority=1, label="Meeting / conference suite", space_type_id="conference_suite", min_surplus_sqm=24.0),
+        UpgradeStep(priority=2, label="Server / IT room", space_type_id="server_room", min_surplus_sqm=14.0),
+        UpgradeStep(priority=3, label="Wellness / quiet room", space_type_id="wellness_room", min_surplus_sqm=12.0),
+        UpgradeStep(priority=4, label="Pantry / tea point", space_type_id="pantry", min_surplus_sqm=8.0),
+        UpgradeStep(priority=5, label="Store", space_type_id="store", min_surplus_sqm=4.0, max_count=2),
+    ],
+    "T4_WAREHOUSE": [
+        UpgradeStep(priority=1, label="Mezzanine admin office", space_type_id="admin_office", min_surplus_sqm=42.0),
+        UpgradeStep(priority=2, label="Additional storage bay", space_type_id="storage_bay", min_surplus_sqm=90.0, max_count=3,
+                    citation="NBC 2016 Part 3 storage occupancy; 80 m2 bay + rack aisle"),
+        UpgradeStep(priority=3, label="Operations / conference room", space_type_id="conf_room", min_surplus_sqm=24.0),
+        UpgradeStep(priority=4, label="Additional dock bay", space_type_id="dock_bay", min_surplus_sqm=30.0),
+        UpgradeStep(priority=5, label="Store", space_type_id="store", min_surplus_sqm=4.0, max_count=2),
+    ],
+}
+
+
+TYPOLOGY_OUTDOOR_ROUTING: Dict[str, List[OutdoorRoute]] = {
+    "T1_SINGLE_FAMILY": [
+        OutdoorRoute(priority=1, label="Garden", kind="garden", min_area_sqm=20.0),
+        OutdoorRoute(priority=2, label="Parking (1 ECS)", kind="parking", min_area_sqm=12.5, ecs_per_patch=1.0,
+                     citation="NBC 2016 Part 3 Table 7; 2.5 x 5.0 m ECS"),
+        OutdoorRoute(priority=3, label="Open terrace", kind="terrace", min_area_sqm=10.0),
+        OutdoorRoute(priority=4, label="Boundary planter", kind="planter", min_area_sqm=2.0),
+    ],
+    "T2_FAMILY_APARTMENT": [
+        OutdoorRoute(priority=1, label="Resident parking (1 ECS)", kind="parking", min_area_sqm=12.5, ecs_per_patch=1.0,
+                     citation="NBC 2016 Part 3 Table 7; 2.5 x 5.0 m ECS"),
+        OutdoorRoute(priority=2, label="Common garden", kind="garden", min_area_sqm=15.0),
+        OutdoorRoute(priority=3, label="Common terrace", kind="terrace", min_area_sqm=10.0),
+        OutdoorRoute(priority=4, label="Boundary planter", kind="planter", min_area_sqm=2.0),
+    ],
+    "T3_LARGE_COMPLEX": [
+        OutdoorRoute(priority=1, label="Visitor parking (1 ECS)", kind="parking", min_area_sqm=12.5, ecs_per_patch=1.0,
+                     citation="NBC 2016 Part 3 Table 7; 2.5 x 5.0 m ECS"),
+        OutdoorRoute(priority=2, label="Entry plaza", kind="plaza", min_area_sqm=25.0),
+        OutdoorRoute(priority=3, label="Landscaped garden", kind="garden", min_area_sqm=15.0),
+        OutdoorRoute(priority=4, label="Planter wedge", kind="planter", min_area_sqm=4.0),
+    ],
+    "T4_WAREHOUSE": [
+        OutdoorRoute(priority=1, label="Truck / trailer parking", kind="parking", min_area_sqm=60.0, ecs_per_patch=2.0,
+                     citation="NBC 2016 Part 3 Table 7 / logistics maneuvering practice"),
+        OutdoorRoute(priority=2, label="Open storage yard", kind="yard", min_area_sqm=100.0),
+        OutdoorRoute(priority=3, label="Boundary planter", kind="planter", min_area_sqm=6.0),
+    ],
 }
 
 
@@ -2602,6 +3039,21 @@ class OntologyRegistry:
 
         return None
 
+    def proportion_band(self, space_id: str) -> Optional[ProportionBand]:
+        """The proportion/overflow law for a canonical space id (or None)."""
+        resolved = self.resolve_space_id(space_id) or space_id
+        return PROPORTION_BANDS.get(resolved)
+
+    def upgrade_ladder(self, typology: str) -> List[UpgradeStep]:
+        """Priority-ordered optional upgrades for a typology."""
+        canonical = self.get_typology_profile(typology).canonical
+        return list(TYPOLOGY_UPGRADE_LADDERS.get(canonical, []))
+
+    def outdoor_routes(self, typology: str) -> List[OutdoorRoute]:
+        """Priority-ordered labeled outdoor routing for a typology."""
+        canonical = self.get_typology_profile(typology).canonical
+        return list(TYPOLOGY_OUTDOOR_ROUTING.get(canonical, []))
+
     def get_program_catalog(self, typology: str) -> TypologyCatalog:
         """Returns the declarative programme catalog for a typology."""
         canonical = self.get_typology_profile(typology).canonical
@@ -2811,6 +3263,83 @@ class OntologyRegistry:
 
 
 # Default singleton instance
+def _validate_proportion_law() -> None:
+    """Fail the import if proportion law is incomplete or internally impossible.
+
+    This is the data-side gate: every catalogued space has a band, every band is
+    reachable at its own minimum area, every split/adjunct target exists, and
+    every typology has a priority-ordered upgrade ladder plus outdoor routing.
+    """
+    catalog_ids = set(UNIVERSAL_SPACE_CATALOG)
+    band_ids = set(PROPORTION_BANDS)
+    if catalog_ids != band_ids:
+        missing = sorted(catalog_ids - band_ids)
+        extra = sorted(band_ids - catalog_ids)
+        raise RuntimeError(f"PROPORTION_BANDS coverage mismatch: missing={missing} extra={extra}")
+
+    for sid, spec in UNIVERSAL_SPACE_CATALOG.items():
+        band = PROPORTION_BANDS[sid]
+        if abs(spec.ideal_aspect_max - band.ideal_aspect_max) > 1e-9:
+            raise RuntimeError(f"{sid}: ideal band did not bind from the table")
+        if abs(spec.area_ceiling_sqm - band.area_ceiling_sqm) > 1e-9:
+            raise RuntimeError(f"{sid}: area ceiling did not bind from the table")
+        if spec.min_area_sqm + 1e-9 < spec.min_width_m ** 2:
+            raise RuntimeError(
+                f"{sid}: min area {spec.min_area_sqm} cannot hold a {spec.min_width_m} m "
+                "square, so no aspect band is reachable"
+            )
+        # At the minimum area, the ideal aspect must still honour min width.
+        ideal_short = math.sqrt(spec.min_area_sqm / spec.ideal_aspect_max)
+        if ideal_short + 1e-9 < spec.min_width_m:
+            raise RuntimeError(
+                f"{sid}: ideal aspect {spec.ideal_aspect_max} at min area "
+                f"{spec.min_area_sqm} gives {ideal_short:.2f} m < min width {spec.min_width_m}"
+            )
+        if spec.area_ceiling_sqm <= spec.min_area_sqm:
+            raise RuntimeError(f"{sid}: ceiling must exceed min area")
+        for target in spec.split_into:
+            if target not in catalog_ids:
+                raise RuntimeError(f"{sid}: split target '{target}' is not a catalogued space")
+        if (spec.fixture_min_width_m is None) != (spec.fixture_min_depth_m is None):
+            raise RuntimeError(f"{sid}: fixture dimensions must be a pair")
+        if spec.fixture_min_width_m is not None:
+            fw, fd = sorted((spec.fixture_min_width_m, spec.fixture_min_depth_m))
+            if fw + 1e-9 < spec.min_width_m or fw * fd + 1e-9 < spec.min_area_sqm:
+                raise RuntimeError(f"{sid}: fixture rectangle violates its own room minima")
+            if fd / fw > spec.max_aspect_ratio + 1e-9:
+                raise RuntimeError(f"{sid}: fixture rectangle exceeds the hard band")
+
+    expected_typologies = set(TYPOLOGY_PROFILES)
+    for name, table in (
+        ("TYPOLOGY_UPGRADE_LADDERS", TYPOLOGY_UPGRADE_LADDERS),
+        ("TYPOLOGY_OUTDOOR_ROUTING", TYPOLOGY_OUTDOOR_ROUTING),
+    ):
+        if set(table) != expected_typologies:
+            raise RuntimeError(f"{name} must cover exactly {sorted(expected_typologies)}")
+
+    for typology, steps in TYPOLOGY_UPGRADE_LADDERS.items():
+        priorities = [s.priority for s in steps]
+        if priorities != sorted(set(priorities)):
+            raise RuntimeError(f"{typology}: upgrade priorities must be unique and ascending")
+        for step in steps:
+            if step.space_type_id is not None:
+                target = UNIVERSAL_SPACE_CATALOG.get(step.space_type_id)
+                if target is None:
+                    raise RuntimeError(f"{typology}: upgrade step '{step.space_type_id}' is not catalogued")
+                if typology not in target.typologies:
+                    raise RuntimeError(f"{typology}: upgrade '{step.space_type_id}' is not permitted there")
+                if step.min_surplus_sqm + 1e-9 < target.min_area_sqm:
+                    raise RuntimeError(f"{typology}: surplus for '{step.space_type_id}' is below its min area")
+
+    for typology, routes in TYPOLOGY_OUTDOOR_ROUTING.items():
+        priorities = [r.priority for r in routes]
+        if priorities != sorted(set(priorities)):
+            raise RuntimeError(f"{typology}: outdoor priorities must be unique and ascending")
+
+
+_validate_proportion_law()
+
+
 ONTOLOGY = OntologyRegistry()
 
 
@@ -2836,7 +3365,7 @@ class MathematicalValidityCertificate(BaseModel):
     egress_distances_satisfied: bool = Field(..., description="Every room travel distance <= NBC max travel distance")
     zero_forbidden_violations: bool = Field(..., description="Zero FORBIDDEN_WALL, FORBIDDEN_DOOR_FACING, FORBIDDEN_ABOVE violations")
     must_adjacency_satisfied: bool = Field(..., description="100% of MUST_ADJACENT space pairs are contiguous")
-    # Audit F04: this used to be printed as 94.5 regardless of the plan. No
+    # This used to be printed as 94.5 regardless of the plan. No
     # verifier for PREFER_ADJACENT / PREFER_SEPARATE exists yet, so the honest
     # value is None ("not evaluated") rather than an invented percentage.
     prefer_adjacency_score: Optional[float] = Field(
@@ -2860,7 +3389,7 @@ class MathematicalValidityCertificate(BaseModel):
     certified_rules: List[str] = Field(default_factory=list, description="Explicit list of rule IDs VERIFIED and certified (a failing rule is never listed)")
     failures: List[str] = Field(
         default_factory=list,
-        description="Human-readable reason per failing invariant, naming the offending rooms (audit F16)",
+        description="Human-readable reason per failing invariant, naming the offending rooms",
     )
     details: Dict[str, Any] = Field(default_factory=dict, description="Detailed metrics, per-room travel distances, rule audit log")
 
