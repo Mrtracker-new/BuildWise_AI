@@ -46,11 +46,25 @@ def _solved_or_refused(req):
 
     A brief the coverage/setback ceiling cannot hold is REFUSED explicitly
     (status "failed", named unmet requirements, GEN-UNFIT warning) rather than
-    silently degraded into sub-catalogue rooms (audit F01/F02). The placement
-    rules below are therefore asserted on the briefs that are actually solvable.
+    silently degraded into sub-catalogue rooms.
+
+    Refusal splits that verdict from the geometry: a selection the plate cannot
+    hold is now DRAWN as the plate's legal programme with a PROGRAMME-DEFICIT
+    banner and a FAIL stamp, and that response keeps status "failed" while it
+    still carries rooms.  A refusal is therefore a failure with NO drawn room;
+    everything drawn must satisfy the placement rules below.
+
+    ACCEPTED CONTRACT CHANGE (stricter by design): this helper
+    used to skip every status="failed" brief, which silently exempted the
+    drawn-but-FAIL plates from the area/aspect/overlap rules.  It now skips only
+    a failure with nothing drawn, so those plates are held to the same catalogue
+    contract as a pass - strictly more coverage, never less.
     """
     res = generate_floor_plan(req)
-    if res.status == "failed":
+    drawn = res.multi_storey is not None and any(
+        getattr(floor, "rooms", None) for floor in res.multi_storey.floors
+    )
+    if res.status == "failed" and not drawn:
         assert res.unmet_requirements, "a refused brief must name what it could not place"
         assert any(str(w).startswith("GEN-UNFIT") for w in res.warnings), res.warnings
         return None
@@ -305,14 +319,23 @@ def test_all_rooms_within_area_catalog_and_aspect(plot_w, plot_d, rooms):
         # A room may be below the catalogue minimum ONLY when the engine names
         # that exact shortfall (ROOM-MIN) - a tightened plate may make the
         # catalogue unreachable, but a silent sub-minimum room may never ship
-        # (audit F01/F02: the old plate met the catalogue by breaching the
-        # coverage cap and the NBC setbacks).
+        # (the old plate met the catalogue by breaching the coverage cap and
+        # the NBC setbacks).
         if r.area_sqm < min_a - 0.2:
             assert f"ROOM-MIN: {r.room_id} " in disclosed, (
                 f"Room '{r.room_id}' area {r.area_sqm} m2 below min {min_a} m2 "
                 "without a ROOM-MIN disclosure!"
             )
-        assert r.area_sqm <= max_a + 2.0, f"Room '{r.room_id}' area {r.area_sqm} m2 exceeds max {max_a} m2!"
+        # The mirror contract for the ceiling: a room may exceed the catalogue
+        # maximum (a stretched band on a plate whose geometry leaves no legal
+        # adjunct) ONLY when the engine names it as ROOM-MAX.  Silent overage is
+        # still a defect; a disclosed one is the same honest relaxation the
+        # certificate prints.
+        if r.area_sqm > max_a + 2.0:
+            assert f"ROOM-MAX: {r.room_id} " in disclosed, (
+                f"Room '{r.room_id}' area {r.area_sqm} m2 exceeds max {max_a} m2 "
+                "without a ROOM-MAX disclosure!"
+            )
 
         ar = max(r.width, r.height) / max(min(r.width, r.height), 0.1)
         if ar > 2.22:

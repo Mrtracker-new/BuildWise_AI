@@ -142,8 +142,12 @@ def test_terrace_band_plate_reuses_the_validated_rule_fp_geometry():
         terrace_bands={1: TerraceBandSpec(edge="N", depth_m=2.0)},
     )
     portfolio = generate_ranked_schemes(request)
-    assert len(portfolio.alternatives) == 3
+    # Contract change: the band profiles cannot re-partition a terrace
+    # band, so the portfolio offers the ONE validated layout WITH a named
+    # disclosure instead of three relabelled clones.
+    assert len(portfolio.alternatives) == 1
     assert "RULE-FP" in (portfolio.provenance.get("fallback_reason") or "")
+    assert portfolio.provenance.get("no_material_alternative")
     for alternative in portfolio.alternatives:
         assert alternative.provenance["solver"] == "legacy_rule_fp_fallback"
         assert len(alternative.floors) == 2
@@ -164,7 +168,10 @@ def test_typology_matrix_reports_explicit_feasibility_or_deficit():
             floors=floors,
         )
         portfolio = generate_ranked_schemes(request)
-        assert len(portfolio.alternatives) == 3
+        # T2/T3/T4 are unit/office/bay programmes the T1 band profiles do not
+        # Re-partition: one drawn alternative, named as such.
+        assert len(portfolio.alternatives) == 1
+        assert portfolio.provenance.get("no_material_alternative")
         for alternative in portfolio.alternatives:
             if alternative.feasible:
                 _assert_hard_constraints(alternative)

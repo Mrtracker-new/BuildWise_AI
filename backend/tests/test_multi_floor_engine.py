@@ -158,9 +158,29 @@ def test_graceful_degradation_ec01_narrow_deep_plot():
     solver = SoleGeometryEngine(req)
     building = solver.solve()
 
-    assert building.qa_report["status"] == "pass"
+    # Proportion law: a 6 x 24 m plot cannot hold this programme inside
+    # the ontology's hard bands, and the old suite called that a PASS because no
+    # layer measured proportion.  The plan is still drawn and the degradation is
+    # reported; the gate now says FAIL and names the squeezed rooms, which is
+    # the honest result, not a fabrication. The previous PASS expectation would
+    # have re-hidden the very defect this guard exists to surface.
+    assert building.qa_report["status"] == "fail"
+    assert building.validation_gate["overall_status"] == "FAIL"
+    l16 = next(
+        l for l in building.validation_gate["layers"] if l["layer_id"] == "L16"
+    )
+    assert l16["status"] == "FAIL"
+    assert l16["details"]["beyond_cap"], "a proportion FAIL must name the rooms"
+    assert l16["details"]["justified_beyond_cap"], (
+        "each beyond-cap room carries its own plate-capacity justification"
+    )
+    assert any("guest_bed_F0" in x or "kitchen_F0" in x or "bath_1_F0" in x
+               for x in l16["details"]["beyond_cap"])
     assert len(building.floors) == 2
     assert any("Degradation Level 1" in w for w in building.warnings)
+    assert any(w.startswith("ROOM-MIN") for w in building.warnings), (
+        "the deficit banner needs the named squeezed-room lines"
+    )
 
 
 # =====================================================================

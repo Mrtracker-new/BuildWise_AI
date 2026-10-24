@@ -349,7 +349,7 @@ def test_golden_rectangular_terrace_band_g2_level2_north_3m():
 
     # 6. Certificate validations
     cert = model.mathematical_certificate
-    # Audit F04: the ground-floor living room is 2.71 m CLEAR against a 3.60 m
+    # The ground-floor living room is 2.71 m CLEAR against a 3.60 m
     # catalogue minimum - below even the 0.80 terrace-band tolerance. The old
     # certificate only measured the 3.00 m gross face against the tolerance and
     # printed a PASS; the clear-face measurement exposes the real shortfall.
@@ -439,7 +439,27 @@ def test_rectangle_equivalence_no_band_identical():
         assert model.floors[z].built_up_area_sqm == model.floors[0].built_up_area_sqm
 
     assert model.total_built_up_area_sqm == round(model.floors[0].built_up_area_sqm * 3, 2)
-    assert model.mathematical_certificate.get("is_valid") is True
+
+    # Rectangle equivalence is unchanged, and the proportion law must
+    # restore validity without a blanket aspect tolerance: the 9.60 x 3.56 m
+    # living is split (living + dining/study) or, when no legal split exists on
+    # the plate, accepted as a ROOM-LISTED relaxation within the declared cap.
+    cert = model.mathematical_certificate
+    assert cert["aspect_ratios_satisfied"] is True, cert["failures"]
+    assert not [f for f in cert["failures"] if "NBC-02" in f], cert["failures"]
+    assert cert["is_valid"] is True
+    for rel in cert["details"].get("declared_aspect_relaxations", []):
+        assert rel["measured"] <= rel["limit"] * 1.20 + 0.02, rel
+    assert any(
+        w.startswith("PROP-SPLIT") or w.startswith("PROP-ASPECT")
+        for w in model.warnings
+    ), [w for w in model.warnings if w.startswith("PROP-")]
+    for flag in (
+        "non_overlap", "containment", "chain_sums_match", "min_dimensions_satisfied",
+        "connectivity_bfs", "egress_distances_satisfied", "zero_forbidden_violations",
+        "must_adjacency_satisfied", "vertical_stack_valid",
+    ):
+        assert cert[flag] is True, flag
 
 
 
@@ -458,7 +478,7 @@ def test_mask_terrace_on_single_rectangle_plate_materializes_band():
     3. No overlap between the terrace band and any conditioned room.
     4. Gate layer L11 reports PASS with a real terrace count.
     """
-    # Fixture note (audit F01/F02): the original 148 m² L-shape admitted only a
+    # Fixture note: the original 148 m² L-shape admitted only a
     # 47 m² rectangular plate, while a 3-storey residential_multi brief expands
     # to two 4-room units per floor (~123 m²). That brief is statutorily
     # impossible on the plate and is now REFUSED with the numbers instead of

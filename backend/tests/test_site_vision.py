@@ -32,6 +32,8 @@ from app.services.vision.site_vision_service import (
     analyze_site_vision
 )
 from app.schemas.site_vision import SiteVisionResponse
+from app.services.vision import imagery_fetch
+from app.services.vision.imagery_fetch import fetch_site_imagery, ImageryFetchError
 
 # ---------------------------------------------------------------------------
 # 1. Pure Spectral Indices Mathematical Unit Tests
@@ -360,6 +362,52 @@ async def test_site_vision_fallback_to_index_only_when_segformer_fails():
         # B08 (5000) vs B04 (1500) -> NDVI = 3500 / 6500 = 0.538 >= 0.35 (Green cover detected)
         assert resp.green_cover_pct > 0.0
         assert len(resp.tree_clusters.features) > 0
+
+
+# ---------------------------------------------------------------------------
+# 7b. Band fetch: optional bands are optional, required bands are required
+# ---------------------------------------------------------------------------
+
+def _fake_band(monkeypatch, failing):
+    def fake(band_name, href, center_lon, center_lat, window_half_meters=120.0):
+        if band_name in failing:
+            raise ImageryFetchError(f"simulated read failure for {band_name}")
+        value = 1200.0 if band_name in ("B02", "B04") else 2000.0
+        if band_name == "B08":
+            value = 5000.0
+        return band_name, np.full((24, 24), value, dtype=np.float32), "EPSG:32643", None
+
+    monkeypatch.setattr(imagery_fetch, "_fetch_single_band_window", fake)
+
+
+def test_fetch_site_imagery_tolerates_missing_optional_bands(monkeypatch):
+    """B11/SCL/B02 losses must not sink the analysis (they have fallbacks)."""
+    _fake_band(monkeypatch, failing={"B11", "SCL", "B02"})
+
+    imagery = fetch_site_imagery(
+        {b: "https://example.test/%s.tif" % b for b in ("B02", "B03", "B04", "B08", "B11", "SCL")},
+        center_lat=12.9716,
+        center_lon=77.5946,
+    )
+
+    assert set(imagery["bands"]) == {"B03", "B04", "B08", "B11"}, (
+        "B11 is synthesised from red/NIR when it cannot be read"
+    )
+    assert imagery["valid_mask"].all(), "no SCL means no cloud mask, not an empty scene"
+    assert set(imagery["failures"]) == {"B11", "SCL", "B02"}
+
+
+def test_fetch_site_imagery_fails_when_a_required_band_is_missing(monkeypatch):
+    _fake_band(monkeypatch, failing={"B08"})
+
+    with pytest.raises(ImageryFetchError) as exc:
+        fetch_site_imagery(
+            {b: "https://example.test/%s.tif" % b for b in ("B02", "B03", "B04", "B08")},
+            center_lat=12.9716,
+            center_lon=77.5946,
+        )
+
+    assert "B08" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

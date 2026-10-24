@@ -69,6 +69,42 @@ def test_overpass_429_degrades_to_the_assumed_frontage(monkeypatch):
     assert "no bearing has been assumed" in warning.lower()
 
 
+def test_overpass_5xx_opens_the_outage_cooldown(monkeypatch):
+    """A retryable 5xx must trip the breaker, not just the transport path.
+
+    Regression: `outage` was only ever set on httpx exceptions, so a 502 from
+    the public instance opened no cooldown and EVERY later lookup (pin move,
+    re-analysis) re-spent the full read budget to reach the same ASSUMED
+    fallback.  Measured before the fix: two consecutive analyses each burned
+    ~10 s on 502s.
+    """
+    marked: list[float] = []
+
+    async def throttled(*_args, **_kwargs):
+        return None
+
+    async def always_502(*_args, **_kwargs):
+        stub = MagicMock()
+        stub.status_code = 502
+        stub.text = "Bad Gateway"
+        return stub
+
+    monkeypatch.setattr(road_service, "_overpass_throttle", throttled)
+    monkeypatch.setattr(road_service, "_post_query", always_502)
+    monkeypatch.setattr(road_service, "_mark_upstream_failed", lambda: marked.append(1.0))
+    monkeypatch.setattr(road_service, "_upstream_cooldown_remaining", lambda: 0.0)
+
+    result, cached, _warning = asyncio.run(
+        road_service.fetch_nearest_road(
+            26.9124, 75.7873, cache_category="e2e-502", cache_precision=6,
+        )
+    )
+
+    assert cached is False
+    assert result["is_fallback"] is True
+    assert marked, "a retryable 5xx must open the upstream cooldown"
+
+
 # --------------------------------------------------------------------------- #
 #  Groq: 429 on every candidate model -> deterministic mock, disclosed
 # --------------------------------------------------------------------------- #

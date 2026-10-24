@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, ".")
 from pypdf import PdfReader
 
-from app.services.report_service import generate_pdf_report
+from app.services.report_service import generate_pdf_report, page1_plan_warnings
 
 
 def _base_data() -> dict:
@@ -116,6 +116,73 @@ def test_null_seismic_zone_never_renders_a_zone_letter():
     assert "NOT ASSESSED" in text, "null zone must surface the explicit not-assessed state"
     for zone in ("Zone II", "Zone III", "Zone IV", "Zone V"):
         assert zone not in text, f"fabricated {zone} leaked into the PDF"
+
+
+PLAN_PAGE1_WARNINGS = [
+    "ROOM-MIN: kitchen was squeezed below its 9.0 m² minimum on this plate.",
+    "PROP-HARD: floor 0 kitchen 3.55 m² < 7.50 m² minimum; the certificate must fail.",
+    "PROP-PLATE-CAP: kitchen aspect 1:9.85 beyond the 1.40x cap; justified per room.",
+    "PROGRAMME-DEFICIT: the programme needs 122.7 m²; the plate provides 85.7 m².",
+    "PROGRAMME-SQUEEZE: 12 rooms are below their minimums; the plan is drawn with a FAIL stamp.",
+    "GATE-FAIL L1 Geometry & Statutory: room aspect exceeds the ontology hard band.",
+    "PLATE-SHORT: the largest plate is 59.5 m² against a 78.2 m² programme.",
+    "ROOM-OVERLAP: rooms 'bath_1' and 'bed_2' overlap by 5.02 m² on floor 0.",
+    "SELECTION-FALLBACK: the selected partition cannot be drawn on this plate.",
+    "PROP-IDEAL: living aspect 1:1.37 is outside the 1:1.20 ideal band (WARN).",
+]
+
+
+def _plan_payload() -> dict:
+    return {
+        "warnings": list(PLAN_PAGE1_WARNINGS),
+        "validation_gate": {"overall_status": "FAIL"},
+        "mathematical_certificate": {"is_valid": False},
+    }
+
+
+def test_print_page1_plan_warnings_equal_pdf_banner_verbatim():
+    """The print banner list and the PDF page-1 list are the same strings.
+
+    `page1_plan_warnings` is the backend mirror of
+    frontend/src/services/planWarnings.ts; the in-app Print Report now reads
+    the same merged list.  Every page-1 row must survive into the PDF verbatim
+    (normalized only for pypdf's hard wraps), in order, with nothing dropped.
+    """
+    data = _base_data()
+    data["warnings"] = [
+        "Microclimate telemetry unavailable. Latitudinal climate averages applied.",
+    ]
+    expected = page1_plan_warnings(PLAN_PAGE1_WARNINGS)
+    assert expected == PLAN_PAGE1_WARNINGS
+
+    buf = generate_pdf_report(data, floor_plan=_plan_payload())
+    raw = "".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(buf.getvalue())).pages)
+    text = " ".join(raw.split())
+    assert "PLAN NOT CERTIFIED - DRAWN WITH A FAIL STAMP" in text
+    # The print banner renders the merged list as bullet rows, in order.  The
+    # PDF must carry that SAME block, contiguously and verbatim: nothing added,
+    # nothing dropped, nothing reworded between the two surfaces.
+    print_block = " ".join(f"• {line}" for line in expected)
+    assert print_block in text, (
+        "the PDF banner is not the print banner list verbatim:\n"
+        f"print: {print_block}"
+    )
+    for line in expected:
+        assert line in text, f"page-1 plan warning missing from PDF: {line}"
+
+
+def test_plan_advisories_page1_list_survives_a_non_failed_gate():
+    plan = _plan_payload()
+    plan["validation_gate"] = {"overall_status": "WARN"}
+    plan["mathematical_certificate"] = {"is_valid": True}
+    buf = generate_pdf_report(_base_data(), floor_plan=plan)
+    raw = "".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(buf.getvalue())).pages)
+    text = " ".join(raw.split())
+    assert "PLAN ADVISORIES" in text
+    expected = page1_plan_warnings(PLAN_PAGE1_WARNINGS)
+    assert " ".join(f"• {line}" for line in expected) in text, (
+        "the advisory banner is not the print banner list verbatim"
+    )
 
 
 def test_assessed_zone_renders_normally():

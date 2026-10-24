@@ -35,7 +35,7 @@ def test_high_vastu_quadrant_constraints():
     )
     res = generate_floor_plan(req)
     if res.status == "failed":
-        # Refused brief (audit F01/F02): the statutory ceiling cannot hold the
+        # Refused brief: the statutory ceiling cannot hold the
         # programme, so the refusal must be explicit - never a squeezed plan.
         assert res.unmet_requirements, "a refusal must name what it could not place"
         assert any(str(w).startswith(("GEN-", "GATE-FAIL")) for w in res.warnings), res.warnings
@@ -79,7 +79,7 @@ def test_plumbing_adjacency():
     )
     res = generate_floor_plan(req)
     if res.status == "failed":
-        # Refused brief (audit F01/F02): the statutory ceiling cannot hold the
+        # Refused brief: the statutory ceiling cannot hold the
         # programme, so the refusal must be explicit - never a squeezed plan.
         assert res.unmet_requirements, "a refusal must name what it could not place"
         assert any(str(w).startswith(("GEN-", "GATE-FAIL")) for w in res.warnings), res.warnings
@@ -97,7 +97,7 @@ def test_spatial_disjointness_and_containment():
     )
     res = generate_floor_plan(req)
     if res.status == "failed":
-        # Refused brief (audit F01/F02): the statutory ceiling cannot hold the
+        # Refused brief: the statutory ceiling cannot hold the
         # programme, so the refusal must be explicit - never a squeezed plan.
         assert res.unmet_requirements, "a refusal must name what it could not place"
         assert any(str(w).startswith(("GEN-", "GATE-FAIL")) for w in res.warnings), res.warnings
@@ -141,7 +141,7 @@ def test_svg_blueprint_validity():
     )
     res = generate_floor_plan(req)
     if res.status == "failed":
-        # Refused brief (audit F01/F02): the statutory ceiling cannot hold the
+        # Refused brief: the statutory ceiling cannot hold the
         # programme, so the refusal must be explicit - never a squeezed plan.
         assert res.unmet_requirements, "a refusal must name what it could not place"
         assert any(str(w).startswith(("GEN-", "GATE-FAIL")) for w in res.warnings), res.warnings
@@ -228,7 +228,7 @@ def test_floorplan_duplicate_room_deduplication():
     assert len(req.required_rooms) == 4
     res = generate_floor_plan(req)
     if res.status == "failed":
-        # Refused brief (audit F01/F02): the statutory ceiling cannot hold the
+        # Refused brief: the statutory ceiling cannot hold the
         # programme, so the refusal must be explicit - never a squeezed plan.
         assert res.unmet_requirements, "a refusal must name what it could not place"
         assert any(str(w).startswith(("GEN-", "GATE-FAIL")) for w in res.warnings), res.warnings
@@ -296,12 +296,12 @@ def test_dissection_engine_contiguity_and_no_voids():
     )
     res = generate_floor_plan(req)
     if res.status == "failed":
-        # Refused brief (audit F01/F02): the statutory ceiling cannot hold the
+        # Refused brief: the statutory ceiling cannot hold the
         # programme, so the refusal must be explicit - never a squeezed plan.
         assert res.unmet_requirements, "a refusal must name what it could not place"
         assert any(str(w).startswith(("GEN-", "GATE-FAIL")) for w in res.warnings), res.warnings
         return
-    # Status is DERIVED from the gate and the unmet ledger (audit F21): a plan
+    # Status is DERIVED from the gate and the unmet ledger: a plan
     # with an advisory WARN cannot claim "optimal".
     _gate = (res.multi_storey.qa_report or {}).get("validation_gate_status")
     _expected = "optimal" if (_gate == "PASS" and not (res.unmet_requirements or [])) else "compromise"
@@ -366,7 +366,7 @@ def test_dissection_circulation_and_doors():
     )
     res = generate_floor_plan(req)
     if res.status == "failed":
-        # Refused brief (audit F01/F02): the statutory ceiling cannot hold the
+        # Refused brief: the statutory ceiling cannot hold the
         # programme, so the refusal must be explicit - never a squeezed plan.
         assert res.unmet_requirements, "a refusal must name what it could not place"
         assert any(str(w).startswith(("GEN-", "GATE-FAIL")) for w in res.warnings), res.warnings
@@ -405,7 +405,7 @@ def test_dissection_acceptance_demos():
         vastu_strictness="high"
     )
     res1 = generate_floor_plan(req1)
-    # A brief the statutory ceiling cannot hold is refused explicitly (audit F01/F02).
+    # A brief the statutory ceiling cannot hold is refused explicitly.
     if res1.status == "failed":
         assert res1.unmet_requirements, "a refusal must name what it could not place"
         assert any(str(w).startswith(("GEN-", "GATE-FAIL")) for w in res1.warnings), res1.warnings
@@ -417,9 +417,9 @@ def test_dissection_acceptance_demos():
     # Demo 2: the ORIGINAL fixture was an 8 m x 8 m plot (64 m²) at 60% coverage.
     # Its 28 m² setback plate cannot host a 14 m² bedroom + 18 m² living room +
     # 9 m² kitchen + bath at any legal width, so the brief is now REFUSED with
-    # the numbers (audit F01/F02) instead of being squashed into an "optimal"
-    # 4-room plan. The 4-room demo runs on a plate that can host it, and the
-    # sub-minimum brief is pinned separately below.
+    # the numbers instead of being squashed into an "optimal" 4-room plan. The
+    # 4-room demo runs on a plate that can host it, and the sub-minimum brief is
+    # pinned separately below.
     req2_small = FloorPlanRequest(
         plot_width_m=8.0,
         plot_depth_m=8.0,
@@ -439,13 +439,18 @@ def test_dissection_acceptance_demos():
         vastu_strictness="high"
     )
     res2 = generate_floor_plan(req2)
-    # Status is DERIVED from unmet requirements / gate warns (audit F21): a plan
+    # Status is DERIVED from unmet requirements / gate warns: a plan
     # carrying a warning can no longer claim "optimal".
     assert res2.status in ("optimal", "compromise")
     if res2.status == "compromise":
         assert res2.warnings or res2.unmet_requirements
     assert res2.metrics.space_utilization_pct >= 95.0
-    assert len(res2.rectangles.rooms) == 4
+    # Every requested room is drawn; the engine may add the explicit circulation
+    # corridor (the same allowance demo 1 makes), so the count is 4 or 5 - never
+    # fewer than the four that were asked for.
+    drawn_ids = {r.room_id for r in res2.rectangles.rooms}
+    assert {"master_bed", "kitchen", "living", "bath_1"} <= drawn_ids, drawn_ids
+    assert len(res2.rectangles.rooms) in (4, 5), drawn_ids
 
     # Demo 3: 18m x 15m (9 rooms)
     req3 = FloorPlanRequest(
@@ -488,14 +493,14 @@ def test_blueprint_spatial_logic_v11_16x19m():
     )
     res = generate_floor_plan(req)
     if res.status == "failed":
-        # Refused brief (audit F01/F02): the statutory ceiling cannot hold the
+        # Refused brief: the statutory ceiling cannot hold the
         # programme, so the refusal must be explicit - never a squeezed plan.
         assert res.unmet_requirements, "a refusal must name what it could not place"
         assert any(str(w).startswith(("GEN-", "GATE-FAIL")) for w in res.warnings), res.warnings
         return
 
     # 1. Optimal solve status & Rectangles model present
-    # Status is DERIVED from the gate and the unmet ledger (audit F21): a plan
+    # Status is DERIVED from the gate and the unmet ledger: a plan
     # with an advisory WARN cannot claim "optimal".
     _gate = (res.multi_storey.qa_report or {}).get("validation_gate_status")
     _expected = "optimal" if (_gate == "PASS" and not (res.unmet_requirements or [])) else "compromise"
@@ -673,13 +678,13 @@ def test_blueprint_topological_invariants_10x10m_v12():
     )
     res = generate_floor_plan(req)
     if res.status == "failed":
-        # Refused brief (audit F01/F02): the statutory ceiling cannot hold the
+        # Refused brief: the statutory ceiling cannot hold the
         # programme, so the refusal must be explicit - never a squeezed plan.
         assert res.unmet_requirements, "a refusal must name what it could not place"
         assert any(str(w).startswith(("GEN-", "GATE-FAIL")) for w in res.warnings), res.warnings
         return
 
-    # Status is DERIVED from the gate and the unmet ledger (audit F21): a plan
+    # Status is DERIVED from the gate and the unmet ledger: a plan
     # with an advisory WARN cannot claim "optimal".
     _gate = (res.multi_storey.qa_report or {}).get("validation_gate_status")
     _expected = "optimal" if (_gate == "PASS" and not (res.unmet_requirements or [])) else "compromise"
@@ -747,7 +752,7 @@ def test_blueprint_topological_invariants_10x10m_v12():
     # 5. Kitchen: SE corner leaf, area 9-16 m2
     kitch = rooms_by_id["kitchen"]
     # A tightened (legal) plate may push a room below the catalogue band, but
-    # only with an explicit ROOM-MIN disclosure (audit F01/F02).
+    # Only with an explicit ROOM-MIN disclosure.
     if kitch.area_sqm < 9.0 * 0.90:
         assert any(f"ROOM-MIN: {kitch.room_id} " in str(w) for w in res.warnings), (
             f"Kitchen area {kitch.area_sqm} m2 below the 9-16 m2 band without disclosure"
@@ -815,12 +820,12 @@ def test_llm_layout_critic_retry_loop():
     )
     res = generate_floor_plan(req)
     if res.status == "failed":
-        # Refused brief (audit F01/F02): the statutory ceiling cannot hold the
+        # Refused brief: the statutory ceiling cannot hold the
         # programme, so the refusal must be explicit - never a squeezed plan.
         assert res.unmet_requirements, "a refusal must name what it could not place"
         assert any(str(w).startswith(("GEN-", "GATE-FAIL")) for w in res.warnings), res.warnings
         return
-    # F38: asserting the certificate's own flags against itself proved nothing.
+    # Asserting the certificate's own flags against itself proved nothing.
     # Re-derive the forbidden-wall verdict from the EMITTED geometry and the
     # ontology SPACE TYPES (never solver handles), then require the certificate
     # to agree with the independent sweep.
@@ -859,7 +864,7 @@ def test_llm_layout_critic_retry_loop():
     assert _cert["chain_sums_match"] is True
 
     # A certified rule must be backed by a passing flag, and a withheld
-    # certificate must explain itself (audit F16).
+    # Certificate must explain itself.
     _rule_flags = {
         "REL-01": _cert["non_overlap"],
         "REL-02": _cert["zero_forbidden_violations"],
@@ -876,7 +881,7 @@ def test_llm_layout_critic_retry_loop():
     if _cert["is_valid"] is False:
         assert _cert["failures"], "an invalid certificate must state why"
 
-    # The QA rows and the gate must agree (audit F15).
+    # The QA rows and the gate must agree.
     assert res.qa is not None
     assert res.qa.validation_gate_status == _cert["overall_layer_status"]
     assert res.qa.critic == "skipped", "no architect critic ran - it must not claim a pass"

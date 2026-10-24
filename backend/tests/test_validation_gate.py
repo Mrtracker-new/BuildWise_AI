@@ -165,14 +165,14 @@ def test_gate_sheet_layer_table_rendered(typology: str, floors: int):
     """SVG sheets render the full VALIDATION GATE layer table (L1-L15)."""
     b = _solve(typology, floors)
     svg = b.floors[0].svg_blueprint_cad or ""
-    assert "VALIDATION GATE - LAYERS L1-L15" in svg
+    assert "VALIDATION GATE - LAYERS L1-L16" in svg
     for lid in LAYER_IDS:
         assert lid in svg
     for ld in b.validation_gate["layers"]:
         assert ld["status"] in svg  # every status chip rendered
     # Paper theme parity
     svg_paper = b.floors[0].svg_blueprint_paper or ""
-    assert "VALIDATION GATE - LAYERS L1-L15" in svg_paper
+    assert "VALIDATION GATE - LAYERS L1-L16" in svg_paper
 
 
 # =============================================================================
@@ -201,7 +201,7 @@ def test_l15_t2_12x15_keeps_both_kitchens():
 def test_l15_missing_kitchen_fails_gate_and_invalidates_certificate():
     """A plate that cannot hold a kitchen must never silently pass.
 
-    Since audit F01/F02 a brief the statutory ceiling cannot hold is refused
+    Since a brief the statutory ceiling cannot hold is refused
     before a plan exists (no certificate can be issued for geometry that was
     never laid out), so the L15 failure is asserted on the planning path while
     the refusal itself is asserted as the alternative outcome.
@@ -241,7 +241,7 @@ def test_l15_catches_multi_wing_typology_fallback():
         b = SoleGeometryEngine(req).solve()
         if not b.floors:
             # A brief the statutory ceiling cannot host is refused before a
-            # plan exists (audit F01/F02); that refusal must name its reasons,
+            # Plan exists; that refusal must name its reasons,
             # and no certificate can be issued for geometry that was never laid
             # out. The L15 path itself is asserted in the sibling test above.
             assert b.qa_report["status"] == "failed"
@@ -698,7 +698,7 @@ def test_site_sheet_gate_na_with_reasons_and_stamp():
     # Site sheet SVG renders the gate table with N/A reasons
     site_ir = build_drawing_ir.__globals__["build_site_drawing_ir"](site)
     svg = render_svg_from_ir(site_ir)
-    assert "VALIDATION GATE - LAYERS L1-L15" in svg
+    assert "VALIDATION GATE - LAYERS L1-L16" in svg
     assert "N/A" in svg
 
 

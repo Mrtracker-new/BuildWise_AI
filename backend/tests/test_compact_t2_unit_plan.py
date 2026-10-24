@@ -1,7 +1,7 @@
 """Compact T2 plate holds both unit programmes.
 
 The canonical 12 x 15 apartment used to publish two units whose living rooms
-were 11.7 / 14.5 m2 against a 16.0 m2 minimum.  The stage-6 notes proposed
+were 11.7 / 14.5 m2 against a 16.0 m2 minimum. The earlier notes proposed
 stacking the bath over the kitchen to free frontage, but that stack shares a
 wall and is forbidden by the ontology's own HYG-02 law (foul room vs food
 prep).  The plan implemented here survives the law: the stair moves to the
@@ -187,7 +187,7 @@ def test_compact_t2_gate_covers_all_layers_and_programme():
     response = _generate(floors=2)
     gate = response.multi_storey.validation_gate or {}
     layer_ids = [layer.get("layer_id") for layer in gate.get("layers", [])]
-    assert layer_ids == [f"L{i}" for i in range(1, 16)]
+    assert layer_ids == [f"L{i}" for i in range(1, 17)]
     l15 = next(layer for layer in gate["layers"] if layer["layer_id"] == "L15")
     assert l15["status"] == "PASS"
     assert gate.get("overall_status") in ("PASS", "WARN")

@@ -50,6 +50,12 @@ def _spec(room):
     return ONTOLOGY.get_space(room.space_type_id) if room.space_type_id else None
 
 
+def _placed_aspect(room) -> float:
+    """Aspect from the placed rectangle; never trust the stored field."""
+    short = max(min(room.width_m, room.depth_m), 0.01)
+    return max(room.width_m, room.depth_m) / short
+
+
 def _programme_rooms(response):
     for floor in getattr(response.multi_storey, "floors", None) or []:
         for room in floor.rooms or []:
@@ -95,20 +101,24 @@ def test_band_assignment_prefers_a_split_its_rooms_can_fill():
 
 
 def test_every_disproportionate_room_is_disclosed_by_name():
-    """Whatever the band solver cannot place in proportion is named in a warning.
+    """Whatever the law cannot place in proportion is named in a warning.
 
-    Proportion is measured on the final rectangles, so the few rooms a deep band
-    cannot hold are disclosed per room instead of silently shipped.
+     adds two legal outcomes beside ROOM-MAX disclosure: a room is SPLIT
+    inside its band, or it is accepted as a room-listed PROP-ASPECT relaxation.
+    What must never happen is an unlisted room outside its hard band.
     """
     undisclosed = []
     disclosed = 0
+    acted = 0
     for width, depth in ((12.0, 18.0), (13.0, 20.0)):
         for floors_n, rooms in ((1, ROOMS_1), (2, ROOMS_2), (3, ROOMS_2)):
             for profile in PROFILES[1:]:
                 resp = _generate(width, depth, floors_n, profile, rooms)
-                lines = [w for w in (resp.warnings or []) if w.startswith("ROOM-MAX")]
+                lines = [w for w in (resp.warnings or []) if w.startswith(
+                    ("ROOM-MAX", "PROP-HARD", "PROP-ASPECT"))]
+                acted += sum(1 for w in (resp.warnings or []) if w.startswith("PROP-SPLIT"))
                 for _floor, room, spec in _programme_rooms(resp):
-                    if room.aspect_ratio <= spec.max_aspect_ratio + 0.02:
+                    if _placed_aspect(room) <= spec.max_aspect_ratio + 0.02:
                         continue
                     if any(room.room_id in line for line in lines):
                         disclosed += 1
@@ -118,7 +128,9 @@ def test_every_disproportionate_room_is_disclosed_by_name():
                              f"{room.width_m}x{room.depth_m}")
                         )
     assert not undisclosed, undisclosed[:6]
-    assert disclosed > 0, "expected the matrix to exercise the disclosure path"
+    assert disclosed > 0 or acted > 0, (
+        "expected the matrix to exercise the split, relaxation or disclosure path"
+    )
 
 
 def test_room_max_warning_is_raised_when_the_band_cannot_hold_proportion():
@@ -128,11 +140,41 @@ def test_room_max_warning_is_raised_when_the_band_cannot_hold_proportion():
     offenders = [
         (room.room_id, room.width_m, room.depth_m)
         for _floor, room, spec in _programme_rooms(resp)
-        if room.aspect_ratio > spec.max_aspect_ratio + 0.02
+        if _placed_aspect(room) > spec.max_aspect_ratio + 0.02
     ]
     if offenders:
         assert lines, offenders[:5]
         assert any("band" in line and "proportion" in line for line in lines), lines
+
+
+def test_schema_normalizes_stored_aspect_at_construction():
+    """A portrait room cannot be stored as 0.31:1 and slip a 1:3.25 check."""
+    from app.schemas.multi_floor_plan import MultiFloorRoomRectangle
+
+    room = MultiFloorRoomRectangle(
+        room_id="portrait", room_name="Portrait", floor_index=0,
+        x=0.0, y=0.0, width_m=1.20, depth_m=3.90, area_sqm=4.68,
+        zone="W", aspect_ratio=0.31,
+    )
+    assert room.aspect_ratio == pytest.approx(3.25)
+
+
+def test_stored_aspect_is_orientation_normalized_everywhere():
+    """The schema stores max/min, so a writer cannot hide a stretch as 0.08:1."""
+    mismatches = []
+    narrow = 0
+    for width, depth in ((12.0, 18.0), (18.0, 12.0)):
+        resp = _generate(width, depth, 2, "max_area", ROOMS_2)
+        for floor in getattr(resp.multi_storey, "floors", None) or []:
+            for room in floor.rooms or []:
+                short = max(min(room.width_m, room.depth_m), 0.01)
+                measured = round(max(room.width_m, room.depth_m) / short, 2)
+                if abs(room.aspect_ratio - measured) > 0.02:
+                    mismatches.append((room.room_id, room.aspect_ratio, measured))
+                if room.depth_m > room.width_m:
+                    narrow += 1
+    assert not mismatches, mismatches[:6]
+    assert narrow > 0, "matrix must include portrait rooms to prove orientation is handled"
 
 
 def test_vert01_is_only_claimed_where_the_room_actually_stacks():

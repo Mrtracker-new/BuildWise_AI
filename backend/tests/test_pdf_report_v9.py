@@ -332,8 +332,13 @@ def test_pdf_report_multi_storey_dossier():
     num_pages = len(reader.pages)
     # Minimal payload (1 page) + Sheet 10.0 (dossier incl. universal gate layer
     # table) + the land-economics certificate page (kept together with
-    # the legal advisory so neither orphans) + 4 floor sheets = exactly 8 pages
-    assert num_pages == 8, f"Expected exactly 8 pages (1 base + 7 floorplan pages), got {num_pages}"
+    # the legal advisory so neither orphans) + 4 floor sheets = 8 structural
+    # pages.  This fixture is certified but its plan carries PROP-* advisories,
+    # and those rows now print on page 1 for parity with the in-app Print
+    # Report, so the banner paginates and adds pages. The anti-orphan
+    # intent is checked structurally below: every dossier/floor sheet present
+    # and continuous "Page N of M" footers on every page.
+    assert num_pages >= 8, f"Expected at least 8 structural pages, got {num_pages}"
 
     pages_text = [page.extract_text() for page in reader.pages]
     full_text = "\n--- PAGE ---\n".join(pages_text)

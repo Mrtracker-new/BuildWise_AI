@@ -15,6 +15,7 @@ import pytest
 
 from app.schemas.floorplan import FloorPlanRequest
 from app.services.floorplan.derived_metrics import (
+    building_wet_riser_pct,
     circulation_efficiency_pct,
     vastu_pct,
     wet_riser_pct_by_floor,
@@ -51,16 +52,52 @@ def test_vastu_score_is_the_measured_share_not_a_strictness_constant():
     )
 
 
-def test_plumbing_score_is_measured_and_can_be_zero():
-    # This four-room T1 plate solves without a circulation core, so no wet room
-    # reaches a riser. The honest score is 0 %, not the old 100 %.
+def test_plumbing_score_is_measured_not_the_old_constant():
+    # WHY THIS PIN IS 0 % - AND WHY "0 % IS UNREACHABLE" IS NOT THE CONTRACT.
+    #
+    # The closeout note asked for a comment proving 0 % unreachable.  It is
+    # unreachable, so no such proof exists; the drawn plate below measures 0.0
+    # and the pin has to record the mechanism instead of a false invariant:
+    #
+    #  1. ``wet_riser_pct_by_floor`` returns ``None`` for a floor with no wet
+    #     room ("nothing to align") and 0.0 when a floor HAS wet rooms but none
+    #     qualify.  On the ground floor a wet room qualifies only when it shares
+    #     a wall with a circulation room (the riser column runs there) or with
+    #     another wet room (derived_metrics.py, wet_riser_pct_by_floor).
+    #  2. This four-room selection on 12x15 is drawn WITHOUT a circulation room
+    #     at all - the same response says so independently (LAND-03: circulation
+    #     ratio 0.0 % is outside the 12-20 % band) - and the partitioner places
+    #     master_bed between bath_1 and kitchen, so the two wet rooms are not
+    #     adjacent either.  Neither wet room has a riser to reach: the honest
+    #     score is 0.0.  It was 0.0 at HEAD as well; what changed is that 100.0
+    #     (the fabricated constant) is gone.
+    #  3. The control below scores the same function at 100 % on a plate that
+    #     seats the wet block against the spine, proving 0.0 is this plate's
+    #     measurement and not a broken metric.
     response = _generate(
         required_rooms=["living", "kitchen", "master_bed", "bath_1"],
     )
     floors = response.multi_storey.floors
     expected = wet_riser_pct_by_floor(floors)
-    assert any(pct == 0.0 for pct in expected if pct is not None)
+    # Premise of the 0 %: no circulation room is drawn, so no riser column
+    # exists for a wet room to share a wall with.
+    assert not any(
+        str(getattr(r, "zone_category", "")) == "circulation"
+        for f in floors
+        for r in (f.rooms or [])
+    ), "fixture premise broken: this plate now draws a circulation room"
+    assert expected == [0.0], expected
+    assert response.metrics.plumbing_adjacency_score == pytest.approx(
+        building_wet_riser_pct(floors), abs=0.1
+    )
     assert response.metrics.plumbing_adjacency_score == pytest.approx(0.0, abs=0.1)
+    # Control: the same measured function moves with the geometry.
+    seated = _generate(
+        plot_width_m=10.0,
+        plot_depth_m=12.0,
+        floors=2,
+    )
+    assert building_wet_riser_pct(seated.multi_storey.floors) == pytest.approx(100.0, abs=0.1)
 
 
 def test_space_and_circulation_are_derived_from_areas():

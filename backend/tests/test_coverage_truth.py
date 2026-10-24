@@ -60,7 +60,7 @@ def _request(plot_w: float, plot_d: float) -> FloorPlanRequest:
 
 
 def test_captured_boundary_sets_the_coverage_ceiling_not_the_clamped_bbox():
-    """F01: the 9,661 m² boundary's cap is 5,796 m², never 60x60's 2,160 m².
+    """The 9,661 m² boundary's cap is 5,796 m², never 60x60's 2,160 m².
 
     The request is accepted with the boundary's own bbox (the old schema clamped
     plot_width_m/plot_depth_m to 60 m and answered 422 for the true dims).
@@ -75,7 +75,7 @@ def test_captured_boundary_sets_the_coverage_ceiling_not_the_clamped_bbox():
 
 
 def test_programme_sized_plate_is_far_below_the_large_plot_cap():
-    """F01: a 4-room brief on a hectare is a house, not an 8,632 m² slab."""
+    """A 4-room brief on a hectare is a house, not an 8,632 m² slab."""
     resp = generate_floor_plan(_request(60.0, 60.0))
     floors = resp.multi_storey.floors
     assert floors, "the audited brief must solve"
@@ -87,7 +87,7 @@ def test_programme_sized_plate_is_far_below_the_large_plot_cap():
 
 
 def test_rooms_fill_the_plate_and_dead_corner_stays_under_one_sqm():
-    """F01/F06: the ground floor may not be mostly unassigned plate."""
+    """The ground floor may not be mostly unassigned plate."""
     resp = generate_floor_plan(_request(60.0, 60.0))
     floor = resp.multi_storey.floors[0]
     plate = floor.envelope["area_sqm"]
@@ -99,13 +99,13 @@ def test_rooms_fill_the_plate_and_dead_corner_stays_under_one_sqm():
 
 
 def test_footprint_source_names_the_binding_constraint():
-    """F01: the report says WHY the plate is the size it is."""
+    """The report says WHY the plate is the size it is."""
     resp = generate_floor_plan(_request(60.0, 60.0))
     assert resp.land_economics.footprint_source in ("program", "coverage", "buildable")
 
 
 def test_limited_land_checks_are_surfaced_not_silent():
-    """F06: a failing land check must produce a warning the client can render."""
+    """A failing land check must produce a warning the client can render."""
     # 600 m² plot whose requested plinth used to force a ~2,160 m² plate.
     tiny = PlotPolygonModel(
         vertices=[[-20.0, 0.0], [0.0, 0.0], [0.0, 30.0], [-20.0, 30.0]],
@@ -134,7 +134,7 @@ def test_limited_land_checks_are_surfaced_not_silent():
 
 
 def test_unplaceable_brief_is_refused_with_numbers_and_never_optimal():
-    """F21: an 8 x 8 m plot cannot host 4 rooms at 60 % — refuse, don't pretend."""
+    """An 8 x 8 m plot cannot host 4 rooms at 60 % — refuse, don't pretend."""
     resp = generate_floor_plan(
         FloorPlanRequest(
             plot_width_m=8.0,
@@ -190,8 +190,13 @@ def test_irregular_plate_uses_the_legal_ceiling_not_the_inscribed_rectangle():
     assert any(w.startswith("PLATE-SHORT") for w in resp.warnings), resp.warnings
 
 
-def test_cap_filling_plate_never_rounds_past_the_ceiling():
-    """A plate that fills the cap (2,160 m² on 60x60 @60 %) must not round over it."""
+def test_programme_sized_plate_never_rounds_past_the_ceiling():
+    """A plate on a 60x60 @60 % site must not round over the 2,160 m² cap.
+
+    The cap is a ceiling, not a target: a hectare-scale plot is sized to its
+    programme (LAND-11), so the plate can be far below the cap.  What must
+    never happen is the footprint rounding ABOVE it.
+    """
     resp = generate_floor_plan(
         FloorPlanRequest(
             plot_width_m=60.0,
@@ -204,12 +209,12 @@ def test_cap_filling_plate_never_rounds_past_the_ceiling():
     cap = resp.land_economics.coverage_limit_area_sqm
     assert cap == pytest.approx(2160.0, abs=0.5)
     plate = resp.multi_storey.floors[0].envelope["area_sqm"]
-    assert plate <= cap, (plate, cap)
-    assert 60.0 * 60.0 * 0.6 - 5.0 <= plate <= 60.0 * 60.0 * 0.6, plate
+    assert 0.0 < plate <= cap, (plate, cap)
+    assert resp.land_economics.footprint_area_sqm == pytest.approx(plate, abs=0.5)
 
 
 def test_site_preview_applies_the_coverage_ratio_it_is_given():
-    """F18: /api/site/preview must cap the preview footprint by the same ratio.
+    """/api/site/preview must cap the preview footprint by the same ratio.
 
     The HUD used to show an unconstrained inscribed footprint (89 %) beside a
     60 % statutory cap because App.tsx never sent the ratio. The ratio now

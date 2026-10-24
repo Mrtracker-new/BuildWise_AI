@@ -370,9 +370,9 @@ def test_refusal_carries_full_fail_gate():
 
     gate = building.validation_gate or {}
     layers = gate.get("layers") or []
-    assert len(layers) == 15, f"refusal gate must keep the L1-L15 contract, got {len(layers)}"
+    assert len(layers) == 16, f"refusal gate must keep the L1-L16 contract, got {len(layers)}"
     assert gate.get("overall_status") == "FAIL", "a refusal is never a pass"
-    assert [l["layer_id"] for l in layers] == [f"L{i}" for i in range(1, 16)]
+    assert [l["layer_id"] for l in layers] == [f"L{i}" for i in range(1, 17)]
 
     passing = [l["layer_id"] for l in layers if l["status"] == "PASS"]
     assert passing == [], f"refusal fabricated passing layers: {passing}"
