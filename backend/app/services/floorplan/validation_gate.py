@@ -21,6 +21,8 @@ Layer map:
   L13 Accessibility                     (engineering)
   L14 Fire & egress                     (engineering)
   L15 Programme completeness            (essential rooms present per typology/unit)
+  L16 Proportion & surplus              (hard bands, listed relaxations, ceiling
+                                         overage, void ratio, surplus routing)
 
 Overall status = worst layer (FAIL > WARN > N/A > PASS). Concretely:
   overall = FAIL if any FAIL
@@ -28,7 +30,7 @@ Overall status = worst layer (FAIL > WARN > N/A > PASS). Concretely:
   else PASS
 A layer that genuinely does not apply is recorded N/A WITH AN EXPLICIT REASON
 and never counts as a pass. A layer whose evaluator DID NOT RUN is a FAIL: an
-absent evaluator is not evidence of compliance (audit F20).
+absent evaluator is not evidence of compliance.
 """
 
 import logging
@@ -41,7 +43,7 @@ logger = logging.getLogger("buildwise.validation_gate")
 
 # Canonical layer order rendered on sheets and UI panels.
 LAYER_IDS: List[str] = ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8",
-                        "L9", "L10", "L11", "L12", "L13", "L14", "L15"]
+                        "L9", "L10", "L11", "L12", "L13", "L14", "L15", "L16"]
 
 LAYER_TITLES: Dict[str, str] = {
     "L1": "Geometry & Statutory",
@@ -59,6 +61,7 @@ LAYER_TITLES: Dict[str, str] = {
     "L13": "Accessibility",
     "L14": "Fire & Egress",
     "L15": "Programme Completeness",
+    "L16": "Proportion & Surplus",
 }
 
 STATUS_ORDER = {"PASS": 0, "N/A": 1, "WARN": 2, "FAIL": 3}
@@ -68,7 +71,7 @@ HARD_FAIL_LAYERS = {"L1", "L2", "L8", "L14", "L15"}
 
 # Land-economics checks that a plan can DISPROVE (geometry/statutory facts).
 # These are L1-bearing: a PASS gate beside a failing land certificate is a
-# contradiction (audit F05). Planning ratios are advisory (WARN), not provable
+# Contradiction. Planning ratios are advisory (WARN), not provable
 # violations of a law.
 _LAND_ADVISORY_CHECKS = {"circulation_within_12_20", "footprint_utilization_90"}
 
@@ -124,7 +127,7 @@ def crash_status(layer_id: str) -> str:
     A crashed evaluator verified nothing. For a hard layer that is a FAIL (the
     plan cannot be certified on an unverified claim); for an advisory layer the
     gate records a WARN so the crash stays visible without voiding a geometry
-    the other layers did verify (audit F20).
+    the other layers did verify.
     """
     return "FAIL" if layer_id in HARD_FAIL_LAYERS else "WARN"
 
@@ -152,7 +155,7 @@ def ensure_all_layers(layers: List[LayerStatus]) -> List[LayerStatus]:
 
     The gate may NEVER return fewer layers than its contract declares: a
     missing evaluator is an unverified claim, and an unverified claim fails
-    (audit F20).
+    .
     """
     present = {l.layer_id for l in layers}
     for lid in LAYER_IDS:
@@ -387,6 +390,17 @@ def build_gate_layers(
                      and cert.vertical_stack_valid and cert.core_continuity_valid
                      and cert.no_wet_over_terrace_valid and cert.cores_stack_aligned)
     l1_findings: List[str] = []
+    # ASPECT. A listed relaxation is not a pass on the band: the
+    # gate WARNs and names it.  An UNLISTED breach (beyond the declared cap)
+    # sets the certificate's own aspect_ratios_satisfied flag to False, so it is
+    # reported here as well; it does not by itself refuse the plan, because the
+    # refusal path is reserved for infeasible briefs (a drawn, disclosed breach
+    # Is still a usable sheet). Making this gate-bearing is.
+    if not cert.aspect_ratios_satisfied:
+        l1_findings.append(
+            "Room aspect ratio exceeds the ontology hard band and is not a declared "
+            "relaxation"
+        )
     if not cert.non_overlap:
         l1_findings.append("Room footprint overlap detected (>= 0.05 sqm)")
     if not cert.containment:
@@ -408,8 +422,23 @@ def build_gate_layers(
     min_dim_note = "" if cert.min_dimensions_satisfied else (
         "NBC minimum dimensions met under bounded degradation tolerance")
     aspect_note = "" if cert.aspect_ratios_satisfied else (
-        "Room aspect ratios met under bounded degradation tolerance (industrial bays exempt)")
-    l1_advisory = (not cert.min_dimensions_satisfied) or (not cert.aspect_ratios_satisfied)
+        "Room aspect ratio outside the ontology hard band (industrial bays exempt)")
+    # Listed aspect relaxations are not a pass on the band: they are accepted
+    # exceptions.  The gate WARNs and names them so a reader never mistakes a
+    # declared relaxation for a satisfied invariant.
+    _aspect_relaxations = list(
+        (getattr(cert, "details", {}) or {}).get("declared_aspect_relaxations") or []
+    )
+    if _aspect_relaxations:
+        l1_findings.append(
+            f"{len(_aspect_relaxations)} aspect relaxation(s) declared and listed in the "
+            "certificate; the hard band was not met for those rooms"
+        )
+    l1_advisory = (
+        (not cert.min_dimensions_satisfied)
+        or (not cert.aspect_ratios_satisfied)
+        or bool(_aspect_relaxations)
+    )
     l1_status = "FAIL" if l1_broken else ("PASS" if not l1_advisory else "WARN")
     # Zero-silent-skips: chain-sum precision must be verifiable. A
     # solved floor without serialized dimension chains is a silent skip and
@@ -423,7 +452,7 @@ def build_gate_layers(
             + ", ".join(str(z) for z in chain_audit["floors_without_chains"])
             + " - dimension set-out not machine-verified (silent-skip guard)"
         )
-    # LAND IS GATE-BEARING (audit F05): the space-efficiency certificate used
+    # LAND IS GATE-BEARING: the space-efficiency certificate used
     # to be a side panel, so a generation could report PASS beside a FAILing
     # land certificate. Geometry/statutory land checks now decide L1.
     _land_fail: List[str] = []
@@ -443,7 +472,7 @@ def build_gate_layers(
             # are disclosed by name, the gate WARNs, and the status is
             # "compromise". Only a material deficit (>15 %, the same threshold
             # that refuses a collapsed brief) is a land FAIL. The certificate
-            # itself still reports the check as failed either way (audit F05).
+            # Itself still reports the check as failed either way.
             _small_deficit = (
                 _name == "program_fits_footprint" and 0.0 < _deficit_ratio <= 0.15
             )
@@ -471,7 +500,8 @@ def build_gate_layers(
     layers.append(make_layer(
         "L1", l1_status,
         summary=("All geometric & statutory invariants hold" if l1_status == "PASS"
-                 else (min_dim_note or aspect_note or "Degraded but within tolerances"))
+                 else (min_dim_note or aspect_note
+                       or "Declared, certificate-listed relaxations accepted"))
         + (f"; {n_chains} dimension chains verified within 1mm" if n_chains else "")
         + _land_note,
         findings=l1_findings,
@@ -704,6 +734,183 @@ def build_gate_layers(
                                  findings=["Essential rooms could not be verified"],
                                  citation="NBC 2016 Part 3 occupancy requirements"))
 
+    # ---------------------------------------------------------------- L16
+    # PROPORTION & SURPLUS (Refusal and disclosure).
+    #
+    # The ontology declares a hard aspect band, a planning ceiling and a
+    # relaxation cap.  This layer is where a reader can SEE the result per room,
+    # and it is gate-bearing: an unlisted breach beyond the cap FAILs the layer
+    # (the plan is still drawn and exported - refusal is reserved for statutory,
+    # egress and stacking failures), while listed relaxations and ceiling
+    # overages WARN.
+    try:
+        from app.services.floorplan.ontology import ONTOLOGY
+        from app.services.floorplan.identity import space_type_of
+        from app.services.floorplan.proportion_law import ASPECT_RELAXATION_CAP
+
+        _aspect_exempt = {"commercial_suite", "industrial_bay"}
+        rows: List[Dict[str, Any]] = []
+        beyond: List[str] = []
+        relaxed: List[Dict[str, Any]] = []
+        ceilings: List[Dict[str, Any]] = []
+        checked = 0
+        for _fl in floors:
+            for _r in _fl.rooms:
+                if _r.zone_category in ("circulation", "terrace") or _r.zone_category == "industrial_bay":
+                    continue
+                _sid = space_type_of(_r, typology) or _r.room_id
+                _spec = ONTOLOGY.get_space(_sid)
+                if _spec is None or _spec.id in _aspect_exempt:
+                    continue
+                _w, _d = float(_r.width_m), float(_r.depth_m)
+                if _w <= 0.05 or _d <= 0.05:
+                    continue
+                checked += 1
+                _aspect = max(_w, _d) / min(_w, _d)
+                _band = float(_spec.max_aspect_ratio or 0.0)
+                _rel = next(
+                    (rel for rel in (_r.relaxations or [])
+                     if str(rel.get("rule_id")) == "PROP-ASPECT"),
+                    None,
+                )
+                _justified = next(
+                    (rel for rel in (_r.relaxations or [])
+                     if str(rel.get("rule_id")) == "PROP-PLATE-CAP"),
+                    None,
+                )
+                _over = _band > 0.0 and _aspect > _band + 0.02
+                _beyond_cap = _over and _aspect > _band * ASPECT_RELAXATION_CAP + 0.02
+                _ceiling = float(_spec.area_ceiling_sqm or 0.0)
+                _area = float(_r.area_sqm)
+                _ceiling_over = _ceiling > 0.0 and _area > _ceiling + 0.05
+                rows.append({
+                    "floor": int(_fl.floor_index),
+                    "room_id": _r.room_id,
+                    "space_type_id": _spec.id,
+                    "measured_aspect": round(_aspect, 2),
+                    "band": round(_band, 2),
+                    "band_pct": round(100.0 * _aspect / _band, 1) if _band else None,
+                    "inside_band": not _over,
+                    "relaxation_rule": (str(_rel.get("rule_id")) if _rel else None),
+                    "relaxation_factor": (
+                        round(_aspect / _band, 2) if (_rel and _band) else None
+                    ),
+                    "area_sqm": round(_area, 2),
+                    "area_ceiling_sqm": round(_ceiling, 2) if _ceiling else None,
+                    "ceiling_overage_sqm": (
+                        round(_area - _ceiling, 2) if _ceiling_over else 0.0
+                    ),
+                    "beyond_cap_justification": (
+                        str(_justified.get("rationale")) if _justified else None
+                    ),
+                })
+                if _rel is not None:
+                    relaxed.append({
+                        "room": _r.room_id, "floor": int(_fl.floor_index),
+                        "rule_id": str(_rel.get("rule_id")),
+                        "measured": round(_aspect, 2), "band": round(_band, 2),
+                    })
+                if _beyond_cap:
+                    beyond.append(
+                        f"F{_fl.floor_index} {_r.room_id}: 1:{_aspect:.2f} against a "
+                        f"1:{_band:.2f} band ({_aspect / max(_band, 0.01):.2f}x, cap "
+                        f"{ASPECT_RELAXATION_CAP:.2f}x) and no listed relaxation"
+                    )
+                if _ceiling_over:
+                    ceilings.append({
+                        "room": _r.room_id, "floor": int(_fl.floor_index),
+                        "area_sqm": round(_area, 2), "ceiling_sqm": round(_ceiling, 2),
+                        "overage_sqm": round(_area - _ceiling, 2),
+                        "rationale": "planning ceiling, disclosed not stretched",
+                    })
+
+        _dead = float(getattr(land_cert, "dead_corner_area_sqm", 0.0) or 0.0)
+        _fp_area = float(getattr(land_cert, "footprint_area_sqm", 0.0) or 0.0)
+        _void_ratio = round(100.0 * _dead / _fp_area, 2) if _fp_area > 0.0 else 0.0
+        _justified_rows = [
+            {"room": r["room_id"], "floor": r["floor"],
+             "measured": r["measured_aspect"], "band": r["band"],
+             "reason": r["beyond_cap_justification"]}
+            for r in rows if r.get("beyond_cap_justification")
+        ]
+        _surplus = {
+            "outdoor_sqm": round(float(getattr(land_cert, "outdoor_area_sqm", 0.0) or 0.0), 2),
+            "anonymous_outdoor_sqm": round(
+                float(getattr(land_cert, "anonymous_outdoor_area_sqm", 0.0) or 0.0), 2
+            ),
+            "residual_slivers": int(getattr(land_cert, "sliver_count", 0) or 0),
+            "absorbed_slivers": int(getattr(land_cert, "absorbed_residual_count", 0) or 0),
+            "sliver_labels": [
+                str(getattr(s, "absorbed_as", "") or "unassigned")
+                for s in (getattr(land_cert, "slivers", []) or [])[:12]
+            ],
+            "dead_corner_sqm": round(_dead, 2),
+            "void_ratio_pct": _void_ratio,
+        }
+
+        if checked == 0:
+            layers.append(make_layer(
+                "L16", "N/A",
+                summary="No proportion-governed room on this plan (circulation/terrace only)",
+                reason="every room is exempt from the room-band law",
+                citation="NBC 2016 Part 3; Neufert Architects' Data (bands); ontology PROPORTION_BANDS",
+            ))
+        else:
+            _status = "FAIL" if beyond else ("WARN" if (relaxed or ceilings) else "PASS")
+            _findings: List[str] = []
+            _findings.extend(beyond)
+            if relaxed:
+                _findings.append(
+                    f"{len(relaxed)} listed aspect relaxation(s): "
+                    + ", ".join(f"{r['room']} {r['measured']:.2f}/{r['band']:.2f}" for r in relaxed[:8])
+                )
+            if ceilings:
+                _findings.append(
+                    f"{len(ceilings)} room(s) over their planning ceiling: "
+                    + ", ".join(f"{c['room']} +{c['overage_sqm']:.1f} m²" for c in ceilings[:8])
+                )
+            if _surplus["anonymous_outdoor_sqm"] > 0.5:
+                _findings.append(
+                    f"{_surplus['anonymous_outdoor_sqm']:.1f} m² of outdoor area is unlabelled"
+                )
+            layers.append(make_layer(
+                "L16", _status,
+                summary=(
+                    f"{checked - len(relaxed) - len(beyond)}/{checked} rooms inside the hard band; "
+                    f"{len(relaxed)} listed relaxation(s); {len(beyond)} beyond the "
+                    f"{ASPECT_RELAXATION_CAP:.2f}x cap; {len(ceilings)} ceiling overage(s); "
+                    f"void {_void_ratio:.1f}% of the plate"
+                ),
+                reason=None,
+                findings=_findings,
+                citation=(
+                    "ontology PROPORTION_BANDS + PROPORTION_POLICY; NBC 2016 Part 3; "
+                    "Neufert Architects' Data (ideal/hard bands); planning ceilings are "
+                    "declared bounds, not statutory maxima"
+                ),
+                details={
+                    "rooms_checked": checked,
+                    "rooms": rows,
+                    "relaxations": relaxed,
+                    "beyond_cap": beyond,
+                    "justified_beyond_cap": _justified_rows,
+                    "ceiling_overages": ceilings,
+                    "surplus": _surplus,
+                    "relaxation_cap": ASPECT_RELAXATION_CAP,
+                    "refusal_policy": (
+                        "A proportion FAIL is drawn and exported with a FAIL "
+                        "stamp; refusal is reserved for statutory/egress/stacking failures"
+                    ),
+                },
+            ))
+    except Exception as exc:
+        logger.exception("L16 proportion layer crashed")
+        layers.append(make_layer(
+            "L16", "FAIL",
+            summary=f"Layer evaluation error: {exc} - proportion not verified",
+            findings=["Evaluator crashed; the proportion law is unverified"],
+        ))
+
     # Enforce completeness: every declared layer is present or explicitly FAILs.
     layers = ensure_all_layers(layers)
 
@@ -717,7 +924,7 @@ def refusal_gate_report(reason: str) -> Dict[str, Any]:
     A refusal is a verdict, not an absence: the caller must still receive the
     full L1-L15 contract, every layer explicitly N/A WITH the refusal reason,
     and an overall FAIL. Emitting no gate at all let a refused plan look like
-    a plan whose gate had never been asked for (audit F20: absence is not a
+    a plan whose gate had never been asked for (: absence is not a
     pass), and gave the certificate/UI surfaces nothing to render.
     """
     note = (str(reason or "").strip() or "Generation refused before any geometry was solved")

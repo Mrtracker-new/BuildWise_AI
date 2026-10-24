@@ -79,7 +79,7 @@ def _interior_dead_area(
     """Ground-floor footprint area not covered by any placed room, >= 1 m².
 
     Room coordinates are plate-local; the site footprint is setback-anchored.
-    Translate before measuring, exactly as the Phase A harness does.
+    Translate before measuring, exactly as the baseline harness does.
     """
     rooms = [r for r in getattr(ground_floor, "rooms", []) or [] if r.zone_category != "terrace"]
     if not rooms:
@@ -168,6 +168,7 @@ def repair_interior_dead_corners(
     envelope: Dict[str, float],
     *,
     plate_polygon: Optional[Polygon] = None,
+    reserved_polygons: Optional[Sequence[Polygon]] = None,
     threshold_m2: float = RESIDUAL_THRESHOLD_M2,
     max_passes: int = 4,
 ) -> List[str]:
@@ -194,6 +195,12 @@ def repair_interior_dead_corners(
             return logs
         room_polys = [box(r.x, r.y, r.x + r.width_m, r.y + r.depth_m) for r in active]
         dead = plate.difference(unary_union(room_polys))
+        # Reserved bands (open-to-sky courts, shafts, terraces) are already
+        # *assigned* space, not a dead corner: exclude them before repairing.
+        if reserved_polygons:
+            _reserved = [p for p in reserved_polygons if p is not None and not p.is_empty]
+            if _reserved:
+                dead = dead.difference(unary_union(_reserved))
         if dead.is_empty:
             return logs
 
@@ -218,13 +225,18 @@ def repair_interior_dead_corners(
                 in_y = room.y >= miny - 0.02 and ry2 <= maxy + 0.02
                 in_x = room.x >= minx - 0.02 and rx2 <= maxx + 0.02
                 # Aspect limits come from the room's SPACE TYPE, not its solver
-                # handle, which resolves to nothing for most generated rooms
-                # (audit F03).
+                # handle, which resolves to nothing for most generated rooms.
                 from app.services.floorplan.identity import space_type_of
                 spec = ONTOLOGY.get_space(space_type_of(room) or room.room_id)
-                # Match the certificate's own tolerance so absorbing a strip can
-                # never be the reason a previously valid plate becomes invalid.
-                max_ar = (spec.max_aspect_ratio if spec is not None else 3.0) * 1.30
+                # Hard ontology bands only.  The old 1.30 tolerance let a repair
+                # push a room past its declared aspect band, so the certificate
+                # passed because the band had been widened, not because the plan
+                # was right.
+                max_ar = spec.max_aspect_ratio if spec is not None else 3.0
+                declared_min_w = (spec.min_width_m if spec is not None else 0.0) or 0.0
+                # The ontology declares one clear-width minimum (the short
+                # side); it applies to either axis of the grown room.
+                declared_min_d = declared_min_w
                 max_w_by_ar = max_ar * room.depth_m
                 max_d_by_ar = max_ar * room.width_m
                 candidates = []
@@ -247,6 +259,12 @@ def repair_interior_dead_corners(
                 for direction, new_x, new_y, new_w, new_d in candidates:
                     expanded = box(new_x, new_y, new_x + new_w, new_y + new_d)
                     if not plate_bounds.contains(expanded):
+                        continue
+                    # The grown room must still satisfy the ontology's declared
+                    # minimum clear width/depth for its own space type.  A splayed
+                    # or oversized bay is not repaired by making its short side
+                    # smaller than a door swing.
+                    if new_w + 1e-6 < declared_min_w or new_d + 1e-6 < declared_min_d:
                         continue
                     added = expanded.area - room.width_m * room.depth_m
                     collision = False
@@ -450,7 +468,7 @@ def compute_land_economics(
         "furniture_fit": furniture_fit is None or furniture_fit >= 80.0,
     }
 
-    # NO SILENT BREACH (audit F06): every failed check names itself in the
+    # NO SILENT BREACH: every failed check names itself in the
     # surfaced warnings. A check that can fail silently is a check the reader
     # cannot audit. Codes already emitted above (LAND-01/03/05) are not repeated.
     _check_messages = {
