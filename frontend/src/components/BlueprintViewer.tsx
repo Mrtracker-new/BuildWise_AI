@@ -7,6 +7,7 @@ import { useDesign } from '../design';
 import { frontageChipText, polygonChipText } from '../services/sheetTruth';
 import { isGhostOverlayVisible, patchGhostOverlayDom, sanitizeBlueprintSvg } from './report/svgSanitize';
 import { ECS_DISCLOSURE } from './report/termDisclosures';
+import { PlanVerdictChip } from './report/PlanVerdictChip';
 import {
   formatProgrammeCounts,
   generatedTypologyMatches,
@@ -308,7 +309,7 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
   );
 
   /**
-   * GHOST FLIP IS NOT A RE-INJECT (D-LT).
+   * GHOST FLIP IS NOT A RE-INJECT (the ghost-flip rule).
    *
    * The overlay's visibility is already decided by a rule inside the injected
    * `<style>` and mirrored by the `data-ghost-overlay` attribute, so a toggle is
@@ -795,6 +796,13 @@ export const BlueprintViewer: React.FC<BlueprintViewerProps> = ({
           </div>
         </div>
         <div className="flex items-center gap-1.5 flex-wrap w-full sm:w-auto min-w-0">
+          {/* Refusal: a withheld certificate is a header fact, not a detail
+              buried in the QA panel.  The plan is still drawn and exported;
+              the chip makes sure it is never mistaken for certified. */}
+          <PlanVerdictChip
+            isValid={multiStorey?.mathematical_certificate?.is_valid}
+            gateStatus={multiStorey?.validation_gate?.overall_status}
+          />
           {isStale && (
             <span
               data-testid="stale-plan-chip"

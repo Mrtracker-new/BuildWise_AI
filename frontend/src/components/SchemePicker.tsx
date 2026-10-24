@@ -3,7 +3,7 @@ import type { SchemeAlternative } from '../services/types';
 import { Icon } from './Icon';
 
 /**
- * Scheme picker (audit F09).
+ * Scheme picker.
  *
  * The three profiles are alternatives the solver already scored. Choosing one
  * re-solves the plate with that profile's weights - it does not merely relabel
@@ -31,6 +31,8 @@ interface SchemePickerProps {
   selectedSchemeId?: string | null;
   selectionStatus?: SchemeSelectionStatus;
   pendingProfile?: string | null;
+  /** Backend disclosure when the plate/typology has only one valid layout. */
+  disclosure?: string | null;
   onSelect: (schemeId: string) => void;
   disabled?: boolean;
 }
@@ -40,6 +42,7 @@ export const SchemePicker: React.FC<SchemePickerProps> = ({
   selectedSchemeId,
   selectionStatus = 'unselected',
   pendingProfile = null,
+  disclosure = null,
   onSelect,
   disabled = false,
 }) => {
@@ -112,7 +115,16 @@ export const SchemePicker: React.FC<SchemePickerProps> = ({
         )}
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+      {disclosure && (
+        <p
+          data-testid="scheme-single-disclosure"
+          className="text-[10.5px] leading-snug text-[var(--text-2)]"
+        >
+          {disclosure}
+        </p>
+      )}
+
+      <div className={`grid grid-cols-1 ${list.length > 1 ? 'sm:grid-cols-3' : ''} gap-2`}>
         {list.map((alt) => {
           const isSelected = alt.scheme_id === selectedSchemeId;
           const isPending = pendingProfile === alt.scheme_id;
@@ -157,6 +169,12 @@ export const SchemePicker: React.FC<SchemePickerProps> = ({
                 <span>Daylight {fmt(alt.metrics?.daylight_score)}</span>
                 <span>Vastu {fmt(alt.metrics?.vastu_score)}</span>
                 <span>Circ {fmt(alt.metrics?.circulation_ratio_pct)}%</span>
+                {/* Disclosure: proportion and furniture fit are scheme
+                    deltas, not a hidden score component. */}
+                <span className={(alt.metrics?.aspect_violations ?? 0) > 0 ? 'text-[var(--semantic-amber-ink)]' : ''}>
+                  Aspect {fmt(alt.metrics?.aspect_violations)}
+                </span>
+                <span>Furniture {fmt(alt.metrics?.furniture_fit_pct)}%</span>
               </div>
               {(alt.metrics?.program_deficit_sqm ?? 0) > 0.05 && (
                 <div className="text-[10px] text-[var(--semantic-amber-ink)]">

@@ -5,7 +5,7 @@ import { Tooltip } from '../../design/primitives';
 import { groupGateLayers, qaRowText, type GateLayer } from '../../services/validationGateUI';
 
 /**
- * SINGLE GATE RENDERER (audit F28).
+ * SINGLE GATE RENDERER.
  * ---------------------------------------------------------------------------
  * Every QA/gate surface — the report sheet and the generator card — renders
  * through this component. Content rules live in validationGateUI so the rows,
@@ -14,7 +14,7 @@ import { groupGateLayers, qaRowText, type GateLayer } from '../../services/valid
  *   - every layer renders a row; N/A rows carry their explicit reason,
  *   - WARN layers surface as chips (never a bare "Passed (0 violations)"),
  *   - a gate missing canonical layers is itself flagged,
- *   - no certificate value is printed without a derived source (F04): the
+ * - no certificate value is printed without a derived source: the
  *     relaxation claim only renders when the caller passes the real count.
  */
 interface CertificatePanelProps {
@@ -152,6 +152,118 @@ export const CertificatePanel: React.FC<CertificatePanelProps> = ({
           ))}
         </div>
       )}
+
+      {(() => {
+        // PROPORTION layer evidence (Disclosure): the layer row alone is a
+        // verdict; the reader must be able to see WHICH room is over its band,
+        // by how much, whether it is a listed relaxation, and where surplus went.
+        const l16 = gate.layers?.find((l) => l.layer_id === 'L16');
+        const d = (l16?.details ?? {}) as Record<string, any>;
+        const rooms: Array<Record<string, any>> = Array.isArray(d.rooms) ? d.rooms : [];
+        if (!rooms.length) return null;
+        const over = rooms.filter((r) => r.inside_band === false);
+        const surplus = d.surplus ?? {};
+        return (
+          <details
+            className="rounded-[8px] border border-[var(--hairline)] bg-[var(--fill)]/40 px-2.5 py-2"
+            data-testid="proportion-layer"
+            open={isSheet ? undefined : false}
+          >
+            <summary className="text-[11px] font-semibold text-[var(--text-2)] cursor-pointer select-none">
+              L16 Proportion &amp; Surplus — {rooms.length - over.length}/{rooms.length} rooms inside band
+            </summary>
+            <div className="mt-2 space-y-2 min-w-0">
+              <div className="flex flex-wrap gap-1.5 text-[10px] tabular-nums">
+                <span className="px-1.5 py-0.5 rounded bg-[var(--fill)] text-[var(--text-2)]">
+                  {d.relaxations?.length ?? 0} listed relaxation(s)
+                </span>
+                <span className={`px-1.5 py-0.5 rounded ${(d.beyond_cap?.length ?? 0) > 0 ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300' : 'bg-[var(--fill)] text-[var(--text-2)]'}`}>
+                  {d.beyond_cap?.length ?? 0} beyond {String(d.relaxation_cap ?? 1.4)}x cap
+                </span>
+                <span className="px-1.5 py-0.5 rounded bg-[var(--fill)] text-[var(--text-2)]">
+                  {d.ceiling_overages?.length ?? 0} ceiling overage(s)
+                </span>
+                <span className="px-1.5 py-0.5 rounded bg-[var(--fill)] text-[var(--text-2)]">
+                  void {Number(surplus.void_ratio_pct ?? 0).toFixed(1)}%
+                </span>
+              </div>
+              {rooms.length > 0 && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[10px] tabular-nums" data-testid="proportion-rooms">
+                    <thead>
+                      <tr className="text-[var(--text-3)] text-left">
+                        <th className="font-medium py-0.5 pr-2">Room</th>
+                        <th className="font-medium py-0.5 pr-2">F</th>
+                        <th className="font-medium py-0.5 pr-2">Measured</th>
+                        <th className="font-medium py-0.5 pr-2">Band</th>
+                        <th className="font-medium py-0.5 pr-2">Band %</th>
+                        <th className="font-medium py-0.5 pr-2">Status</th>
+                        <th className="font-medium py-0.5">Relaxation</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rooms.slice(0, 40).map((r, i) => (
+                        <tr key={`${i}:${r.room_id}`} className="border-t border-[var(--hairline)]">
+                          <td className="py-0.5 pr-2 text-[var(--text-1)] truncate max-w-[9rem]" title={r.room_id}>{r.room_id}</td>
+                          <td className="py-0.5 pr-2 text-[var(--text-3)]">{r.floor}</td>
+                          <td className="py-0.5 pr-2">1:{Number(r.measured_aspect).toFixed(2)}</td>
+                          <td className="py-0.5 pr-2">1:{Number(r.band).toFixed(2)}</td>
+                          <td className={`py-0.5 pr-2 font-semibold ${Number(r.band_pct) > 140 ? 'text-[var(--semantic-red-ink)]' : Number(r.band_pct) > 100 ? 'text-[var(--semantic-amber-ink)]' : 'text-[var(--text-2)]'}`}>
+                            {Number(r.band_pct).toFixed(0)}%
+                          </td>
+                          <td className="py-0.5 pr-2">
+                            {r.inside_band
+                              ? 'inside'
+                              : r.beyond_cap_justification
+                                ? 'justified'
+                                : 'outside'}
+                          </td>
+                          <td className="py-0.5 text-[var(--text-3)]">
+                            {r.relaxation_rule
+                              ? `${r.relaxation_rule} @ ${Number(r.relaxation_factor).toFixed(2)}x`
+                              : r.beyond_cap_justification
+                                ? 'PROP-PLATE-CAP (justified)'
+                                : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {(d.ceiling_overages?.length ?? 0) > 0 && (
+                <ul className="text-[10px] text-[var(--text-3)] leading-snug space-y-0.5" data-testid="proportion-ceilings">
+                  {d.ceiling_overages.slice(0, 8).map((c: Record<string, any>, i: number) => (
+                    <li key={`${i}:${c.room}`}>
+                      Ceiling overage: <span className="text-[var(--text-2)]">{c.room}</span> is{' '}
+                      {Number(c.area_sqm).toFixed(1)} m² against a {Number(c.ceiling_sqm).toFixed(1)} m²
+                      planning ceiling (+{Number(c.overage_sqm).toFixed(1)} m², disclosed not stretched)
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-[10px] text-[var(--text-3)] leading-snug">
+                Surplus routing:{' '}
+                {[
+                  Number(surplus.outdoor_sqm ?? 0) > 0 ? `outdoor ${Number(surplus.outdoor_sqm).toFixed(1)} m²` : null,
+                  Number(surplus.anonymous_outdoor_sqm ?? 0) > 0
+                    ? `${Number(surplus.anonymous_outdoor_sqm).toFixed(1)} m² unlabelled`
+                    : null,
+                  Number(surplus.dead_corner_sqm ?? 0) > 0
+                    ? `dead corner ${Number(surplus.dead_corner_sqm).toFixed(1)} m²`
+                    : null,
+                  Number(surplus.residual_slivers ?? 0) > 0
+                    ? `${surplus.residual_slivers} residual sliver(s), ${Number(surplus.absorbed_slivers ?? 0)} absorbed`
+                    : null,
+                ].filter(Boolean).join(' · ') || 'no residual surplus'}
+                {(surplus.sliver_labels?.length ?? 0) > 0
+                  ? ` — ${surplus.sliver_labels.slice(0, 6).join(' · ')}`
+                  : ''}
+              </p>
+            </div>
+          </details>
+        );
+      })()}
 
       <div className="pt-1 border-t border-[var(--hairline)] text-[11px] text-[var(--text-3)] flex items-center justify-between gap-2 min-w-0">
         <span className="tabular-nums">

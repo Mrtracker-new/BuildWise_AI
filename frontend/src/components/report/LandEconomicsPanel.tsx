@@ -3,7 +3,7 @@ import type { LandEconomicsReport } from '../../services/types';
 import { Icon } from '../Icon';
 
 /**
- * Land economics & space-efficiency panel (audit F08/F10/F24).
+ * Land economics & space-efficiency panel.
  *
  * Every number here is read from the land-economics certificate the gate consumes
  * (L1-bearing), never recomputed in the browser. The certificate's own checks are
@@ -56,6 +56,14 @@ export const LandEconomicsPanel: React.FC<{ report: LandEconomicsReport; classNa
     { label: 'Footprint utilisation', value: `${fmt(report.footprint_utilization_pct)}%` },
   ];
 
+  const plinthGap = report.footprint_area_sqm - report.program_needed_area_m2;
+  const plinthReconciliation =
+    plinthGap < -1.0
+      ? `${fmt(-plinthGap)} m² short — add a storey, reduce the programme, or enlarge the plate`
+      : plinthGap > 1.0
+      ? `${fmt(plinthGap)} m² unbuilt — add a storey, enlarge the units, or accept the smaller plate`
+      : 'balanced';
+
   const rows: Array<[string, string, boolean?]> = [
     ['Footprint source', report.footprint_source],
     ['Footprint area', `${fmt(report.footprint_area_sqm)} m²`],
@@ -66,6 +74,7 @@ export const LandEconomicsPanel: React.FC<{ report: LandEconomicsReport; classNa
       report.program_deficit_sqm > 0.05 ? `${fmt(report.program_deficit_sqm)} m² short` : 'none',
       report.program_deficit_sqm > 0.05,
     ],
+    ['Plinth reconciliation', plinthReconciliation, Math.abs(plinthGap) > 1.0],
     ['Floor area ratio', fmt(report.floor_area_ratio, 2)],
     ['Interior dead corners', `${fmt(report.dead_corner_area_sqm)} m²`],
     ['Anonymous outdoor area', `${fmt(report.anonymous_outdoor_area_sqm)} m²`],

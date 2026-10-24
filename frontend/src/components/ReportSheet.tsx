@@ -10,6 +10,7 @@ import type {
 import { ReportHeroHeader } from './report/ReportHeroHeader';
 import { CollapsibleSection } from './report/CollapsibleSection';
 import { WarningsBanner } from './report/WarningsBanner';
+import { bannerWarnings } from '../services/planWarnings';
 import { ProvenanceFactorCard } from './report/ProvenanceFactorCard';
 import { CertificatePanel } from './report/CertificatePanel';
 import { LandEconomicsPanel } from './report/LandEconomicsPanel';
@@ -274,6 +275,18 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
   // instance is an arrival; a plan the sheet is simply opened onto is not.
   const [planKeyAtMount] = useState<string | null>(planKey);
   const planArrivedNow = planKey !== null && planKey !== planKeyAtMount;
+
+  /**
+   * Disclosure: the banner must read the SAME proportion/programme evidence the
+   * PDF prints. Site-analysis warnings alone left every PROP-* line visible
+   * only inside the generator card, so the report's loudest surface never
+   * switched to the FAIL treatment after a plan was drawn.
+   */
+  const bannerData = React.useMemo(() => {
+    const warnings = bannerWarnings(analysisData, floorPlanData);
+    if (warnings.length === (analysisData.warnings ?? []).length) return analysisData;
+    return { ...analysisData, warnings };
+  }, [analysisData, floorPlanData]);
 
   /**
    * The sheet covers ~96 % of the viewport, map included. Holding the render
@@ -970,8 +983,8 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                     Site Overview
                   </h2>
 
-                  {/* Degradation warnings: persistent amber banner, report top */}
-                  <WarningsBanner data={analysisData} />
+                  {/* Degradation warnings: persistent banner, report top */}
+                  <WarningsBanner data={bannerData} />
 
                   {/* Hero summary: score, identity chips, headline tiles, data health */}
                   <section data-report-section="summary" id="sec-summary" aria-label="Summary">
@@ -1049,7 +1062,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                   </h2>
 
                   {/* Degradation warnings: same banner the Overview tab renders */}
-                  <WarningsBanner data={analysisData} />
+                  <WarningsBanner data={bannerData} />
 
                   {/* 3-col grid with Seismic / Hydrological / Storm side by side */}
                   <section data-report-section="profiles" aria-label="Hazard profiles">
@@ -1434,8 +1447,10 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
                 </p>
               </div>
 
-              {/* Warnings print on page 1, before the first section. */}
-              <WarningsBanner data={analysisData} />
+              {/* Warnings print on page 1, before the first section.  This is
+                  the SAME merged list (analysis + page-1 plan warnings) the
+                  downloaded PDF prints. */}
+              <WarningsBanner data={bannerData} />
 
               {/* SECTION 1: OVERVIEW */}
               <div className="report-print-section space-y-4">

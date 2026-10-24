@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { FloorPlanRequest, FloorPlanResponse, AnalysisParams, FloorPlanParamsSnapshot, PlotPolygon } from '../services/types';
+import { isCriticalPlanWarning } from '../services/planWarnings';
 import { generateFloorPlan } from '../services/api';
 import { BlueprintViewer } from './BlueprintViewer';
 import { Icon } from './Icon';
@@ -116,7 +117,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
 
   /* bbox edges are geodesic floats: subtracting them surfaces the binary
      residue (89.05499999999999) in the read-only width/depth inputs. Round to
-     the centimetre the solver actually consumes (audit F30). */
+     the centimetre the solver actually consumes. */
   const bboxWidth = Math.max(4.0, Math.round((polyMetrics.bbox[2] - polyMetrics.bbox[0]) * 100) / 100);
   const bboxDepth = Math.max(4.0, Math.round((polyMetrics.bbox[3] - polyMetrics.bbox[1]) * 100) / 100);
 
@@ -225,7 +226,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   }, [activeFloors]);
 
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
-  // Scheme profile the user picked (audit F09). Sent with every generation so
+  // Scheme profile the user picked. Sent with every generation so
   // the plate is re-solved with that profile's weights; the picker records what
   // the backend actually did with it.
   const [schemeProfile, setSchemeProfile] = useState<string | null>(null);
@@ -340,7 +341,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   );
 
   // Gate verdicts are read from the response, never re-derived in the UI: the
-  // QA rows and the certificate badge must agree with the gate (audit F15/F16).
+  // QA rows and the certificate badge must agree with the gate.
   const gateReport = floorPlan?.qa?.validation_gate
     || floorPlan?.mathematical_certificate?.details?.validation_gate
     || floorPlan?.multi_storey?.validation_gate;
@@ -351,10 +352,19 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   const gateFailCount = Array.isArray(gateReport?.layers)
     ? gateReport.layers.filter((l: any) => l.status === 'FAIL').length
     : 0;
+  // Refusal and disclosure: a drawn proportion or programme failure must read as
+  // a FAIL on the plan card itself, not as one more amber advisory. The list is
+  // never collapsed: every ROOM-MIN / PROP-* line is named underneath.
+  const planWarningsCritical = Boolean((floorPlan?.warnings ?? []).some((w) =>
+    isCriticalPlanWarning(String(w)),
+  ));
 
-  // Scheme portfolio + what the backend did with the selection (audit F09).
+  // Scheme portfolio + what the backend did with the selection.
   // Read from the response, never inferred from the presence of a profile.
   const schemeAlternatives = floorPlan?.scheme_alternatives ?? [];
+  // A single alternative is honest only when the picker says why (I7/W2).
+  const schemeDisclosure =
+    (floorPlan?.scheme_portfolio?.provenance?.no_material_alternative as string | undefined) ?? null;
   const schemeSnapshot = (floorPlan?.params_snapshot ?? {}) as Record<string, any>;
   const schemeSelectionStatus: SchemeSelectionStatus =
     schemeSnapshot.scheme_selection_status === 'applied'
@@ -367,6 +377,22 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   const schemeFailingLayers: string[] = Array.isArray(schemeSnapshot.scheme_selection_failing_layers)
     ? schemeSnapshot.scheme_selection_failing_layers
     : [];
+
+  // SELECTION-PATH: `params_snapshot` is the only channel that survives a
+  // fallback.  `unmet_requirements` is shared with the natural deficit path and
+  // the warning list is prose, so neither can prove which layout was drawn.
+  // The backend writes these three keys ONLY when it replaced the requested
+  // partition, which means their absence is evidence the selection WAS drawn;
+  // the card must never infer a fallback from a warning line.
+  const selectionFallback =
+    schemeSnapshot.selection_path === 'fallback_legal_programme'
+      ? {
+          reason: String(schemeSnapshot.selection_fallback_reason || '').trim(),
+          unplaced: Array.isArray(schemeSnapshot.selection_unplaced_rooms)
+            ? schemeSnapshot.selection_unplaced_rooms.map((r: unknown) => String(r))
+            : [],
+        }
+      : null;
 
   // Boundary edits (presets / import / vertex edits) live in the map capture
   // capture wizard. The card deep-links instead of owning geometry state.
@@ -401,7 +427,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
     // A captured boundary is authoritative: send its real bounding box. The
     // previous 60 m clamp turned a 108.5 x 89.1 m site into 60 x 60 m while the
     // polygon still described the full plot, so the plate and the site plan
-    // disagreed (audit F01). Coverage, not a dimension clamp, caps the plate.
+    // Disagreed. Coverage, not a dimension clamp, caps the plate.
     const currentWidth = Math.max(4.0, Number(plotWidth) || 10.0);
     const currentDepth = Math.max(4.0, Number(plotDepth) || 12.0);
 
@@ -447,10 +473,10 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
       design_intent: designIntent,
       include_service_layer: includeServiceLayer,
       include_structural_sheet: includeStructuralSheet,
-      // Audit F14: the flag is now part of the client contract. It stays OFF
+      // The flag is now part of the client contract. It stays OFF
       // until the band solver can re-partition a programme-sized plate: with it
       // on, `selected_scheme_id` fell back to `recorded_only` and the scheme
-      // picker stopped re-solving (F09), which is the worse regression.
+      // Picker stopped re-solving, which is the worse regression.
       program_aware_footprint: false,
       // Always ask for the portfolio so the picker can show what the other two
       // profiles would have produced; the geometry itself follows the selection.
@@ -460,6 +486,11 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
 
     try {
       const resp = await generateFloorPlan(req);
+      // Plumbing: the card owns the freshness snapshot and therefore REPLACES
+      // the server's `params_snapshot`. The backend's selection provenance has
+      // to ride across that replacement - dropping it here is exactly what made
+      // a fallback plan read like the requested layout (W4).
+      const backendSnapshot = (resp.params_snapshot ?? {}) as Record<string, any>;
       const snapshot: FloorPlanParamsSnapshot = {
         building_typology: activeTypology,
         floors: activeFloors,
@@ -482,8 +513,17 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
         include_service_layer: req.include_service_layer,
         include_structural_sheet: req.include_structural_sheet,
         selected_scheme_id: req.selected_scheme_id,
-        scheme_selection_status: (resp.params_snapshot as any)?.scheme_selection_status,
-        scheme_profile: (resp.params_snapshot as any)?.scheme_profile,
+        scheme_selection_status: backendSnapshot.scheme_selection_status,
+        scheme_profile: backendSnapshot.scheme_profile,
+        ...(backendSnapshot.selection_path
+          ? {
+              selection_path: String(backendSnapshot.selection_path),
+              selection_fallback_reason: String(backendSnapshot.selection_fallback_reason ?? ''),
+              selection_unplaced_rooms: Array.isArray(backendSnapshot.selection_unplaced_rooms)
+                ? backendSnapshot.selection_unplaced_rooms.map((r: unknown) => String(r))
+                : [],
+            }
+          : {}),
       };
       const freshPlan: FloorPlanResponse = {
         ...resp,
@@ -520,7 +560,10 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
   };
 
   return (
-    <div className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-3.5 w-full min-w-0">
+    <div
+      data-testid="floorplan-generator-card"
+      className="rounded-[14px] border border-[var(--hairline)] bg-[var(--card-bg-subtle)] p-4 space-y-3.5 w-full min-w-0"
+    >
       {/* Header with Title and READ-ONLY Inherited Parameter Summary Chips */}
       <div className="border-b border-[var(--hairline)] pb-2.5 space-y-2 min-w-0">
         <div className="flex items-center justify-between gap-2 min-w-0 flex-wrap">
@@ -1266,9 +1309,51 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
               );
             })()}
 
+            {/* SELECTION-FALLBACK: a 200 must never read as "your rooms were
+                placed". The drawn plate is the plate's legal programme, and it is
+                named as such here, before the per-room ledger. */}
+            {selectionFallback && (
+              <div
+                data-testid="selection-fallback-notice"
+                className="mt-2.5 p-3 rounded-[10px] bg-rose-500/10 border border-rose-500/30 text-rose-800 dark:text-rose-100 space-y-1.5"
+              >
+                <div className="flex items-center gap-1.5 font-semibold text-[12px]">
+                  <Icon name="shield-alert" size={13} className="shrink-0" />
+                  <span>Requested selection not drawn</span>
+                </div>
+                <p className="text-[11px] leading-snug">
+                  {selectionFallback.reason
+                    ? `The selected programme could not be drawn (${selectionFallback.reason}). `
+                    : 'The selected programme could not be drawn. '}
+                  The plan on this page is the plate&apos;s legal programme — not the layout
+                  you selected.
+                </p>
+                {selectionFallback.unplaced.length > 0 && (
+                  <div data-testid="selection-unplaced-ledger" className="space-y-1">
+                    <span className="text-[11px] font-semibold">
+                      Selected rooms not drawn ({selectionFallback.unplaced.length}):
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {selectionFallback.unplaced.map((rid) => (
+                        <span
+                          key={rid}
+                          className="inline-flex items-center px-2 py-0.5 rounded-full bg-rose-500/15 border border-rose-500/30 text-[11px] font-medium capitalize"
+                        >
+                          {rid.replace(/_/g, ' ')}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Unmet Requirements Ledger: requested rooms the solver could not place */}
             {floorPlan.unmet_requirements && floorPlan.unmet_requirements.length > 0 && (
-              <div className="mt-2.5 p-3 rounded-[10px] bg-rose-500/10 border border-rose-500/25 text-rose-800 dark:text-rose-200 space-y-1.5">
+              <div
+                data-testid="unmet-ledger"
+                className="mt-2.5 p-3 rounded-[10px] bg-rose-500/10 border border-rose-500/25 text-rose-800 dark:text-rose-200 space-y-1.5"
+              >
                 <div className="flex items-center gap-1.5 font-semibold text-[12px]">
                   <Icon name="shield-alert" size={13} className="shrink-0" />
                   <span>Unmet Requirements ({floorPlan.unmet_requirements.length})</span>
@@ -1286,7 +1371,12 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                 </div>
                 <ul className="text-[11px] space-y-0.5 pl-4 list-disc text-rose-900/80 dark:text-rose-100/80">
                   {floorPlan.unmet_requirements.map((u, idx) => (
-                    <li key={idx} className="leading-snug">
+                    <li
+                      key={idx}
+                      data-testid={`unmet-room-${u.room_id}`}
+                      data-reason={u.reason}
+                      className="leading-snug"
+                    >
                       <span className="capitalize font-semibold mr-1">{u.room_id.replace(/_/g, ' ')}:</span>{u.reason}
                     </li>
                   ))}
@@ -1294,14 +1384,38 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
               </div>
             )}
 
-            {/* Solver Warnings Banner */}
+            {/* Solver Warnings Banner (Refusal: red + FAIL stamp when critical) */}
             {floorPlan.warnings && floorPlan.warnings.length > 0 && (
-              <div className="mt-2.5 p-3 rounded-[10px] bg-amber-500/10 border border-amber-500/25 text-amber-800 dark:text-amber-200 space-y-1">
+              <div
+                data-testid="plan-warnings-banner"
+                data-critical={planWarningsCritical ? 'true' : 'false'}
+                className={`mt-2.5 p-3 rounded-[10px] border space-y-1 ${
+                  planWarningsCritical
+                    ? 'bg-rose-500/10 border-rose-500/30 text-rose-800 dark:text-rose-100'
+                    : 'bg-amber-500/10 border-amber-500/25 text-amber-800 dark:text-amber-200'
+                }`}
+              >
                 <div className="flex items-center gap-1.5 font-semibold text-[12px]">
                   <Icon name="alert-triangle" size={13} className="shrink-0" />
-                  <span>Engineering &amp; Degradation Advisories ({floorPlan.warnings.length})</span>
+                  <span>
+                    {planWarningsCritical
+                      ? 'Proportion / programme non-compliance'
+                      : 'Engineering & Degradation Advisories'} ({floorPlan.warnings.length})
+                  </span>
+                  {planWarningsCritical && (
+                    <span className="ml-auto inline-flex items-center px-1.5 py-0.5 rounded-full bg-[var(--semantic-red)] text-white text-[9px] font-bold uppercase tracking-wider">
+                      FAIL stamp
+                    </span>
+                  )}
                 </div>
-                <ul className="text-[11px] space-y-0.5 pl-4 list-disc text-amber-900/80 dark:text-amber-100/80">
+                {planWarningsCritical && (
+                  <p className="text-[11px] leading-snug pl-4">
+                    The plan is drawn and exported with a FAIL stamp. The squeezed rooms and every
+                    relaxation are named individually below; refusal is reserved for statutory,
+                    egress and stacking failures.
+                  </p>
+                )}
+                <ul className="text-[11px] space-y-0.5 pl-4 list-disc opacity-90">
                   {floorPlan.warnings.map((w, idx) => (
                     <li key={idx} className="leading-snug">{w}</li>
                   ))}
@@ -1449,7 +1563,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
             }
 
             // A missing flag is NOT a pass: 'undefined' renders as NOT RUN
-            // instead of silently becoming a green check (audit F16).
+            // Instead of silently becoming a green check.
             const certChecks = [
               { name: 'Non-Overlap & Containment', pass: cert.non_overlap && cert.containment, ref: 'REL-01 / CONT-01' },
               { name: 'Zero Forbidden Wall Pairs', pass: cert.zero_forbidden_violations, ref: 'REL-02 / FORBIDDEN' },
@@ -1463,7 +1577,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
             ];
 
             // Only rules the certificate actually verified are listed; there is
-            // no optimistic fallback list (audit F16).
+            // No optimistic fallback list.
             const certifiedRules: string[] = cert.certified_rules || [];
             const certFailures: string[] = Array.isArray(cert.failures) ? cert.failures : [];
             const effectiveGateStatus = gateStatus || (cert.details && cert.details.validation_gate && cert.details.validation_gate.overall_status);
@@ -1515,7 +1629,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                   ))}
                 </div>
 
-                {/* WHY THE CERTIFICATE WAS WITHHELD (audit F16): the headline
+                {/* WHY THE CERTIFICATE WAS WITHHELD: the headline
                     rows above can all pass while a non-headline invariant fails;
                     the badge is never left unexplained. */}
                 {(!isValid || certFailures.length > 0) && (
@@ -1540,7 +1654,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                   </div>
                 )}
 
-                {/* UNIVERSAL VALIDATION GATE - single renderer (audit F28).
+                {/* UNIVERSAL VALIDATION GATE - single renderer.
                     Rows, N/A reasons, WARN chips and the incomplete-gate flag
                     all come from CertificatePanel so this card and the report
                     sheet cannot drift. */}
@@ -1598,6 +1712,7 @@ export const FloorPlanGeneratorCard: React.FC<FloorPlanGeneratorCardProps> = ({
                 selectedSchemeId={schemeProfile}
                 selectionStatus={schemeSelectionStatus}
                 pendingProfile={pendingSchemeProfile}
+                disclosure={schemeDisclosure}
                 onSelect={handleSelectScheme}
                 disabled={isGenerating}
               />
