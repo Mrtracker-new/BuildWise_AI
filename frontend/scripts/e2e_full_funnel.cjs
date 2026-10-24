@@ -336,7 +336,7 @@ async function main() {
     });
     check(
       Boolean(frontageLabel) && frontageLabel.a !== frontageLabel.b,
-      'F31: frontage label names two distinct vertices',
+      'frontage label names two distinct vertices',
       JSON.stringify(frontageLabel),
     );
     await page.waitForFunction(
@@ -354,7 +354,7 @@ async function main() {
     );
     check(true, 'boundary committed; CTA enabled for analysis');
 
-    // F30: bbox-derived width/depth are differences of geodesic floats.
+    // Bbox-derived width/depth are differences of geodesic floats.
     // They must reach the inputs at centimetre precision, not as
     // 89.05499999999999.
     const numberValues = await page.evaluate(() =>
@@ -364,7 +364,7 @@ async function main() {
     );
     check(
       numberValues.every((v) => /^-?\d+(\.\d{1,2})?$/.test(v)),
-      'F30: numeric inputs carry no float residue',
+      'numeric inputs carry no float residue',
       numberValues.filter((v) => !/^-?\d+(\.\d{1,2})?$/.test(v)).join(', '),
     );
 
@@ -385,7 +385,7 @@ async function main() {
     //
     // Resize only — no isMobile emulation: that swaps the capture flow's
     // layout and resets the page state under the rest of the funnel. CSS
-    // breakpoints are width-driven, which is exactly what F29 measured.
+    // Breakpoints are width-driven, which is exactly what the 390 px pass measured.
     await page.setViewport({ width: 390, height: 844 });
     await sleep(900);
     // Park the tray at its start so the measurement is deterministic: the
@@ -407,7 +407,7 @@ async function main() {
     });
     check(
       Boolean(navStart) && navStart.scrollable,
-      'F29: report section nav scrolls at 390px',
+      'report section nav scrolls at 390px',
       JSON.stringify(navStart),
     );
     // The fade must agree with the measured edges, whichever side the funnel
@@ -418,7 +418,7 @@ async function main() {
       navStart.overflow !== 'none' &&
       navStart.fadeR === (navStart.overflow === 'end' || navStart.overflow === 'both' ? '18px' : '0px') &&
       navStart.fadeL === (navStart.overflow === 'start' || navStart.overflow === 'both' ? '18px' : '0px');
-    check(fadesAgree, 'F29: each clipped edge carries the fade affordance', JSON.stringify(navStart));
+    check(fadesAgree, 'each clipped edge carries the fade affordance', JSON.stringify(navStart));
     await page.evaluate(() => {
       const tray = document.querySelector('[data-testid="section-nav"] .bw-section-nav-scroll');
       if (tray) tray.scrollLeft = tray.scrollWidth;
@@ -435,7 +435,7 @@ async function main() {
     });
     check(
       Boolean(navEnd) && (navEnd.overflow === 'start' || navEnd.overflow === 'none') && navEnd.fadeR === '0px',
-      'F29: the fade follows the scroll position instead of staying fixed',
+      'the fade follows the scroll position instead of staying fixed',
       JSON.stringify(navEnd),
     );
     await page.setViewport({ width: 1600, height: 1000 });
@@ -795,6 +795,14 @@ async function main() {
       btn.click();
       return true;
     });
+    // The analysis auto-runs a scan, so the card may still be in its loading
+    // skeleton when the tab opens (no button at all).  Wait for that skeleton to
+    // clear; the click asserts the steady-state affordance, not a race.
+    await page.waitForFunction(() => {
+      const sec = document.querySelector('[data-report-section="vision"]');
+      if (!sec) return false;
+      return !sec.querySelector('[aria-label="Analyzing satellite canopy and ecological inference"]');
+    }, { timeout: 20000 }).catch(() => { });
     await sleep(900);
     const scanOffered = await page.evaluate(() => {
       const sec = document.querySelector('[data-report-section="vision"]');
@@ -1105,7 +1113,7 @@ async function main() {
     check(consoleErrors.length === 0, 'zero console errors', consoleErrors.slice(0, 3).join(' | '));
     check(pageErrors.length === 0, 'zero page errors', pageErrors.slice(0, 3).join(' | '));
 
-    // 9. Mobile intent path (W6). On a phone-sized, touch-first viewport the map
+    // 9. Mobile intent path (mobile intent). On a phone-sized, touch-first viewport the map
     //    ENGINE is not fetched until the reader touches the map region — and the
     //    touch that brings it up is the ordinary pointerdown listener, not a
     //    test flag (there is none). The reserved box must be identical before and

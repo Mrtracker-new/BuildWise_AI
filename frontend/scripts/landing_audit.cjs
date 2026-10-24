@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * landing_audit.cjs — Phase A live-browser audit of the BuildWise marketing
+ * landing_audit.cjs — Live-browser audit of the BuildWise marketing
  * landing page (route "/"), driven through real Chrome via Puppeteer.
  *
- * WHAT IT PRODUCES (all under frontend/.audit/phase-a/):
+ * WHAT IT PRODUCES (all under frontend/.audit/landing/):
  *   landing-audit.json   machine-readable evidence (one record per viewport)
  *   shots/*.png          per-viewport screenshots + fold + a11y/motion passes
  *
@@ -17,7 +17,7 @@
  *   - axe-core (WCAG 2.0 A/AA, 2.1 A/AA, 2.2 AA + best-practice) violations
  *   - document structure: landmarks, heading order, meta/OG/JSON-LD presence
  * Plus: a dark-theme parity pass, a prefers-reduced-motion pass, and WebGL
- * capability probes for the Phase-B/C 3D work.
+ * capability probes for future 3D work.
  *
  * Tooling: `axe-core` and `web-vitals` are devDependencies, so a clean
  * `npm install` is enough to run this audit. Neither reaches the app's graph.
@@ -27,8 +27,7 @@ const fs = require('fs');
 const path = require('path');
 
 const BASE_URL = process.env.LANDING_URL || 'http://localhost:4173/';
-const PHASE = process.env.AUDIT_PHASE || 'phase-a';
-const OUT_DIR = path.join(__dirname, '..', '.audit', PHASE);
+const OUT_DIR = path.join(__dirname, '..', '.audit', 'landing');
 const SHOTS_DIR = path.join(OUT_DIR, 'shots');
 /*
  * axe-core and web-vitals are devDependencies. They used to be read out of an

@@ -45,7 +45,7 @@ assert(cardCode.includes('Edit in Project Parameters'), 'FloorPlanGeneratorCard 
 console.log('  -> PASS: FloorPlanGeneratorCard contains NO editable storeys/typology inputs.');
 console.log('  -> PASS: Read-only summary chips (typology, storeys, coverage) and edit hint verified.');
 
-// 1b. Single gate renderer (audit F28): the generator card and the report sheet
+// 1b. Single gate renderer: the generator card and the report sheet
 // must both mount CertificatePanel. Neither may re-implement the layer table,
 // warn chips or N/A rows - two renderers drift, one cannot.
 console.log('\n[Check 1b] Single gate renderer: CertificatePanel is the only gate table...');
@@ -68,7 +68,7 @@ assert(reportSheetCode.includes('variant="sheet"'),
   'ReportSheet must render the compact sheet variant of CertificatePanel.');
 console.log('  -> PASS: one gate renderer (CertificatePanel), mounted by card and sheet.');
 
-// 1c. Plot-area provenance (audit F07/F22): the hero tile and the land card may
+// 1c. Plot-area provenance: the hero tile and the land card may
 // only call the number a "captured boundary" when the server says it came from
 // one, and the captured boundary must be rendered, not merely returned.
 console.log('\n[Check 1c] Plot-area provenance is derived, never assumed...');
