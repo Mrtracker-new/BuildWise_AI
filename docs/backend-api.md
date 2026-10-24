@@ -144,7 +144,7 @@ The primary site engineering analysis endpoint. Executes reverse geocoding, digi
 - `quality_grade` *(string, default: "standard")*: `"economy"`, `"standard"`, `"premium"`, or `"luxury"`.
   It drives the **finish schedule and cost rates** only (door/window finishes, wall
   and floor specification, CPWD rate band). It does **not** change room geometry,
-  clear dimensions or the plate; a premium grade is not a larger plan (audit F19).
+  clear dimensions or the plate; a premium grade is not a larger plan.
 - `building_typology` *(string, default: "residential_single")*: Typology identifier.
 - `floors` *(int, default: 1)*: Total number of storeys (e.g. 1 = G, 2 = G+1).
 - `ground_coverage_ratio` *(float, optional)*: Maximum building footprint ratio (0.1 to 1.0).

@@ -336,7 +336,7 @@ A hard failure gives `FAIL`; any advisory gives `WARN`. This certificate is
 
 ### Measured effect
 
-The Phase A matrix (32 cases) moves from 8 waste cases / 16 slivers to **zero waste
+The sweep matrix (32 cases) moves from 8 waste cases / 16 slivers to **zero waste
 and zero slivers**, with minima (196) and mean `eff_g` (67.0 %) unchanged. The
 opt-in programme plate also reaches zero waste/slivers but exposed the legacy
 partitioner's furniture gap (minima 204, furniture pass < 80 % in 17 cases, mean
@@ -368,7 +368,7 @@ longer skips a room just because its display name already appeared: every room
 gets a numbered row (the legend still caps at 12 rows per floor). Repeated names
 are kept rather than deduped; 119 occur across the 32-case matrix.
 
-Identity coverage is 100 % on all 32 Phase A cases with zero fallbacks. Geometry
+Identity coverage is 100 % on all 32 sweep cases with zero fallbacks. Geometry
 and gate parity were otherwise unchanged (0 waste, 0 slivers, 196
 minima, mean ``eff_g`` 67.0 %, 4 FAIL / 28 WARN).
 
@@ -399,7 +399,7 @@ exhaust riser with the room id in `servicing_rooms`. The riser is in
 `multi_storey.duct_shafts` before the wall graph and sheets are built. L9 uses
 the identity `is_wet` flag rather than zone/substring heuristics.
 
-Measured on the 32-case Phase A matrix:
+Measured on the 32-case sweep matrix:
 
 | Metric | Default | Programme-aware |
 |:--|--:|--:|
@@ -449,7 +449,7 @@ identity-based programme counts, plus a request-vs-sheet mismatch chip) and
 opens a room inspector with identity, clear area, openings, shafts and
 furniture.
 
-Measured on the 32-case Phase A matrix (default / programme-aware):
+Measured on the 32-case sweep matrix (default / programme-aware):
 
 | Metric | Before | After |
 |:--|--:|--:|

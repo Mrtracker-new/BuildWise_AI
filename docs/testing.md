@@ -136,6 +136,25 @@ The architecture behind these suites is documented in [Space Engine](space-engin
 
 ---
 
+#### The gate set — one command, one exit status
+
+Every change that can move a drawn plan, a printed page or an invariant runs the
+same commands. CI (`.github/workflows/ci.yml`) calls exactly these, so a green
+local run means a green pipeline step.
+
+| Gate | Command (from the stated directory) | Passes when |
+|:---|:---|:---|
+| Backend gates | `cd backend && python scripts/qa_gates.py` | the suite, the report/PDF/SVG parity contracts, rectangle equivalence and the invariant sweep all pass |
+| — of which sweep | `cd backend && python scripts/qa_invariant_sweep.py` | its verdict names **0 TRUE FAILURES**; a DISCLOSED-only register is tolerated (the runner reads the verdict block, not just the exit code) |
+| Build + report surface | `cd frontend && npm run gates` | `tsc -b && vite build`, then the L16 table / FAIL stamp / print-wiring pins pass |
+| Browser gates | `cd frontend && npm run gates:browser` | the selection-policy pass and the full funnel pass against live servers (`E2E_URL`, `CHROME_PATH`) |
+
+`python scripts/qa_gates.py --list` prints the command set it runs, and
+`--only sweep` runs one gate. The backend gates working directory is fixed to
+`backend/` so node ids and sweep output paths resolve identically in CI.
+
+---
+
 #### Per-module engine suites
 | Suite | What it locks down |
 |:---|:---|
@@ -229,9 +248,9 @@ built tree (`vite preview` on port 4173 for `audit:landing`) or the dev servers 
 | `npm run lint:material` | Every blur/translucency surface is classified chrome (pinned ledger; regenerate with `--update`) |
 | `npm run check:contrast` | Text contrast against the design tokens |
 | `npm run assert:bundle` | Route-level bundle split is intact |
-| `npm run test:e2e` *(dev servers required)* | Full funnel in Chromium: capture → analysis → blueprint, including land economics, the scheme picker re-solving the plate, the 390 px report section-nav fade, the frontage vertex pair (F31) and float-free numeric inputs (F30) |
+| `npm run test:e2e` *(dev servers required)* | Full funnel in Chromium: capture → analysis → blueprint, including land economics, the scheme picker re-solving the plate, the 390 px report section-nav fade, the frontage vertex pair and float-free numeric inputs |
 | `node scripts/audit_sidebar_wiring.cjs` *(dev servers required)* | Every sidebar control moves a visible output, light + dark proofs, dropdown/menu keyboard behaviour |
-| `npm run audit:landing` *(preview build on 4173)* | Landing console, axe, overflow, CLS and LCP across viewports, 44 px tap targets (F33) and the fixed porcelain palette under an OS `prefers-color-scheme: dark` preference. The landing is intentionally light-only (see `index.css`); the dark pass asserts it stays porcelain rather than inverting. Exits non-zero on console/page errors, axe violations, undersized targets, document overflow or an inverted palette |
+| `npm run audit:landing` *(preview build on 4173)* | Landing console, axe, overflow, CLS and LCP across viewports, 44 px tap targets and the fixed porcelain palette under an OS `prefers-color-scheme: dark` preference. The landing is intentionally light-only (see `index.css`); the dark pass asserts it stays porcelain rather than inverting. Exits non-zero on console/page errors, axe violations, undersized targets, document overflow or an inverted palette |
 
 ---
 
