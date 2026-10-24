@@ -61,6 +61,10 @@ class SchemeDelta(BaseModel):
     vastu_score: Optional[float] = None
     daylight_score: Optional[float] = None
     total_score: Optional[float] = None
+    # Proportion and fit are picker-visible deltas too, not just a
+    # score hidden in the alternative's detail payload.
+    aspect_violations: Optional[int] = None
+    furniture_fit_pct: Optional[float] = None
 
 
 class SchemeFloor(BaseModel):

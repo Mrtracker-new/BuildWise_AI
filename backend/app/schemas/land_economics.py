@@ -35,7 +35,7 @@ class LandEconomicsReport(BaseModel):
     ground_program_area_sqm: float = 0.0
     ground_circulation_area_sqm: float = 0.0
     total_gfa_sqm: float = 0.0
-    land_use_efficiency_pct: float = 0.0  # Phase A eff_g
+    land_use_efficiency_pct: float = 0.0  # usable-area efficiency, ground floor
     footprint_utilization_pct: float = 0.0
     floor_area_ratio: float = 0.0
     circulation_ratio_pct: float = 0.0

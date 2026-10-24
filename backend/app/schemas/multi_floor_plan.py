@@ -1,5 +1,5 @@
 from typing import List, Dict, Optional, Literal, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.land_economics import LandEconomicsReport
 from app.schemas.space_identity import SpaceIdentity
@@ -112,6 +112,21 @@ class MultiFloorRoomRectangle(BaseModel):
     scheme_profile: Optional[str] = Field(default=None, description="Scheme profile that placed this room")
     orientation_rationale: Optional[str] = Field(default=None, description="Why this room was assigned this orientation/band")
     score_contributions: Dict[str, float] = Field(default_factory=dict, description="Per-metric score contribution from this room")
+
+    @model_validator(mode="after")
+    def normalize_aspect_ratio(self):
+        """Store aspect as max(w,d)/min(w,d), never a mixed-orientation ratio.
+
+        The placement layer used to write ``w/d`` for some rooms and ``d/w`` for
+        others, so a 1:13 bathroom could be stored as 0.08 and pass a check that
+        read the field.  Normalizing at the schema boundary makes every writer
+        (legacy partitioners, scheme solver, repairs) orientation-safe.
+        """
+        if self.width_m > 1e-9 and self.depth_m > 1e-9:
+            self.aspect_ratio = round(
+                max(self.width_m, self.depth_m) / min(self.width_m, self.depth_m), 2
+            )
+        return self
 
 
 class MultiFloorDoorGeometry(BaseModel):

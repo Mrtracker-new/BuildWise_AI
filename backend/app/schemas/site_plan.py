@@ -57,10 +57,18 @@ class PlotPolygonModel(BaseModel):
 class OutdoorFragment(BaseModel):
     """Outdoor zone fragment resulting from buildable polygon minus footprint."""
     fragment_id: str
-    name: str  # e.g. "North Forecourt", "East Yard", "South Lawn"
+    name: str  # e.g. "Garden 1", "Visitor parking (1 ECS) 2"
     area_sqm: float
     centroid: Tuple[float, float]
     polygon_coords: List[Tuple[float, float]] = Field(default_factory=list)
+    # Outdoor routing (ONTOLOGY.outdoor_routes): every patch carries the
+    # declared use it was routed to, not a single generic yard label.
+    route_kind: Optional[str] = Field(
+        default=None, description="parking | garden | terrace | planter | yard | plaza"
+    )
+    route_label: Optional[str] = Field(default=None, description="Declared route label")
+    ecs: float = Field(default=0.0, description="Equivalent car spaces delivered by this patch")
+    rationale: str = Field(default="", description="Route citation / why this patch got this use")
 
 
 class WedgeZone(BaseModel):
