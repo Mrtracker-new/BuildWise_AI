@@ -3418,7 +3418,7 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
         svg.append(f'    <text x="0.0" y="82.5" font-size="5.5" font-weight="500" fill="{text_dim}">Landing: {s_row.get("landing_dims", "2.15 x 1.00 m")} | Floor-to-floor: {s_row.get("floor_to_floor", "3.00 m")}</text>')
         svg.append('  </g>')
 
-        # UNIVERSAL VALIDATION GATE - LAYER TABLE (L1-L15)
+        # UNIVERSAL VALIDATION GATE - LAYER TABLE (L1-L16)
         # Every generation shows the full per-layer status table: PASS/WARN/FAIL
         # chips and N/A-with-reason rows. Never hidden, never silently skipped.
         layer_rows = [ld for ld in getattr(ir.header, "layer_statuses", []) or [] if isinstance(ld, dict)]
@@ -3432,14 +3432,16 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                     else (room_tbl_y + 113.0 + _room_tbl_h))
             status_fill = {"PASS": "#047857", "WARN": "#B45309", "FAIL": "#DC2626", "N/A": "#64748B"}
             svg.append(f'  <g transform="translate({lt_x}, {lt_y})">')
-            svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">VALIDATION GATE - LAYERS L1-L15 (OVERALL: {html.escape(str(getattr(ir.header, "overall_layer_status", "PASS")))})</text>')
+            svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">VALIDATION GATE - LAYERS L1-L16 (OVERALL: {html.escape(str(getattr(ir.header, "overall_layer_status", "PASS")))})</text>')
             lid_x, lst_x, lsum_x = 0.0, 26.0, 62.0
             svg.append(f'    <text x="{lid_x}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">LAYER</text>')
             svg.append(f'    <text x="{lst_x}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">STATUS</text>')
             svg.append(f'    <text x="{lsum_x}" y="19.0" font-size="6.0" font-weight="700" fill="{text_secondary}">SUMMARY</text>')
             _summary_max = max(24, int((svg_w - margin_x - lsum_x - 12.0) / (6.0 * 0.60)))
-            for row_idx, ld in enumerate(layer_rows[:15]):
-                ry_pos = 29.0 + (row_idx * 10.5)
+            _gate_rows_shown = layer_rows[:16]
+            _row_step = 10.0 if len(_gate_rows_shown) > 15 else 10.5
+            for row_idx, ld in enumerate(_gate_rows_shown):
+                ry_pos = 29.0 + (row_idx * _row_step)
                 lid = str(ld.get("layer_id", "?"))
                 lstat = str(ld.get("status", "PASS"))
                 lsum = _ellipsize_str(str(ld.get("summary", "")), _summary_max)
@@ -3452,10 +3454,10 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
                 svg.append(f'    <text x="{lsum_x}" y="{ry_pos:.1f}" font-size="6.0" font-weight="500" fill="{text_dim}">{html.escape(lsum)}</text>')
             warn_rows = [ld for ld in layer_rows if str(ld.get("status")) == "WARN"]
             if warn_rows:
-                warn_y = 29.0 + (15 * 10.5) + 4.0
+                warn_y = 29.0 + (len(_gate_rows_shown) * _row_step) + 4.0
                 warn_labels = "; ".join(f"{ld.get('layer_id')}: {_ellipsize_str((ld.get('findings') or ['advisory'])[0] if ld.get('findings') else 'advisory', 40)}" for ld in warn_rows[:3])
                 svg.append(f'    <text x="0" y="{warn_y:.1f}" font-size="5.5" font-weight="600" fill="#F59E0B">WARN CHIPS: {html.escape(_ellipsize_str(warn_labels, _panel_text_max_chars))}</text>')
-            legend_y = 29.0 + (15 * 10.5) + (16.0 if warn_rows else 4.0)
+            legend_y = 29.0 + (len(_gate_rows_shown) * _row_step) + (16.0 if warn_rows else 4.0)
             for li, lline in enumerate(legend_lines):
                 svg.append(f'    <text x="0" y="{legend_y + li * 9.0:.1f}" font-size="5.5" font-weight="500" fill="{text_dim}">{html.escape(lline)}</text>')
             svg.append('  </g>')
@@ -3519,10 +3521,12 @@ def render_svg_from_ir(ir: FloorDrawingIR, theme: str = "cad") -> str:
             slt_y = tax_y + 108.0
             sfill = {"PASS": "#047857", "WARN": "#B45309", "FAIL": "#DC2626", "N/A": "#64748B"}
             svg.append(f'  <g transform="translate({margin_x}, {slt_y})">')
-            svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">VALIDATION GATE - LAYERS L1-L15 (SITE SCOPE, OVERALL: {html.escape(str(getattr(ir.header, "overall_layer_status", "PASS")))})</text>')
+            svg.append(f'    <text x="0" y="8.0" font-size="7.5" font-weight="700" fill="{text_primary}">VALIDATION GATE - LAYERS L1-L16 (SITE SCOPE, OVERALL: {html.escape(str(getattr(ir.header, "overall_layer_status", "PASS")))})</text>')
             sl_id_x, sl_st_x, sl_sum_x = 0.0, 26.0, 62.0
-            for row_idx, ld in enumerate(site_layer_rows[:15]):
-                ry_pos = 21.0 + (row_idx * 10.5)
+            _site_rows_shown = site_layer_rows[:16]
+            _site_step = 10.0 if len(_site_rows_shown) > 15 else 10.5
+            for row_idx, ld in enumerate(_site_rows_shown):
+                ry_pos = 21.0 + (row_idx * _site_step)
                 sl_lid = str(ld.get("layer_id", "?"))
                 sl_stat = str(ld.get("status", "PASS"))
                 sl_sum = _ellipsize_str(str(ld.get("summary", "")), 60)

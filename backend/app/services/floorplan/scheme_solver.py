@@ -14,6 +14,7 @@ response is never replaced; the portfolio is additive.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -275,6 +276,8 @@ def _delta(a: SchemeMetrics, b: SchemeMetrics) -> SchemeDelta:
         vastu_score=d(a.vastu_score, b.vastu_score),
         daylight_score=d(a.daylight_score, b.daylight_score),
         total_score=d(a.total_score, b.total_score),
+        aspect_violations=int(a.aspect_violations) - int(b.aspect_violations),
+        furniture_fit_pct=d(a.furniture_fit_pct, b.furniture_fit_pct),
     )
 
 
@@ -378,29 +381,41 @@ def generate_ranked_schemes(req: FloorPlanRequest) -> SchemePortfolio:
     reference, _legacy = _reference_metrics(req, buildable)
 
     alternatives: List[SchemeAlternative] = []
-    fallback = ctx is None
+    # The three profiles are WEIGHT SETS for the T1 band solver.  On a
+    # multi-wing plate, and for every non-T1 typology (a unit plan, an office
+    # cell grid, an industrial bay chain), that solver does not re-partition the
+    # plate, so offering three entries produced relabelled clones or empty cards
+    # - a picker that looked like a choice and was not one.  I7 is explicit that
+    # the honest answer is FEWER alternatives with a named disclosure.
+    fallback = ctx is None or typology != "T1_SINGLE_FAMILY"
+    no_material = (
+        "No materially different alternative exists on this plate: the scheme "
+        "profiles are weight sets for the T1 band solver, and this "
+        f"{typology} plate is not re-partitioned by it. The drawn, certified "
+        "geometry is the only scheme; choosing a profile records the preference "
+        "in the report instead of redrawing a clone of this one."
+    ) if fallback else None
     if fallback:
         # RULE-FP owns multi-wing / terrace-band plates.  Reuse its fully
         # validated geometry instead of re-implementing the law in the scheme solver.
         building = engine.solve()
-        for profile in (SchemeProfileId.MAX_AREA, SchemeProfileId.MAX_VASTU,
-                        SchemeProfileId.MAX_LIGHT_VENT):
-            alternatives.append(_build_alternative(
-                profile=profile,
-                floors=building.floors,
-                dropped=[],
-                warnings=list(building.warnings) + [
-                    "Scheme solver reused the validated RULE-FP geometry for a multi-wing "
-                    "or terrace-band plate; this profile does not re-partition that plate."
-                ],
-                ctx=None,
-                typology=typology,
-                buildable=buildable,
-                assignment={},
-                band_depths={},
-                req=req,
-                fallback=True,
-            ))
+        alternatives.append(_build_alternative(
+            profile=SchemeProfileId.MAX_AREA,
+            floors=building.floors,
+            dropped=[],
+            warnings=list(building.warnings) + [
+                "Scheme solver reused the validated RULE-FP geometry for this plate "
+                "and typology; the profiles do not re-partition it, so only one "
+                "alternative is offered (no relabelled clone)."
+            ],
+            ctx=None,
+            typology=typology,
+            buildable=buildable,
+            assignment={},
+            band_depths={},
+            req=req,
+            fallback=True,
+        ))
     else:
         for profile in (SchemeProfileId.MAX_AREA, SchemeProfileId.MAX_VASTU,
                         SchemeProfileId.MAX_LIGHT_VENT):
@@ -434,6 +449,51 @@ def generate_ranked_schemes(req: FloorPlanRequest) -> SchemePortfolio:
                 band_depths=band_depths,
                 req=req,
             ))
+
+    # A band portfolio that produced no rooms, or three identical layouts, is
+    # the same truthfulness problem as a clone on an irregular plate: the picker
+    # would offer a choice that is not a choice.  Collapse to the one validated
+    # layout and say so, instead of shipping empty or relabelled cards.
+    def _signature(alt: SchemeAlternative):
+        return tuple(sorted(
+            ((f.floor_index, r.room_id),
+             (round(r.x, 2), round(r.y, 2), round(r.width_m, 2), round(r.depth_m, 2)))
+            for f in alt.floors for r in f.rooms
+        ))
+
+    if not fallback:
+        empty = any(not a.floors or not any(f.rooms for f in a.floors) for a in alternatives)
+        identical = len({_signature(a) for a in alternatives}) == 1
+        moved = 0
+        for a, b in itertools.combinations(alternatives, 2):
+            sa, sb = dict(_signature(a)), dict(_signature(b))
+            moved = max(moved, sum(
+                1 for k in set(sa) & set(sb)
+                if abs(sa[k][0] - sb[k][0]) > 0.25 or abs(sa[k][1] - sb[k][1]) > 0.25
+            ))
+        if empty or (identical and not empty) or (not empty and moved < 2):
+            fallback = True
+            no_material = (
+                "No materially different alternative exists on this plate: the three "
+                "profile weightings produced the same layout"
+                + (" (or no rooms at all)" if empty else "")
+                + ", so the one certificated scheme is offered instead of relabelled "
+                "clones. Choosing a profile records the preference in the report."
+            )
+            building = engine.solve()
+            alternatives = [_build_alternative(
+                profile=SchemeProfileId.MAX_AREA,
+                floors=building.floors,
+                dropped=[],
+                warnings=list(building.warnings) + [no_material],
+                ctx=None,
+                typology=typology,
+                buildable=buildable,
+                assignment={},
+                band_depths={},
+                req=req,
+                fallback=True,
+            )]
 
     # Rank: feasible first, then score descending, then stable scheme id.
     alternatives.sort(key=lambda a: (0 if a.feasible else 1, -a.score, a.scheme_id))
@@ -483,8 +543,10 @@ def generate_ranked_schemes(req: FloorPlanRequest) -> SchemePortfolio:
             "selected_scheme_id": selected,
             "selection_source": source,
             "fallback_reason": (
-                "multi-wing or terrace-band plate: RULE-FP geometry reused"
+                "plate/typology not re-partitioned by the band solver: RULE-FP "
+                "geometry reused"
                 if fallback else None
             ),
+            "no_material_alternative": no_material,
         },
     )

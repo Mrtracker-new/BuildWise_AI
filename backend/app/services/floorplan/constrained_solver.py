@@ -416,6 +416,30 @@ def _required_width_cached(spec_id: str, depth: float) -> float:
     return round(required + 0.01, 4)
 
 
+@lru_cache(maxsize=65536)
+def _required_width_for_spec(spec_id: str, depth: float) -> float:
+    """Memoised ``_required_width`` body: it is a function of spec and depth only.
+
+    The band search asks for the same room's frontage floor at the same depth
+    thousands of times (every candidate split re-measures the whole programme),
+    so this cache is what makes the enumeration affordable.  It is keyed on the
+    exact depth because the aspect term is a straight line in depth.
+    """
+    spec = ONTOLOGY.get_space(spec_id)
+    if spec is None:
+        return float("inf")
+    base = _required_width_cached(spec_id, round(float(depth), 3))
+    if base == float("inf"):
+        return base
+    limit = float(getattr(spec, "max_aspect_ratio", 0.0) or 0.0)
+    if limit <= 0.0 or depth <= 0.05:
+        return base
+    proportional = depth / limit
+    if proportional * depth <= float(spec.min_area_sqm) * 3.0:
+        base = max(base, round(proportional + 0.01, 4))
+    return base
+
+
 def _required_width(room: ProgramRoom, depth: float) -> float:
     """Hard width floor: minimum width, minimum area, and proportion.
 
@@ -428,20 +452,22 @@ def _required_width(room: ProgramRoom, depth: float) -> float:
     not a repair; there the band depth is the defect and ``ROOM-MAX`` discloses
     it instead.
     """
-    base = _required_width_cached(room.spec.id, round(float(depth), 3))
-    if base == float("inf"):
-        return base
-    limit = float(getattr(room.spec, "max_aspect_ratio", 0.0) or 0.0)
-    if limit <= 0.0 or depth <= 0.05:
-        return base
-    proportional = depth / limit
-    if proportional * depth <= float(room.spec.min_area_sqm) * 3.0:
-        base = max(base, round(proportional + 0.01, 4))
-    return base
+    return _required_width_for_spec(room.spec.id, float(depth))
 
 
 def _block_width(block: Sequence[ProgramRoom], depth: float) -> float:
     return sum(_required_width(r, depth) for r in block)
+
+
+def _block_capacity(block: Sequence[ProgramRoom], depth: float) -> float:
+    """``_band_capacity`` of a single block: the frontage its rooms can fill."""
+    total = 0.0
+    for room in block:
+        ceiling = _aspect_ceiling(room, depth)
+        if ceiling == float("inf"):
+            return float("inf")
+        total += ceiling
+    return total
 
 
 def _blocks_fit(blocks: Sequence[List[ProgramRoom]], depth: float, available: float) -> bool:
@@ -545,23 +571,56 @@ def _band_assignment(
         if _blocks_fit(blocks, band_depth, south_avail):
             return set(range(n)), set()
         return None
+    # SUBSUBSET SUMS, NOT RE-MEASURED BLOCKS.  The enumeration below visits 2^n
+    # splits per floor per depth and there are ~450 depth/floor evaluations in a
+    # scan, so measuring each candidate band from scratch (the old `_blocks_fit`
+    # per split) made a 14-room, 3-storey programme take ~15 s per profile.  Both
+    # fit tests are sums over the blocks in a band, so they can be accumulated
+    # once per mask with a low-bit step: identical predicates, identical
+    # arithmetic, ~100x less work.
+    south_w = [_block_width(block, band_depth) for block in blocks]
+    north_w = [_block_width(block, north_depth) for block in blocks]
+    south_cap = [_block_capacity(block, band_depth) for block in blocks]
+    north_cap = [_block_capacity(block, north_depth) for block in blocks]
+    south_aff = [_south_affinity(block, profile_id) for block in blocks]
+
+    size = 1 << n
+    sum_south_w = [0.0] * size
+    sum_north_w = [0.0] * size
+    sum_south_cap = [0.0] * size
+    sum_north_cap = [0.0] * size
+    sum_south_aff = [0.0] * size
+    for mask in range(1, size):
+        # Strip the HIGHEST set bit, so each mask accumulates its blocks in
+        # ascending index order - the same left-to-right order the previous
+        # per-candidate `sum(...)` used, and therefore the same float rounding.
+        bit = mask.bit_length() - 1
+        prev = mask ^ (1 << bit)
+        sum_south_w[mask] = sum_south_w[prev] + south_w[bit]
+        sum_north_w[mask] = sum_north_w[prev] + north_w[bit]
+        sum_south_cap[mask] = sum_south_cap[prev] + south_cap[bit]
+        sum_north_cap[mask] = sum_north_cap[prev] + north_cap[bit]
+        sum_south_aff[mask] = sum_south_aff[prev] + south_aff[bit]
+
     candidates = []
-    for bits in itertools.product((0, 1), repeat=n):
-        south = [blocks[i] for i, bit in enumerate(bits) if bit == 0]
-        north = [blocks[i] for i, bit in enumerate(bits) if bit == 1]
+    full = size - 1
+    for north_mask in range(size):
+        # Bit set = rear band, exactly as the old product((0, 1), repeat=n).
+        south_mask = full ^ north_mask
         # At least one block must remain in the front band for the entry sequence.
-        if not south:
+        if south_mask == 0:
             continue
-        if not _blocks_fit(south, band_depth, south_avail):
+        if sum_south_w[south_mask] > south_avail + EPS:
             continue
-        if not _blocks_fit(north, north_depth, north_avail):
+        if sum_north_w[north_mask] > north_avail + EPS:
             continue
-        score = sum(_south_affinity(b, profile_id) for b in south)
-        shortfall = max(0.0, south_avail - _band_capacity(south, band_depth))
-        shortfall += max(0.0, north_avail - _band_capacity(north, north_depth))
-        south_set = {i for i, bit in enumerate(bits) if bit == 0}
+        score = sum_south_aff[south_mask]
+        shortfall = max(0.0, south_avail - sum_south_cap[south_mask])
+        shortfall += max(0.0, north_avail - sum_north_cap[north_mask])
+        south_list = [i for i in range(n) if not (north_mask >> i) & 1]
+        south_set = set(south_list)
         north_set = set(range(n)) - south_set
-        candidates.append((round(shortfall, 2), score, tuple(sorted(south_set)), south_set, north_set))
+        candidates.append((round(shortfall, 2), score, tuple(south_list), south_set, north_set))
 
     # Proportion-filling splits first, then highest preference, then a
     # deterministic block-order tie break.  Only the best candidates need the
@@ -623,6 +682,14 @@ def _band_proportion_cost(
         if widths is None:
             return violations + len(rooms), 1e6
         violations += len(over_cap)
+        # A band shallower than a room's declared minimum clear width cannot
+        # hold that room in ANY proportion: the depth is the short side.  Count
+        # it like an aspect breach so the depth search walks past it instead of
+        # Accepting a 2.8 m deep living room with 3.6 m minimum.
+        for room in rooms:
+            min_clear = float(getattr(room.spec, "min_width_m", 0.0) or 0.0)
+            if min_clear > 0.0 and band_depth_ + 0.02 < min_clear:
+                violations += 1
         # A deep band can also break proportion the other way: a 1.2 m wide bath
         # in a 10.7 m band is 1:8.9 even though its frontage was never capped.
         for room in rooms:

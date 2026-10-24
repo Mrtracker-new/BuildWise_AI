@@ -450,6 +450,49 @@ def decompose_buildable_into_wings(
     is_l_shape = (shape_type == "l_shape") or (buildable_poly.convex_hull.area > buildable_poly.area * 1.02)
     is_extreme_aspect = (aspect > 3.0) and (min(plot_w, plot_d) >= 10.0)
 
+    # 0. Programme-sized override on a convex/single-wing plot.
+    # The irregular path starts from the largest inscribed rectangle (which on
+    # a 9,661 m2 site is 5,796 m2 for a 122 m2 brief). A solver that has already
+    # sized the plate to the programme passes that rectangle here; honour it
+    # rather than decomposing the buildable back to its maximum.
+    if inscribed_override and not is_courtyard and not is_l_shape and not is_extreme_aspect:
+        env_w = round(float(inscribed_override["width"]), 2)
+        env_d = round(float(inscribed_override["depth"]), 2)
+        env_area = round(float(inscribed_override.get("area_sqm", env_w * env_d)), 2)
+        footprint_x = round(float(inscribed_override["x"]), 2)
+        footprint_y = round(float(inscribed_override["y"]), 2)
+        wing_a = FootprintWing(
+            wing_id="WING_A",
+            label="Wing A (Main)",
+            zone_type="public",
+            x=footprint_x,
+            y=footprint_y,
+            width_m=env_w,
+            depth_m=env_d,
+            area_sqm=env_area,
+            corner_vertices=[
+                (footprint_x, footprint_y),
+                (footprint_x + env_w, footprint_y),
+                (footprint_x + env_w, footprint_y + env_d),
+                (footprint_x, footprint_y + env_d),
+            ],
+        )
+        return InscribedFootprint(
+            x=footprint_x,
+            y=footprint_y,
+            width_m=env_w,
+            depth_m=env_d,
+            area_sqm=env_area,
+            rotation_angle_deg=0.0,
+            center_x=round(footprint_x + env_w / 2.0, 2),
+            center_y=round(footprint_y + env_d / 2.0, 2),
+            corner_vertices=list(wing_a.corner_vertices),
+            topology_type="single_rectangle",
+            wings=[wing_a],
+            corridors=[],
+            courtyard_void=None,
+        )
+
     # 1. Single Rectangle Path (Strict Rectangle-Equivalence)
     # A rectangular plot has exactly ONE possible wing, whatever its size: the
     # old `buildable <= 400 m²` guard sent large rectangles through the maximal
@@ -750,7 +793,10 @@ def decompose_buildable_into_wings(
         max_fp_y = max(wing_a.y + wing_a.depth_m, wing_b.y + wing_b.depth_m)
         tot_w = round(max_fp_x - min_fp_x, 2)
         tot_d = round(max_fp_y - min_fp_y, 2)
-        tot_area = round(wing_a.area_sqm + wing_b.area_sqm, 2)
+        # The declared footprint is the physical plate: wings PLUS the link
+        # corridor.  Counting wings only made a legitimate connector read as a
+        # room outside the plate and let LAND-07 furnish it as a dead store.
+        tot_area = round(wing_a.area_sqm + wing_b.area_sqm + corr_link.area_sqm, 2)
 
         return InscribedFootprint(
             x=min_fp_x,
@@ -875,20 +921,158 @@ def _outdoor_fragments_from_residual(
 
 def extract_outdoor_fragments(
     buildable_poly: Polygon,
-    footprint_poly: Polygon
+    footprint_poly: Polygon,
+    typology: Optional[str] = None,
 ) -> List[OutdoorFragment]:
     """Decomposes (buildable minus footprint) into labelled spatial fragments."""
-    return _outdoor_fragments_from_residual(
-        buildable_poly.difference(footprint_poly),
-        footprint_poly,
-        buildable_poly,
+    return _apply_outdoor_routing(
+        _outdoor_fragments_from_residual(
+            buildable_poly.difference(footprint_poly),
+            footprint_poly,
+            buildable_poly,
+        ),
+        typology,
     )
+
+
+def _apply_outdoor_routing(
+    fragments: List[OutdoorFragment],
+    typology: Optional[str],
+) -> List[OutdoorFragment]:
+    """Route every surplus patch through ONTOLOGY.outdoor_routes(typology).
+
+    : one `North Yard` covering every residual is not a routing decision.
+    Each patch is matched (highest priority first) to the first declared outdoor
+    use it can physically host - a parking patch must be at least 2.5 x 5.0 m,
+    a garden needs its own minimum area - and the patch carries the route label,
+    kind, ECS and citation.  A patch too small for every declared use keeps its
+    planter-pocket label and is disclosed as unrouted (never silently named a
+    "yard").
+    """
+    if not fragments:
+        return fragments
+    from app.services.floorplan.ontology import ONTOLOGY
+
+    # A single 1,854 m2 "Garden" is one label, not a routing decision.  Split
+    # oversized residual patches into planning-scale pieces (a garden zone, a
+    # parking run, a planter) before assigning their use.
+    _max_patch = {"T1_SINGLE_FAMILY": 120.0, "T2_FAMILY_APARTMENT": 120.0,
+                  "T3_LARGE_COMPLEX": 200.0, "T4_WAREHOUSE": 400.0}.get(
+        ONTOLOGY.get_typology_profile(typology).canonical if typology else "", 120.0
+    )
+    fragments = _subdivide_outdoor_fragments(fragments, _max_patch)
+
+    routes = ONTOLOGY.outdoor_routes(typology) if typology else []
+    counters: Dict[str, int] = {}
+    cursor = 0
+    for frag in fragments:
+        _coords = frag.polygon_coords or []
+        if len(_coords) < 3:
+            continue
+        try:
+            poly = Polygon(_coords)
+        except Exception:
+            continue
+        if poly.is_empty or not poly.is_valid:
+            continue
+        _minx, _miny, _maxx, _maxy = poly.bounds
+        _short = min(_maxx - _minx, _maxy - _miny)
+        _long = max(_maxx - _minx, _maxy - _miny)
+        _area = max(float(frag.area_sqm or 0.0), float(poly.area))
+        matched = None
+        # Start each patch at the next declared use, so a large residual becomes
+        # a MIX of parking, garden/plaza, terrace and planter patches instead of
+        # one route repeated for every strip.  Every candidate is still checked
+        # against its own declared minimum area and parking dimensions.
+        for _k in range(len(routes)):
+            route = routes[(cursor + _k) % len(routes)]
+            if _area + 1e-6 < route.min_area_sqm:
+                continue
+            if route.kind == "parking" and (_short < 2.5 or _long < 5.0):
+                continue
+            matched = route
+            cursor = (cursor + _k + 1) % len(routes)
+            break
+        if matched is not None:
+            counters[matched.kind] = counters.get(matched.kind, 0) + 1
+            frag.name = f"{matched.label} {counters[matched.kind]}"
+            frag.route_kind = matched.kind
+            frag.route_label = matched.label
+            frag.ecs = float(matched.ecs_per_patch or 0.0)
+            frag.rationale = matched.citation
+        else:
+            frag.route_kind = "unrouted"
+            frag.route_label = None
+            frag.rationale = (
+                "patch is below every declared outdoor use's minimum area; kept as a "
+                "disclosed planter pocket"
+            )
+    return fragments
+
+
+def _subdivide_outdoor_fragments(
+    fragments: List[OutdoorFragment],
+    max_area: float,
+) -> List[OutdoorFragment]:
+    """Split residual patches larger than a planning module into strips.
+
+    Deterministic: equal-area strips along the patch's longer side, intersected
+    with the patch polygon.  Each strip is a real fragment with its own label
+    and (for parking) its own ECS count.
+    """
+    if max_area <= 0.0:
+        return fragments
+    out: List[OutdoorFragment] = []
+    for frag in fragments:
+        _coords = frag.polygon_coords or []
+        if len(_coords) < 3 or float(frag.area_sqm) <= max_area:
+            out.append(frag)
+            continue
+        try:
+            poly = Polygon(_coords)
+        except Exception:
+            out.append(frag)
+            continue
+        if poly.is_empty or not poly.is_valid:
+            out.append(frag)
+            continue
+        _minx, _miny, _maxx, _maxy = poly.bounds
+        _bw, _bd = _maxx - _minx, _maxy - _miny
+        _n = max(2, int(math.ceil(float(frag.area_sqm) / max_area)))
+        pieces: List[Polygon] = []
+        for i in range(_n):
+            if _bw >= _bd:
+                _x0 = _minx + _bw * i / _n
+                _x1 = _minx + _bw * (i + 1) / _n
+                _cutter = box(_x0, _miny - 1.0, _x1, _maxy + 1.0)
+            else:
+                _y0 = _miny + _bd * i / _n
+                _y1 = _miny + _bd * (i + 1) / _n
+                _cutter = box(_minx - 1.0, _y0, _maxx + 1.0, _y1)
+            _part = poly.intersection(_cutter)
+            for g in (getattr(_part, "geoms", [_part])):
+                if isinstance(g, Polygon) and g.area >= 1.0:
+                    pieces.append(g)
+        for idx, g in enumerate(pieces, start=1):
+            out.append(OutdoorFragment(
+                fragment_id=f"{frag.fragment_id}-{idx}",
+                name=frag.name,
+                area_sqm=round(g.area, 2),
+                centroid=(round(g.centroid.x, 2), round(g.centroid.y, 2)),
+                polygon_coords=[(round(x, 2), round(y, 2)) for x, y in g.exterior.coords],
+                route_kind=frag.route_kind,
+                route_label=frag.route_label,
+                ecs=frag.ecs,
+                rationale=frag.rationale,
+            ))
+    return out
 
 
 def extract_wedge_and_outdoor_zones(
     buildable_poly: Polygon,
     footprint_poly: Polygon,
     shape_type: str = "irregular",
+    typology: Optional[str] = None,
 ) -> Tuple[List[WedgeZone], List[OutdoorFragment]]:
     """
     Formalizes orthogonal squaring-off as declared design policy:
@@ -981,7 +1165,7 @@ def extract_wedge_and_outdoor_zones(
                 w_idx += 1
             elif area_sqm >= 1.0:
                 # A generic "Setback Buffer" is an anonymous residual.  Name it
-                # as a functional landscape pocket so the Phase A harness and the
+                # As a functional landscape pocket so the baseline harness and the
                 # land-economics certificate agree that no anonymous outdoor
                 # region >= 1.0 m² remains.
                 outdoors.append(OutdoorFragment(
@@ -1003,7 +1187,7 @@ def extract_wedge_and_outdoor_zones(
         remainder = diff.difference(wedge_union) if wedge_union is not None else diff
         outdoors = _outdoor_fragments_from_residual(remainder, footprint_poly, buildable_poly)
 
-    return wedges, outdoors
+    return wedges, _apply_outdoor_routing(outdoors, typology)
 
 
 def evaluate_orthogonal_waste_and_rotations(
@@ -1512,7 +1696,7 @@ def compute_canonical_site_plan(
     # 4. Wedge Absorption & Outdoor Difference Fragments
     if not is_rect:
         wedge_zones, outdoor_fragments = extract_wedge_and_outdoor_zones(
-            buildable_poly, footprint_poly, shape_type
+            buildable_poly, footprint_poly, shape_type, typology=typology
         )
         waste_pct, rot_alts, waste_warn = evaluate_orthogonal_waste_and_rotations(
             buildable_poly, env_area, chosen_angle=0.0,
@@ -1522,7 +1706,9 @@ def compute_canonical_site_plan(
             warnings.append(waste_warn)
     else:
         wedge_zones = []
-        outdoor_fragments = extract_outdoor_fragments(buildable_poly, footprint_poly)
+        outdoor_fragments = extract_outdoor_fragments(
+            buildable_poly, footprint_poly, typology=typology
+        )
         waste_pct = 0.0
         rot_alts = []
         waste_warn = None
@@ -1619,6 +1805,8 @@ def compute_canonical_site_plan(
          "reason": "Travel distances and exit widths are evaluated on building floor sheets"},
         {"layer_id": "L15", "title": "Programme Completeness", "status": "N/A",
          "reason": "Essential-room completeness is evaluated per building floor, not at site scope"},
+        {"layer_id": "L16", "title": "Proportion & Surplus", "status": "N/A",
+         "reason": "Room proportion and surplus routing are evaluated on building floor sheets; the site sheet carries no habitable rooms"},
     ]
     _statuses_rank = {"PASS": 0, "N/A": 1, "WARN": 2, "FAIL": 3}
     # Overall = worst APPLICABLE layer: N/A never gates (universal contract),
@@ -1632,7 +1820,7 @@ def compute_canonical_site_plan(
         if _statuses_rank.get(_ld["status"], 0) > _statuses_rank.get(_site_overall, 0):
             _site_overall = _ld["status"]
     _site_gate = {
-        "layer_ids": [f"L{i}" for i in range(1, 16)],
+        "layer_ids": [f"L{i}" for i in range(1, 17)],
         "layers": _site_layer_rows,
         "overall_status": _site_overall,
         "validated_layers": ["L1", "L2"],
