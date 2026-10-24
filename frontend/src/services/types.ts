@@ -165,7 +165,7 @@ export interface LandValueEstimate {
   multiplier_breakdown: MultiplierBreakdown;
   plot_area_sqft: number;
   /** Where plot_area_sqft came from. The report may only label the number a
-   *  "captured boundary" when this is 'captured_boundary' (audit F07). */
+   * "captured boundary" when this is 'captured_boundary'. */
   plot_area_source?: 'captured_boundary' | 'client_plot_area' | 'derived_from_coverage';
   /** Shoelace area of the captured boundary, in sq ft (null when none). */
   boundary_area_sqft?: number | null;
@@ -281,7 +281,7 @@ export interface AnalysisResponse {
   /** Per-source fetch provenance: real server ISO8601 fetch timestamps; null
    *  means the upstream degraded to its disclosed fallback model. */
   data_sources?: Record<string, DataSourceProvenance>;
-  /** Server-validated echo of the captured boundary (audit F22). */
+  /** Server-validated echo of the captured boundary. */
   boundary_summary?: BoundarySummary | null;
 }
 
@@ -1042,7 +1042,7 @@ export interface FloorPlanRequest {
   include_scheme_alternatives?: boolean;
   selected_scheme_id?: string;
   // Size the plate from the programme need (capped by the statutory ceiling)
-  // instead of the typology's comfortable plate (audit F01/F14).
+  // Instead of the typology's comfortable plate.
   program_aware_footprint?: boolean;
 }
 
@@ -1103,6 +1103,11 @@ export interface FloorPlanParamsSnapshot {
   scheme_selection_status?: 'applied' | 'rejected_non_compliant' | 'recorded_only' | string;
   scheme_selection_failing_layers?: string[];
   scheme_profile?: string | null;
+  /** selection path: set ONLY when the requested selection was replaced by the legal
+   *  programme. Absent means the selection was drawn as asked. */
+  selection_path?: 'fallback_legal_programme' | string;
+  selection_fallback_reason?: string;
+  selection_unplaced_rooms?: string[];
 }
 
 export interface FloorPlanResponse {
